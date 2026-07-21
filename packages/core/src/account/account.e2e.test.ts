@@ -12,7 +12,7 @@ import { repairReplicas } from "./repair.js";
 import { InMemoryKeyValueStore } from "../storage/interface.js";
 import { raiseHighWaterMark } from "./highWaterMark.js";
 import { RelayPool } from "../nostr/pool.js";
-import { AccountNotFoundError, RollbackDetectedError } from "./errors.js";
+import { AccountAlreadyExistsError, AccountNotFoundError, RollbackDetectedError } from "./errors.js";
 import { derivePasswordKeys, normalizeLoginName } from "./normalize.js";
 import { buildCredentialCapsuleEvent, decryptCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
 import { RelayConnection } from "../nostr/relay.js";
@@ -371,5 +371,54 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       expect(result.relayDisagreement).toBe(true);
     },
     ARGON2_TIMEOUT
+  );
+
+  it(
+    "registering again with a login name + password that's already taken refuses to overwrite the existing account (§15.6)",
+    async () => {
+      const loginName = "reused";
+      const password = generatePassphrase().secret;
+      const original = await registerAccount({ loginName, password, vaultRelayUrls });
+
+      // Same login name + same password -> the exact same locator address. Without a
+      // pre-publish existence check this would silently replace the original account's
+      // credential capsule with a brand-new, unrelated everyday identity and recovery phrase.
+      await expect(registerAccount({ loginName, password, vaultRelayUrls })).rejects.toThrow(AccountAlreadyExistsError);
+
+      // The original account must still be exactly as it was -- same everyday identity,
+      // same recovery phrase still valid.
+      const login = await loginWithPassword({ loginName, password, vaultRelayUrls });
+      expect(login.everydayPublicKey).toBe(original.everydayPublicKey);
+      expect(login.generation).toBe(0);
+    },
+    ARGON2_TIMEOUT * 2
+  );
+
+  it(
+    "rotating to a new password that collides with another account under the same login name is refused (§18.1)",
+    async () => {
+      const loginName = "sharedname";
+      const passwordA = generatePassphrase().secret;
+      const passwordB = generatePassphrase().secret;
+      const accountA = await registerAccount({ loginName, password: passwordA, vaultRelayUrls });
+      const accountB = await registerAccount({ loginName, password: passwordB, vaultRelayUrls });
+
+      // Rotating account A to password B's exact password would target the exact same
+      // locator address as account B's already-registered capsule.
+      await expect(
+        changePassword({ loginName, oldPassword: passwordA, newPassword: passwordB, vaultRelayUrls })
+      ).rejects.toThrow(AccountAlreadyExistsError);
+
+      // Neither account was touched: A's old capsule was never tombstoned, and B's capsule
+      // was never overwritten.
+      const loginA = await loginWithPassword({ loginName, password: passwordA, vaultRelayUrls });
+      expect(loginA.everydayPublicKey).toBe(accountA.everydayPublicKey);
+      expect(loginA.generation).toBe(0);
+
+      const loginB = await loginWithPassword({ loginName, password: passwordB, vaultRelayUrls });
+      expect(loginB.everydayPublicKey).toBe(accountB.everydayPublicKey);
+      expect(loginB.generation).toBe(0);
+    },
+    ARGON2_TIMEOUT * 2
   );
 });

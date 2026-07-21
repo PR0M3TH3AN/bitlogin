@@ -18,6 +18,24 @@ export class RegistrationFailedError extends Error {
   }
 }
 
+/**
+ * Thrown when a credential capsule already exists at the address a registration or
+ * password change is about to publish to (§15.6, §18.1). That address is a NIP-33
+ * replaceable event fully determined by login name + password (or, for a rotation,
+ * login name + the chosen new password) -- publishing over one that already exists
+ * there would silently destroy whatever account is already bound to it, with no way
+ * back short of that other account's own recovery phrase. Unlike {@link AccountNotFoundError},
+ * this is not subject to §16.3's login/no-account non-disclosure rule: reaching this
+ * error already requires supplying the exact login name + password an existing account
+ * was registered with, which is equivalent to already being able to log in as it.
+ */
+export class AccountAlreadyExistsError extends Error {
+  constructor(message = "An account already exists with this login name and password. Sign in instead, or choose different credentials.") {
+    super(message);
+    this.name = "AccountAlreadyExistsError";
+  }
+}
+
 export class RecoveryFailedError extends Error {
   constructor(message: string) {
     super(message);

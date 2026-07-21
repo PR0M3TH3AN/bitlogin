@@ -12,7 +12,8 @@ import { buildRecoveryCapsuleEvent } from "../capsules/recoveryCapsule.js";
 import { PROTOCOL_CAPSULE_ENCRYPTION, PROTOCOL_PASSWORD_KDF, PROTOCOL_RECOVERY_DERIVATION } from "../capsules/types.js";
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
-import { RegistrationFailedError } from "./errors.js";
+import { readCredentialCapsule } from "./capsuleReader.js";
+import { RegistrationFailedError, AccountAlreadyExistsError } from "./errors.js";
 import type { NostrEvent } from "../nostr/event.js";
 
 export interface RegisterAccountParams {
@@ -53,6 +54,33 @@ export async function registerAccount(params: RegisterAccountParams): Promise<Re
   const normalizedLoginName = normalizeLoginName(params.loginName);
   const now = params.now ?? Math.floor(Date.now() / 1000);
 
+  // §15.6 — the credential capsule address is fully determined by login name + password,
+  // and is a NIP-33 replaceable event: publishing over one that already exists there would
+  // silently destroy that other account's identity binding, with no way back short of its
+  // own recovery phrase. Derive the locator early and check before generating anything else
+  // for this attempt, so a collision fails fast without discarding a freshly generated
+  // recovery phrase or everyday keypair.
+  const { locatorPrivateKey, capsuleKey: credentialCapsuleKey } = await derivePasswordKeys(params.password, normalizedLoginName);
+  const locatorPublicKey = getPublicKeyHex(locatorPrivateKey);
+  const checkPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: locatorPrivateKey });
+  let existingCapsule;
+  try {
+    existingCapsule = await readCredentialCapsule(checkPool, locatorPublicKey, credentialCapsuleKey, params.timeoutMs);
+  } finally {
+    checkPool.closeAll();
+  }
+  if (!existingCapsule.quorumMet) {
+    throw new RegistrationFailedError(
+      "Couldn't verify this login name and password aren't already registered. Please retry, or add more vault relays."
+    );
+  }
+  // Any validly signed event at this address (decryptable by us or not) required
+  // knowing this exact locator private key to publish -- which requires this exact
+  // login name + password -- so its mere presence means an account already exists here.
+  if (existingCapsule.candidates.length > 0) {
+    throw new AccountAlreadyExistsError();
+  }
+
   // §15.2 — recovery generation happens first so its signed event can be embedded below.
   const recoveryPhrase = entropyToRecoveryPhrase(randomEntropy128());
   const bip39Seed = await recoveryPhraseToSeed(recoveryPhrase);
@@ -88,8 +116,8 @@ export async function registerAccount(params: RegisterAccountParams): Promise<Re
   });
 
   // §15.5 — password path, embedding the signed recovery event for keyless rebroadcast repair
-  const { locatorPrivateKey, capsuleKey: credentialCapsuleKey } = await derivePasswordKeys(params.password, normalizedLoginName);
-  const locatorPublicKey = getPublicKeyHex(locatorPrivateKey);
+  // (locatorPrivateKey/credentialCapsuleKey/locatorPublicKey were already derived above for the
+  // existing-account check).
   const credentialPayload: CredentialPayload = {
     schema: SCHEMA_CREDENTIAL_V1,
     account_id: accountId,

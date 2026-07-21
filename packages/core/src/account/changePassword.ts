@@ -10,7 +10,7 @@ import { buildDeletionRequest } from "../nostr/nip09.js";
 import { PROTOCOL_CAPSULE_ENCRYPTION, PROTOCOL_PASSWORD_KDF, PROTOCOL_RECOVERY_DERIVATION } from "../capsules/types.js";
 import type { CredentialPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
-import { AccountNotFoundError, RegistrationFailedError, RollbackDetectedError } from "./errors.js";
+import { AccountAlreadyExistsError, AccountNotFoundError, RegistrationFailedError, RollbackDetectedError } from "./errors.js";
 import { getHighWaterMark, raiseHighWaterMark } from "./highWaterMark.js";
 import { InMemoryKeyValueStore, type KeyValueStore } from "../storage/interface.js";
 import type { NostrEvent } from "../nostr/event.js";
@@ -78,6 +78,30 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
 
   const newKeys = await derivePasswordKeys(params.newPassword, normalizedLoginName);
   const newLocatorPublicKey = getPublicKeyHex(newKeys.locatorPrivateKey);
+
+  // §15.6/§18.1 — the new locator address is a NIP-33 replaceable event too, fully
+  // determined by login name + the chosen new password. If some other account already
+  // exists there (this login name rotated to a password that happens to already be
+  // registered under it), publishing would silently destroy that other account exactly
+  // like an unchecked registration would.
+  const newLocatorCheckPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: newKeys.locatorPrivateKey });
+  let existingAtNewLocator;
+  try {
+    existingAtNewLocator = await readCredentialCapsule(newLocatorCheckPool, newLocatorPublicKey, newKeys.capsuleKey, params.timeoutMs);
+  } finally {
+    newLocatorCheckPool.closeAll();
+  }
+  if (!existingAtNewLocator.quorumMet) {
+    throw new RegistrationFailedError(
+      "Couldn't verify the new password isn't already registered under this login name. Please retry, or add more vault relays."
+    );
+  }
+  if (existingAtNewLocator.candidates.length > 0) {
+    throw new AccountAlreadyExistsError(
+      "Another account is already registered with this login name and the new password you chose. Pick a different new password."
+    );
+  }
+
   const newGeneration = oldPayload.generation + 1;
 
   const newPayload: CredentialPayload = {

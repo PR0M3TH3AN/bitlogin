@@ -2,7 +2,7 @@
 
 ## Static, Relay-Backed Portable Account Protocol
 
-**Document version:** 0.5
+**Document version:** 0.6
 **Status:** Revised MVP specification (incorporates external protocol review)
 **Date:** July 21, 2026
 **Client architecture:** Static progressive web application
@@ -11,6 +11,12 @@
 **Daily authentication:** Login name and strong password
 **Recovery:** BIP-39 mnemonic phrase
 **Email dependency:** None
+
+---
+
+## Changes from v0.5
+
+1. **Registration and password rotation refuse to overwrite an existing account.** Neither `registerAccount` nor `changePassword` checked whether a credential capsule already existed at the locator address they were about to publish to. Since that address is a NIP-33 replaceable event fully determined by login name + password, registering (or rotating to a new password) with a login name + password combination that was already registered — by the same user re-registering by mistake, or by coincidence with someone else's account under a shared login name — silently destroyed the pre-existing account's identity binding, with no way back short of its own recovery phrase. Both flows now query for an existing capsule at the target locator first and refuse with `AccountAlreadyExistsError` if one is found, or with a retry-oriented error if no relay could be reached to check (§15.6, §18.1).
 
 ---
 
@@ -1002,7 +1008,20 @@ The client:
 
 ## 15.6 Publication
 
-Both events are published to the configured vault relays.
+Before publishing anything, the client checks whether a credential capsule already exists
+at the locator address this login name + password derive to. That address is a NIP-33
+replaceable event: publishing over one that already exists there would silently destroy
+whatever account is already bound to it, with no way back short of that other account's
+own recovery phrase. Any validly signed event found at the address — decryptable by this
+client or not — refuses registration outright (`AccountAlreadyExistsError`); if no relay
+can be reached to check, registration also refuses rather than proceed on an unverifiable
+assumption of emptiness. This check requires knowing the same login name + password an
+existing account was registered with, so it is not subject to §16.3's login/no-account
+non-disclosure rule — reaching this state is already equivalent to being able to log in
+as that account.
+
+Once the check passes, both the recovery and credential events are published to the
+configured vault relays.
 
 The registration succeeds only when:
 
@@ -1173,10 +1192,11 @@ The client:
 
 1. Unlocks the everyday identity.
 2. Derives the new locator and capsule key.
-3. Publishes a new credential capsule with incremented generation and `created_at` per §24.6.
-4. **Mandatorily** publishes a tombstone at the old locator: a replacement kind-30078 event with the same `d` tag, signed by the old locator key, whose content is an empty envelope. Addressable replacement propagates the tombstone to cooperative relays.
-5. **Mandatorily** publishes a NIP-09 deletion request from the old locator for the old capsule event.
-6. Deletes the old local cache and updates the generation high-water mark.
+3. Checks whether a credential capsule already exists at the *new* locator address (§15.6's same reasoning: this address is fully determined by login name + the chosen new password, and is just as replaceable). If one is found, this refuses with `AccountAlreadyExistsError` rather than proceed — the new password happens to already be registered under this login name by a different account, and rotating onto it would silently destroy that other account's capsule.
+4. Publishes a new credential capsule with incremented generation and `created_at` per §24.6.
+5. **Mandatorily** publishes a tombstone at the old locator: a replacement kind-30078 event with the same `d` tag, signed by the old locator key, whose content is an empty envelope. Addressable replacement propagates the tombstone to cooperative relays.
+6. **Mandatorily** publishes a NIP-09 deletion request from the old locator for the old capsule event.
+7. Deletes the old local cache and updates the generation high-water mark.
 
 Steps 4 and 5 shrink the exposure window on honest relays. They do not defeat an attacker who already downloaded the old capsule (§18.3), and the interface must not claim otherwise.
 
@@ -1772,6 +1792,8 @@ Resolved since v0.2: padding buckets and relay-limit compliance (§11.8); replac
 Resolved since v0.3: generation-rollback detection now enforced (fail-closed) rather than warn-only (§16.2); NIP-44 extended-length payload support, verified against the `nostr-tools` reference implementation; element-scoped `nip44Encrypt`/`nip44Decrypt` on `<bitlogin-auth>` (see README).
 
 Resolved since v0.4: initial profile publication (§15.8) now checks for an existing kind `0`/`10002`/`10050` event before publishing and never overwrites one that already exists, closing the profile-clobbering gap for imported identities (§28.1).
+
+Resolved since v0.5: registration and password rotation (§15.6, §18.1) now check for an existing credential capsule at the target locator address before publishing and refuse with `AccountAlreadyExistsError` rather than silently overwrite another account's identity binding.
 
 Still open before implementation:
 
