@@ -71,18 +71,13 @@ a:hover { text-decoration: underline; }
 .nav .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
   color: var(--fg);
 }
-.nav .brand .dot {
-  width: 20px;
-  height: 20px;
-  display: inline-block;
-  flex-shrink: 0;
-}
-.nav .brand .dot svg { width: 100%; height: 100%; display: block; }
-.nav .brand .wordmark {
-  height: 19px;
+/* Icon + wordmark are one fixed SVG (assets/lockup.svg) with their relative size and
+   spacing baked in, so the lockup looks identical everywhere it's used -- callers only
+   ever set a single height, never size the mark and the wordmark independently. */
+.nav .brand .lockup {
+  height: 21px;
   width: auto;
   display: block;
 }
@@ -348,6 +343,14 @@ a:hover { text-decoration: underline; }
 .feature:hover { border-color: var(--line-strong); transform: translateY(-2px); }
 .feature h3 { margin: 0 0 8px; font-size: 15.5px; font-family: var(--font-display); font-weight: 600; }
 .feature p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+/* Six cards in a grid that's four columns wide leaves a lopsided 4+2 last row --
+   pin that row's two cards under the middle two columns instead of the left two. */
+@media (min-width: 860px) {
+  .grid-center-last-row { grid-template-columns: repeat(4, 1fr); }
+  .grid-center-last-row .feature:nth-child(5) { grid-column: 2 / 3; }
+  .grid-center-last-row .feature:nth-child(6) { grid-column: 3 / 4; }
+}
 
 section { padding: 20px 0 40px; }
 h2 {

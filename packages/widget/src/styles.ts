@@ -68,21 +68,17 @@ h2 {
   font-weight: 600;
   margin: 0 0 4px;
 }
+/* One fixed SVG (icon + wordmark, same file as the marketing site's assets/lockup.svg)
+   with the relative size and spacing between them baked in -- only the overall height
+   is ever set here, so the lockup can never end up looking different in one place than
+   another the way independently-sized icon + text elements could drift apart. */
 .brand-lockup {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: block;
+  height: 20px;
+  width: auto;
   margin: 0 0 6px;
   color: var(--bl-fg);
 }
-.brand-lockup .mark {
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  display: inline-block;
-}
-.brand-lockup .mark svg { width: 100%; height: 100%; display: block; }
-.brand-lockup .wordmark { height: 17px; width: auto; display: block; }
 p.sub {
   color: var(--bl-muted);
   margin: 0 0 18px;
