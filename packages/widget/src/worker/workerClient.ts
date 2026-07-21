@@ -6,6 +6,7 @@ import type {
   WorkerResponse,
   ConfigurePayload,
   RegisterPayload,
+  PreviewImportKeyPayload,
   LoginPayload,
   RecoverPayload,
   CompleteRecoveryPayload,
@@ -60,6 +61,9 @@ export class WorkerClient {
   }
   register(payload: RegisterPayload) {
     return this.call("register", payload);
+  }
+  previewImportKey(payload: PreviewImportKeyPayload) {
+    return this.call("previewImportKey", payload);
   }
   login(payload: LoginPayload) {
     return this.call("login", payload);

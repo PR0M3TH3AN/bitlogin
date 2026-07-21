@@ -19,14 +19,25 @@ export interface ConfigurePayload {
 export interface RegisterPayload {
   loginName: string;
   password: string;
+  /** When present, import this existing identity (nsec or 64-char hex) instead of generating one (§SF10). */
+  importKey?: string;
 }
 export interface RegisterResult {
   recoveryPhrase: string;
   everydayPublicKey: string;
   recoveryPublicKey: string;
   accountId: string;
+  imported: boolean;
   credentialEventId: string;
   recoveryEventId: string;
+}
+
+export interface PreviewImportKeyPayload {
+  nsecOrHex: string;
+}
+export interface PreviewImportKeyResult {
+  everydayPublicKey: string;
+  npub: string;
 }
 
 export interface LoginPayload {
@@ -122,6 +133,7 @@ export interface SessionStatusResult {
 export type WorkerActionMap = {
   configure: [ConfigurePayload, Record<string, never>];
   register: [RegisterPayload, RegisterResult];
+  previewImportKey: [PreviewImportKeyPayload, PreviewImportKeyResult];
   login: [LoginPayload, LoginResult];
   recover: [RecoverPayload, RecoverResult];
   completeRecovery: [CompleteRecoveryPayload, CompleteRecoveryResult];

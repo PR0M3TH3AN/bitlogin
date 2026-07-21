@@ -1,7 +1,10 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { MockRelay } from "../test-support/mockRelay.js";
 import { generatePassphrase } from "./passphrase.js";
-import { registerAccount } from "./create.js";
+import { registerAccount, importAccount, decodeEverydayPrivateKey } from "./create.js";
+import { generatePrivateKey, getPublicKeyHex } from "../crypto/secp256k1.js";
+import { encodeNsec, encodeNpub } from "../nostr/nip19.js";
+import { bytesToHex } from "../crypto/encoding.js";
 import { loginWithPassword } from "./login.js";
 import { recoverWithPhrase, completeRecoveryWithNewCredentials } from "./recover.js";
 import { changePassword } from "./changePassword.js";
@@ -49,6 +52,50 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
     },
     ARGON2_TIMEOUT
   );
+
+  it(
+    "import an existing nsec -> clean-device login and phrase recovery both reproduce the imported npub (§SF10)",
+    async () => {
+      // A pre-existing Nostr identity the user already controls.
+      const existingKey = generatePrivateKey();
+      const existingPubkey = getPublicKeyHex(existingKey);
+      const nsec = encodeNsec(existingKey);
+      const npub = encodeNpub(existingPubkey);
+
+      const loginName = "importer";
+      const password = generatePassphrase().secret;
+
+      // decodeEverydayPrivateKey accepts both nsec and 64-char hex forms.
+      const existingKeyHex = bytesToHex(existingKey);
+      expect(getPublicKeyHex(decodeEverydayPrivateKey(nsec))).toBe(existingPubkey);
+      expect(getPublicKeyHex(decodeEverydayPrivateKey(existingKeyHex))).toBe(existingPubkey);
+
+      const registration = await importAccount({ nsecOrHex: nsec, loginName, password, vaultRelayUrls });
+      expect(registration.imported).toBe(true);
+      expect(registration.everydayPublicKey).toBe(existingPubkey);
+
+      // Clean-device password login yields the imported identity, unchanged.
+      const login = await loginWithPassword({ loginName, password, vaultRelayUrls });
+      expect(login.everydayPublicKey).toBe(existingPubkey);
+      expect(encodeNpub(login.everydayPublicKey)).toBe(npub);
+
+      // The freshly generated BitLogin phrase recovers the SAME imported identity.
+      const recovered = await recoverWithPhrase({
+        phrase: registration.recoveryPhrase,
+        vaultRelayUrls,
+        discoveryRelayUrls: vaultRelayUrls
+      });
+      expect(recovered.everydayPublicKey).toBe(existingPubkey);
+    },
+    ARGON2_TIMEOUT
+  );
+
+  it("rejects malformed keys on import (§SF10)", () => {
+    expect(() => decodeEverydayPrivateKey("not-a-key")).toThrow();
+    expect(() => decodeEverydayPrivateKey("nsec1invalid")).toThrow();
+    expect(() => decodeEverydayPrivateKey("00".repeat(32))).toThrow(); // zero scalar is invalid
+    expect(() => decodeEverydayPrivateKey("ab".repeat(20))).toThrow(); // wrong length hex
+  });
 
   it(
     "wrong password on a real account is indistinguishable from a nonexistent account (§16.3)",

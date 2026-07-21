@@ -88,10 +88,11 @@ Implemented: registration (§15), any-device password login with rollback and
 relay-disagreement detection (§16), phrase recovery with recovery-capsule
 refresh (§17), known-password change with mandatory tombstone + NIP-09
 deletion (§18), replica repair (§24.4), recovery export (§19.5), NIP-19
-nsec/npub encoding, a NIP-44 v2 implementation for the `window.nostr.nip44`
-surface, bootstrap/discovery relay list plumbing (§19), and the full
-crypto stack from §11 (Argon2id, HKDF, ScalarExpand, AES-256-GCM, JCS,
-fixed padding buckets).
+nsec/npub encoding, importing an existing Nostr `nsec` as the everyday
+identity (§28.1, §SF10 — with a preview-before-commit UI step), a NIP-44 v2
+implementation for the `window.nostr.nip44` surface, bootstrap/discovery
+relay list plumbing (§19), and the full crypto stack from §11 (Argon2id,
+HKDF, ScalarExpand, AES-256-GCM, JCS, fixed padding buckets).
 
 **Deferred / not in this pass:**
 - Phase 2 messaging (NIP-17 inbox/compose) — the NIP-44 primitive is built

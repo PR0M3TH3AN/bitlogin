@@ -8,6 +8,7 @@ import { WIDGET_STYLES } from "./styles.js";
 
 type Screen =
   | "welcome"
+  | "import-key"
   | "create-name"
   | "create-credential"
   | "confirm-phrase"
@@ -38,6 +39,10 @@ export class BitLoginAuthElement extends HTMLElement {
   private savedCheckbox = false;
   private recoveryPhrase = "";
   private confirmSlots: ConfirmSlot[] = [];
+
+  // Import flow (§SF10). importKey holds the pasted nsec/hex only until registration completes.
+  private importKey = "";
+  private importPreviewNpub = "";
 
   private recoverPhraseInput = "";
   private recoveredPreview: { generalRelaysCount: number; dmRelaysCount: number; chainWarning?: string } | null = null;
@@ -116,8 +121,19 @@ export class BitLoginAuthElement extends HTMLElement {
     switch (action) {
       case "goto-create":
         this.loginName = "";
+        this.importKey = "";
+        this.importPreviewNpub = "";
         this.goto("create-name");
         return;
+      case "goto-import":
+        this.importKey = "";
+        this.importPreviewNpub = "";
+        this.goto("import-key");
+        return;
+      case "preview-import":
+        return this.handlePreviewImport();
+      case "import-continue":
+        return this.handleImportContinue();
       case "goto-login":
         this.goto("login");
         return;
@@ -166,6 +182,8 @@ export class BitLoginAuthElement extends HTMLElement {
     const formName = form.dataset.form;
     try {
       switch (formName) {
+        case "import-key":
+          return await this.handlePreviewImport();
         case "create-name":
           return this.handleCreateNameSubmit();
         case "create-credential":
@@ -186,6 +204,39 @@ export class BitLoginAuthElement extends HTMLElement {
     } catch (err) {
       this.fail(err);
     }
+  }
+
+  private async handlePreviewImport(): Promise<void> {
+    const pasted = this.field("importKey").trim();
+    if (!pasted) {
+      this.errorMessage = "Paste your nsec or hex private key first.";
+      this.render();
+      return;
+    }
+    this.setBusy(true);
+    try {
+      const preview = await this.worker.previewImportKey({ nsecOrHex: pasted });
+      this.importKey = pasted;
+      this.importPreviewNpub = preview.npub;
+      this.busy = false;
+      this.render();
+    } catch (err) {
+      this.importKey = "";
+      this.importPreviewNpub = "";
+      this.fail(err);
+    }
+  }
+
+  private handleImportContinue(): void {
+    // Reached only after a successful preview; move into the normal name -> credential flow,
+    // which will register with importKey set (§SF10).
+    if (!this.importKey || !this.importPreviewNpub) {
+      this.errorMessage = "Check your key before continuing.";
+      this.render();
+      return;
+    }
+    this.loginName = "";
+    this.goto("create-name");
   }
 
   private handleCreateNameSubmit(): void {
@@ -209,7 +260,14 @@ export class BitLoginAuthElement extends HTMLElement {
       return;
     }
     this.setBusy(true);
-    const result = await this.worker.register({ loginName: this.loginName, password: this.generatedCredential });
+    const result = await this.worker.register({
+      loginName: this.loginName,
+      password: this.generatedCredential,
+      importKey: this.importKey || undefined
+    });
+    // The pasted key is now wrapped in the capsules; drop the main-thread copy (§11.10).
+    this.importKey = "";
+    this.importPreviewNpub = "";
     this.recoveryPhrase = result.recoveryPhrase;
     const words = this.recoveryPhrase.split(" ");
     const indices = pickRandomIndices(words.length, 3);
@@ -338,13 +396,43 @@ export class BitLoginAuthElement extends HTMLElement {
           ${this.renderError()}
           <button class="primary" data-action="goto-login">Sign in</button>
           <button class="secondary" data-action="goto-create">Create account</button>
+          <button class="link" data-action="goto-import">Import an existing Nostr key</button>
           <button class="link" data-action="goto-recover">Forgot password? Recover with phrase</button>
         `;
 
+      case "import-key": {
+        const previewed = !!this.importPreviewNpub;
+        return `
+          <h2>Import an existing Nostr key</h2>
+          <p class="sub">Wrap a Nostr identity you already control in a BitLogin login name and password. Your key never changes — you just get a friendlier way in.</p>
+          <div class="notice warn">Pasting a private key into any web page is risky. Only do this on a BitLogin build you trust, and clear your clipboard afterward. BitLogin can't secure copies of this key that already exist elsewhere.</div>
+          ${this.renderError()}
+          <form data-form="import-key">
+            <label for="importKey">Your nsec or hex private key</label>
+            <input type="password" name="importKey" id="importKey" autocomplete="off" placeholder="nsec1… or 64-character hex" required />
+            <button class="secondary" type="submit" ${this.busy ? "disabled" : ""}>
+              ${this.busy ? '<span class="spinner"></span>Checking…' : "Check key"}
+            </button>
+          </form>
+          ${
+            previewed
+              ? `<div class="notice info">This key's public identity:</div>
+                 <div class="credential-box">${escapeHtml(this.importPreviewNpub)}</div>
+                 <button class="primary" type="button" data-action="import-continue">This is my identity — continue</button>`
+              : ""
+          }
+          <button class="link" data-action="goto-welcome">Back</button>
+        `;
+      }
+
       case "create-name":
         return `
-          <h2>Create your BitLogin</h2>
-          <p class="sub">Choose a login name. It's a convenience, not a secret (it contributes no security).</p>
+          <h2>${this.importKey ? "Set up your login" : "Create your BitLogin"}</h2>
+          <p class="sub">${
+            this.importKey
+              ? "Choose a login name for your imported identity. It's a convenience, not a secret."
+              : "Choose a login name. It's a convenience, not a secret (it contributes no security)."
+          }</p>
           ${this.renderError()}
           <form data-form="create-name">
             <label for="loginName">Login name</label>
@@ -368,7 +456,13 @@ export class BitLoginAuthElement extends HTMLElement {
               I have saved this password somewhere safe.
             </label>
             <button class="primary" type="submit" ${this.busy ? "disabled" : ""}>
-              ${this.busy ? '<span class="spinner"></span>Creating account…' : "Create account"}
+              ${
+                this.busy
+                  ? `<span class="spinner"></span>${this.importKey ? "Importing…" : "Creating account…"}`
+                  : this.importKey
+                    ? "Import account"
+                    : "Create account"
+              }
             </button>
           </form>
         `;

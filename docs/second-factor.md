@@ -1,7 +1,11 @@
 # BitLogin Second Factor, Backup Codes, and Imported Identities
 
 **Document version:** 0.1 (draft addendum to the v0.3 core specification)
-**Status:** Design proposal — not implemented, not final
+**Status:** Mixed. §SF10 (imported identities) is **implemented**. Phone-approval
+sign-in (§SF5–SF7) and backup codes (§SF8) are **design proposals only** — and
+backup codes are unlikely to ship, since the recovery phrase already covers the
+same ground (see §SF8 note). The "why not TOTP" analysis (§SF2) is a settled
+rejection, kept on the record.
 **Depends on:** `docs/spec.md` (§ references below point there unless marked §SF)
 
 ---
@@ -307,7 +311,7 @@ Lost everything incl. phrase  → unrecoverable (unchanged, §19.4)
 
 ---
 
-# SF10. Imported identities
+# SF10. Imported identities  — IMPLEMENTED
 
 An existing Nostr identity may be used as the everyday identity under all
 of the above (§28.1 anticipated this; the everyday key is by design never

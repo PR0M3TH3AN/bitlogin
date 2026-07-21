@@ -1,7 +1,8 @@
 /** Registration flow (§15). Recovery capsule is built and published before the credential capsule. */
 import { randomEntropy128, randomAccountId } from "../crypto/random.js";
-import { bytesToBase64url } from "../crypto/encoding.js";
-import { generatePrivateKey, getPublicKeyHex } from "../crypto/secp256k1.js";
+import { bytesToBase64url, hexToBytes } from "../crypto/encoding.js";
+import { generatePrivateKey, getPublicKeyHex, isValidScalar } from "../crypto/secp256k1.js";
+import { decodeNsec } from "../nostr/nip19.js";
 import { entropyToRecoveryPhrase, recoveryPhraseToSeed } from "../crypto/bip39.js";
 import { derivePasswordKeys, deriveRecoveryKeys, normalizeLoginName } from "./normalize.js";
 import { RelayPool } from "../nostr/pool.js";
@@ -19,6 +20,13 @@ export interface RegisterAccountParams {
   /** A client-generated credential (§9.2); manual passwords are prohibited in the alpha (§9.3). */
   password: string;
   vaultRelayUrls: string[];
+  /**
+   * Optional existing everyday identity to wrap instead of generating a fresh one (§28.1, §SF10).
+   * The everyday key is never derived from any BitLogin secret (§7.2), so an imported key is
+   * indistinguishable to the rest of the protocol — only the origin differs. Must be a valid
+   * 32-byte secp256k1 scalar; the caller is responsible for decoding an `nsec` first.
+   */
+  everydayPrivateKey?: Uint8Array;
   minAcknowledgements?: number;
   timeoutMs?: number;
   /** Testing hook; defaults to the current time. */
@@ -33,6 +41,8 @@ export interface RegisterAccountResult {
   recoveryPublicKey: string;
   locatorPublicKey: string;
   accountId: string;
+  /** True when the everyday identity was imported (§SF10) rather than freshly generated. */
+  imported: boolean;
   credentialEvent: NostrEvent;
   recoveryEvent: NostrEvent;
   credentialPublish: PublishVerificationResult;
@@ -49,8 +59,12 @@ export async function registerAccount(params: RegisterAccountParams): Promise<Re
   const { recoveryPrivateKey, capsuleKey: recoveryCapsuleKey } = deriveRecoveryKeys(bip39Seed);
   const recoveryPublicKey = getPublicKeyHex(recoveryPrivateKey);
 
-  // §15.3 — everyday identity
-  const everydayPrivateKey = generatePrivateKey();
+  // §15.3 — everyday identity: generated fresh, or an imported existing key (§28.1, §SF10).
+  const imported = params.everydayPrivateKey !== undefined;
+  if (imported && !isValidScalar(params.everydayPrivateKey!)) {
+    throw new RegistrationFailedError("The provided key is not a valid secp256k1 private key.");
+  }
+  const everydayPrivateKey = imported ? params.everydayPrivateKey! : generatePrivateKey();
   const everydayPublicKey = getPublicKeyHex(everydayPrivateKey);
   const accountId = bytesToBase64url(randomAccountId());
 
@@ -129,9 +143,47 @@ export async function registerAccount(params: RegisterAccountParams): Promise<Re
     recoveryPublicKey,
     locatorPublicKey,
     accountId,
+    imported,
     credentialEvent,
     recoveryEvent,
     credentialPublish,
     recoveryPublish
   };
+}
+
+/**
+ * Convenience wrapper for importing an existing Nostr identity (§28.1, §SF10).
+ * Accepts an `nsec` (bech32) or 64-char lowercase-hex private key, decodes it,
+ * and registers a new BitLogin account (fresh recovery phrase + password)
+ * around that key. Everything downstream is identical to a generated account —
+ * only the everyday key's origin differs.
+ *
+ * Honest limitation (§SF10): BitLogin secures its own storage of the key, but
+ * copies that already exist elsewhere (extensions, other signers, clipboard
+ * history, backups) remain live attack surface outside its reach. If the key
+ * may already be compromised, rotate to a fresh identity instead of importing.
+ */
+export async function importAccount(
+  params: Omit<RegisterAccountParams, "everydayPrivateKey"> & { nsecOrHex: string }
+): Promise<RegisterAccountResult> {
+  const { nsecOrHex, ...rest } = params;
+  const everydayPrivateKey = decodeEverydayPrivateKey(nsecOrHex);
+  return registerAccount({ ...rest, everydayPrivateKey });
+}
+
+/** Decodes an `nsec` or 64-char hex string to a validated 32-byte scalar (§SF10). */
+export function decodeEverydayPrivateKey(nsecOrHex: string): Uint8Array {
+  const trimmed = nsecOrHex.trim();
+  let key: Uint8Array;
+  if (trimmed.startsWith("nsec1")) {
+    key = decodeNsec(trimmed);
+  } else if (/^[0-9a-fA-F]{64}$/u.test(trimmed)) {
+    key = hexToBytes(trimmed.toLowerCase());
+  } else {
+    throw new RegistrationFailedError("Enter a valid nsec (nsec1…) or a 64-character hex private key.");
+  }
+  if (!isValidScalar(key)) {
+    throw new RegistrationFailedError("The provided key is not a valid secp256k1 private key.");
+  }
+  return key;
 }
