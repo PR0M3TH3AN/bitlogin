@@ -81,6 +81,11 @@ export class BitLoginAuthElement extends HTMLElement {
   private exportedNsec = "";
   private changePasswordNewCredential = "";
 
+  // Brief animated brass-seal stamp (matching the widget's own brand mark) shown once over
+  // the destination screen right after a real security-relevant success -- see flashSuccess().
+  private pendingSuccessLabel: string | null = null;
+  private successDismissTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Rollback confirmation (§16.2 step 6). A RollbackDetectedError from either login or
   // password-change means this device has already seen a newer credential generation than the
   // one just read -- most likely a rotated-away password being replayed from a relay that never
@@ -124,6 +129,7 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   disconnectedCallback(): void {
+    if (this.successDismissTimer !== null) clearTimeout(this.successDismissTimer);
     this.releaseSigner();
     this.worker.terminate();
   }
@@ -629,7 +635,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.sessionWarnings = [];
     this.noteSignerClaim(this.claimSigner());
     this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: this.session?.publicKey } }));
-    this.goto("dashboard");
+    this.flashSuccess("dashboard", "Account created");
   }
 
   private async handleLoginSubmit(): Promise<void> {
@@ -653,7 +659,7 @@ export class BitLoginAuthElement extends HTMLElement {
       this.busy = false;
       this.noteSignerClaim(this.claimSigner());
       this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: result.everydayPublicKey } }));
-      this.goto("dashboard");
+      this.flashSuccess("dashboard", "Signed in");
       void this.offerToSaveCredential(loginName, password);
     } catch (err) {
       if (err instanceof Error && err.name === "RollbackDetectedError") {
@@ -725,7 +731,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.sessionWarnings = [];
     this.noteSignerClaim(this.claimSigner());
     this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: this.session?.publicKey } }));
-    this.goto("dashboard");
+    this.flashSuccess("dashboard", "Account recovered");
     void this.offerToSaveCredential(newLoginName, newPassword);
   }
 
@@ -757,7 +763,7 @@ export class BitLoginAuthElement extends HTMLElement {
       this.busy = false;
       this.sessionWarnings = [];
       this.noteSignerClaim(this.claimSigner());
-      this.goto("dashboard");
+      this.flashSuccess("dashboard", "Password updated");
       void this.offerToSaveCredential(this.loginName, newPassword);
     } catch (err) {
       if (err instanceof Error && err.name === "RollbackDetectedError") {
@@ -795,7 +801,48 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   private render(): void {
-    this.root.innerHTML = `<style>${WIDGET_STYLES}</style><div class="card">${this.renderScreen()}</div>`;
+    const successOverlay = this.pendingSuccessLabel ? this.renderSuccessOverlay(this.pendingSuccessLabel) : "";
+    this.root.innerHTML = `<style>${WIDGET_STYLES}</style><div class="card">${this.renderScreen()}${successOverlay}</div>`;
+  }
+
+  private renderSuccessOverlay(label: string): string {
+    return `
+      <div class="success-overlay" data-success-overlay>
+        <span class="success-stamp">
+          <svg viewBox="0 0 64 64" aria-hidden="true">
+            <defs>
+              <linearGradient id="bl-success-brass" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#e6c481" />
+                <stop offset="1" stop-color="#b3924a" />
+              </linearGradient>
+            </defs>
+            <circle cx="32" cy="32" r="21" fill="none" stroke="url(#bl-success-brass)" stroke-width="2.5" />
+            <path d="M27 32.5l3.6 3.6L38 28.2" fill="none" stroke="url(#bl-success-brass)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </span>
+        <p class="success-label">${escapeHtml(label)}</p>
+      </div>
+    `;
+  }
+
+  /**
+   * Navigates to `screen` and briefly stamps it with the same brass-ring-and-checkmark mark
+   * used in the logo, for the handful of moments that are a genuine security-relevant success
+   * -- signing in, creating an account, recovering one, or rotating a password -- rather than
+   * every validation step or navigation. Purely decorative: `pointer-events: none` (see
+   * styles.ts) means it never blocks interacting with the screen underneath, and a JS timer
+   * (not just the CSS animation) guarantees it's removed even if the animation can't run.
+   */
+  private flashSuccess(screen: Screen, label: string): void {
+    this.goto(screen);
+    if (this.successDismissTimer !== null) clearTimeout(this.successDismissTimer);
+    this.pendingSuccessLabel = label;
+    this.render();
+    this.successDismissTimer = setTimeout(() => {
+      this.pendingSuccessLabel = null;
+      this.successDismissTimer = null;
+      this.root.querySelector("[data-success-overlay]")?.remove();
+    }, 1100);
   }
 
   private renderError(): string {

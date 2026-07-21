@@ -54,6 +54,7 @@ export const WIDGET_STYLES = /* css */ `
 }
 * { box-sizing: border-box; }
 .card {
+  position: relative;
   width: 100%;
   background: var(--bl-bg);
   color: var(--bl-fg);
@@ -78,6 +79,54 @@ h2 {
   width: auto;
   margin: 0 0 6px;
   color: var(--bl-fg);
+}
+/* Brief confirmation stamp shown over the destination screen right after a real
+   security-relevant success (see flashSuccess() in element.ts) -- the same brass ring
+   and checkmark as the brand mark, so a successful sign-in/create/recover/rotate reads
+   as "sealed," not just a silent screen change. Never blocks interaction, and fades out
+   on its own; the JS timer that removes it entirely doesn't depend on the animation. */
+.success-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--bl-bg);
+  border-radius: var(--bl-radius);
+  pointer-events: none;
+  animation: bl-overlay-fade-out 0.4s ease 0.7s both;
+}
+.success-stamp svg {
+  width: 56px;
+  height: 56px;
+  animation: bl-stamp-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.success-label {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bl-fg);
+  opacity: 0;
+  animation: bl-label-in 0.3s ease 0.35s both;
+}
+@keyframes bl-stamp-in {
+  0% { transform: scale(0.5); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes bl-label-in {
+  to { opacity: 1; }
+}
+@keyframes bl-overlay-fade-out {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .success-overlay { animation: none; }
+  .success-stamp svg { animation: none; }
+  .success-label { animation: none; opacity: 1; }
 }
 p.sub {
   color: var(--bl-muted);
