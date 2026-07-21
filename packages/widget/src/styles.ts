@@ -2,6 +2,7 @@ export const WIDGET_STYLES = /* css */ `
 :host {
   --bl-accent: #6d28d9;
   --bl-accent-hover: #5b21b6;
+  --bl-accent-fg: white;
   --bl-bg: #ffffff;
   --bl-fg: #16151a;
   --bl-muted: #6b7280;
@@ -12,9 +13,16 @@ export const WIDGET_STYLES = /* css */ `
   --bl-warn: #92400e;
   --bl-warn-bg: #fffbeb;
   --bl-radius: 14px;
+  /* Caps the widget's own width; a host page that wants it to fill a wider
+     container (rather than stay a fixed-width card) overrides this to a
+     larger value or "none". */
+  --bl-max-width: 380px;
+  --bl-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   all: initial;
   display: inline-block;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  width: 100%;
+  max-width: var(--bl-max-width);
+  font-family: var(--bl-font-family);
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -47,7 +55,6 @@ export const WIDGET_STYLES = /* css */ `
 * { box-sizing: border-box; }
 .card {
   width: 100%;
-  max-width: 380px;
   background: var(--bl-bg);
   color: var(--bl-fg);
   border: 1px solid var(--bl-border);
@@ -122,7 +129,7 @@ button {
   width: 100%;
   margin-top: 14px;
 }
-button.primary { background: var(--bl-accent); color: white; }
+button.primary { background: var(--bl-accent); color: var(--bl-accent-fg); }
 button.primary:hover { background: var(--bl-accent-hover); }
 button.primary:disabled { opacity: 0.55; cursor: default; }
 button.secondary { background: transparent; color: var(--bl-fg); border: 1px solid var(--bl-border); }

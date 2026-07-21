@@ -90,6 +90,42 @@ its static shell HTML, only toggling `hidden` — see its
 `src/nostr/bitloginAdapter.mjs` and the `#bitloginMount` container in its
 `index.html` for a worked example of the pattern.
 
+### Theming
+
+`<bitlogin-auth>` renders in a shadow root, but its colors, radius, font, and
+max-width are all read from CSS custom properties on `:host` — and custom
+properties inherit through the shadow boundary, so a host page can override
+every one of them from ordinary light-DOM CSS (a rule targeting the element,
+or an inline style), without touching the widget's internals:
+
+```css
+bitlogin-auth {
+  --bl-accent: #3d9bff;       /* primary button / link / focus ring color */
+  --bl-accent-hover: #2f86e0; /* primary button hover */
+  --bl-accent-fg: #04101f;    /* text color on top of --bl-accent */
+  --bl-bg: #12151f;           /* card background */
+  --bl-fg: #eaeef6;           /* body text */
+  --bl-muted: #98a2b6;        /* secondary text */
+  --bl-border: rgba(255, 255, 255, 0.10);
+  --bl-input-bg: #1a1e2b;     /* input/credential-box background */
+  --bl-danger: #ff6b6b;
+  --bl-danger-bg: rgba(255, 107, 107, 0.16);
+  --bl-warn: #ff6b6b;
+  --bl-warn-bg: rgba(255, 107, 107, 0.16);
+  --bl-radius: 14px;
+  --bl-font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  --bl-max-width: none;       /* default 380px keeps it a fixed-width card;
+                                  override to fill a wider container */
+}
+```
+
+All of these have defaults (a light theme, with a `prefers-color-scheme:
+dark` media-query fallback and a `data-theme="dark"|"light"` attribute
+override for host pages with their own theme toggle), so overriding none of
+them is a valid choice — the widget just uses its own look. See BitRoad's
+`bitlogin-auth { ... }` rule in `src/styles.css` for a real integration that
+maps every one of these to its own design tokens.
+
 ## Deployment
 
 The demo site deploys to Vercel: `vercel.json` at the repo root sets the
