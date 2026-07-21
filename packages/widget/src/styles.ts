@@ -195,6 +195,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 button.secondary { background: transparent; color: var(--bl-fg); border: 1px solid var(--bl-border); }
 button.secondary:hover { background: var(--bl-input-bg); }
 button.link {
+  display: block;
   background: none;
   color: var(--bl-accent);
   width: auto;
