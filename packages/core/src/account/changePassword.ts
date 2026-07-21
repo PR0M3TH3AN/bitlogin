@@ -31,6 +31,9 @@ export interface ChangePasswordResult {
   oldLocatorPublicKey: string;
   newLocatorPublicKey: string;
   newGeneration: number;
+  /** Carried forward unchanged from the old capsule (§14.1: rotation never touches the recovery capsule). */
+  recoveryPublicKey: string;
+  recoveryCapsuleEvent: NostrEvent;
   newCredentialEvent: NostrEvent;
   tombstoneEvent: NostrEvent;
   deletionRequestEvent: NostrEvent;
@@ -127,6 +130,8 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
     oldLocatorPublicKey,
     newLocatorPublicKey,
     newGeneration,
+    recoveryPublicKey: oldPayload.recovery_public_key,
+    recoveryCapsuleEvent: oldPayload.recovery_capsule_event,
     newCredentialEvent,
     tombstoneEvent,
     deletionRequestEvent,

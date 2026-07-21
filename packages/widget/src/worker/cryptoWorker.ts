@@ -139,6 +139,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.accountId = result.accountId;
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeCredentialEvent = result.credentialEvent;
+      session.activeRecoveryEvent = result.recoveryCapsuleEvent;
       return {
         everydayPublicKey: result.everydayPublicKey,
         accountId: result.accountId,
@@ -197,6 +198,12 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         vaultRelayUrls,
         store
       });
+      // Keep the session's capsule references current so a recovery export or replica
+      // repair requested right after rotation (without an intervening re-login) still
+      // finds the NEW credential capsule and the (unchanged) recovery capsule.
+      session.activeCredentialEvent = result.newCredentialEvent;
+      session.recoveryPublicKey = result.recoveryPublicKey;
+      session.activeRecoveryEvent = result.recoveryCapsuleEvent;
       return {
         newLocatorPublicKey: result.newLocatorPublicKey,
         newGeneration: result.newGeneration,

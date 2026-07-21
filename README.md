@@ -65,6 +65,28 @@ guide, and `packages/demo/public/account.html` for a working example
 (create → confirm recovery phrase → sign an event → rotate password →
 export identity).
 
+## Deployment
+
+The demo site deploys to Vercel: `vercel.json` at the repo root sets the
+build command (core → widget → demo) and output directory, so importing this
+repo at [vercel.com/new](https://vercel.com/new) needs no manual
+configuration. GitHub Pages was evaluated but dropped — Pages requires a paid
+plan for private repositories, whereas Vercel's free tier deploys a private
+repo without that restriction.
+
+Because the deployed demo serves the built widget files as plain static
+assets at `/vendor/bitlogin/`, **any other site can point directly at the
+Vercel deployment today** without installing anything locally:
+
+```html
+<script type="module" src="https://bitlogin.vercel.app/vendor/bitlogin/bitlogin.js"></script>
+<bitlogin-auth></bitlogin-auth>
+```
+
+This is fine for prototyping across multiple projects; for production use in
+someone else's app, self-hosting the built files (or a future published npm
+package / CDN release) avoids depending on this demo deployment's uptime.
+
 ## What's implemented
 
 This build covers the protocol's Phase 0 (cryptographic core + test vectors)

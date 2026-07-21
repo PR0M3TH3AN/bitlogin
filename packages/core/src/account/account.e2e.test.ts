@@ -90,6 +90,32 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
     ARGON2_TIMEOUT
   );
 
+  it(
+    "login and password change both surface the embedded recovery capsule event (recovery export must work without a fresh phrase-recovery)",
+    async () => {
+      const loginName = "exportbug";
+      const oldPassword = generatePassphrase().secret;
+      const newPassword = generatePassphrase().secret;
+      const registration = await registerAccount({ loginName, password: oldPassword, vaultRelayUrls });
+
+      // A clean-device login (no prior registration/recovery in this "session") must still
+      // return the embedded recovery event -- this is what a recovery-export button needs.
+      const login = await loginWithPassword({ loginName, password: oldPassword, vaultRelayUrls });
+      expect(login.recoveryCapsuleEvent.id).toBe(registration.recoveryEvent.id);
+
+      // After a password rotation, the (unchanged) recovery capsule event must still be
+      // surfaced -- previously this was silently dropped, breaking "download export" after
+      // a rotation even across a logout/login.
+      const changed = await changePassword({ loginName, oldPassword, newPassword, vaultRelayUrls });
+      expect(changed.recoveryCapsuleEvent.id).toBe(registration.recoveryEvent.id);
+      expect(changed.recoveryPublicKey).toBe(registration.recoveryPublicKey);
+
+      const loginAfterRotation = await loginWithPassword({ loginName, password: newPassword, vaultRelayUrls });
+      expect(loginAfterRotation.recoveryCapsuleEvent.id).toBe(registration.recoveryEvent.id);
+    },
+    ARGON2_TIMEOUT * 2
+  );
+
   it("rejects malformed keys on import (§SF10)", () => {
     expect(() => decodeEverydayPrivateKey("not-a-key")).toThrow();
     expect(() => decodeEverydayPrivateKey("nsec1invalid")).toThrow();

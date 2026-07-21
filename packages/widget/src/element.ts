@@ -1,5 +1,5 @@
 /** <bitlogin-auth> — the embeddable BitLogin login/create/recover widget (§3, §27). */
-import { generatePassphrase, isValidLoginName } from "@bitlogin/core/account";
+import { generatePassphrase, isValidLoginName, checkManualPassword, type ManualPasswordCheck } from "@bitlogin/core/account";
 import { encodeNpub } from "@bitlogin/core/nostr";
 import { WorkerClient } from "./worker/workerClient.js";
 import { createNip07Provider } from "./provider.js";
@@ -40,6 +40,12 @@ export class BitLoginAuthElement extends HTMLElement {
   private recoveryPhrase = "";
   private confirmSlots: ConfirmSlot[] = [];
 
+  // Manual password opt-in (§9.3). Off by default; the generated passphrase remains the
+  // recommendation. manualPasswordFeedback is updated on every keystroke WITHOUT a full
+  // re-render (see onInput) so the field never loses focus while the user is typing.
+  private manualPasswordMode = false;
+  private manualPasswordFeedback: ManualPasswordCheck | null = null;
+
   // Import flow (§SF10). importKey holds the pasted nsec/hex only until registration completes.
   private importKey = "";
   private importPreviewNpub = "";
@@ -68,6 +74,7 @@ export class BitLoginAuthElement extends HTMLElement {
 
     this.root.addEventListener("click", (e) => this.onClick(e));
     this.root.addEventListener("submit", (e) => this.onSubmit(e));
+    this.root.addEventListener("input", (e) => this.onInput(e));
     this.render();
 
     if (!(window as unknown as { nostr?: unknown }).nostr) {
@@ -114,6 +121,31 @@ export class BitLoginAuthElement extends HTMLElement {
     return (this.root.querySelector(`[name="${name}"]`) as HTMLInputElement | null)?.value ?? "";
   }
 
+  /**
+   * Explicitly asks the browser to offer saving this credential via the Credential
+   * Management API (Chromium-based browsers only — Firefox and Safari never implemented
+   * `PasswordCredential`). This is the primary fix for password-manager integration here,
+   * not just a nice-to-have: the generated-password screen never puts the password into a
+   * real `<input>` for a browser to observe being filled (it's shown as text), and even on
+   * the login screen — which does use real, correctly-`autocomplete`d inputs — save/autofill
+   * heuristics are unreliable inside a shadow root, and this widget's JS-driven submit
+   * (`preventDefault`, no real form POST) doesn't produce the passive signal most heuristics
+   * expect anyway. An explicit `navigator.credentials.store()` call sidesteps all of that.
+   * Best-effort only: never blocks or fails the surrounding flow.
+   */
+  private async offerToSaveCredential(loginName: string, password: string): Promise<void> {
+    try {
+      const PasswordCredentialCtor = (
+        window as unknown as { PasswordCredential?: new (data: { id: string; password: string; name?: string }) => Credential }
+      ).PasswordCredential;
+      if (!PasswordCredentialCtor || !navigator.credentials?.store) return;
+      const credential = new PasswordCredentialCtor({ id: loginName, password, name: loginName });
+      await navigator.credentials.store(credential);
+    } catch {
+      // Best-effort only.
+    }
+  }
+
   private async onClick(e: Event): Promise<void> {
     const target = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
     if (!target) return;
@@ -155,6 +187,12 @@ export class BitLoginAuthElement extends HTMLElement {
         return;
       case "regenerate-credential":
         this.generatedCredential = generatePassphrase().secret;
+        this.savedCheckbox = false;
+        this.render();
+        return;
+      case "toggle-manual-password":
+        this.manualPasswordMode = !this.manualPasswordMode;
+        this.manualPasswordFeedback = null;
         this.savedCheckbox = false;
         this.render();
         return;
@@ -206,6 +244,32 @@ export class BitLoginAuthElement extends HTMLElement {
     }
   }
 
+  /**
+   * Live entropy/strength feedback for the manual-password field, updated by DIRECTLY
+   * patching a feedback element's text — never calling this.render() — so the input never
+   * loses focus or cursor position while the user is typing (§9.3).
+   */
+  private onInput(e: Event): void {
+    const target = e.target as HTMLElement;
+    if (!(target instanceof HTMLInputElement) || target.name !== "manualPassword") return;
+    this.manualPasswordFeedback = target.value ? checkManualPassword(target.value, this.loginName) : null;
+    const feedback = this.root.querySelector<HTMLElement>("#manual-password-feedback");
+    if (!feedback) return;
+    if (!this.manualPasswordFeedback) {
+      feedback.textContent = "";
+      feedback.className = "notice info";
+      return;
+    }
+    const bits = this.manualPasswordFeedback.entropyBits.toFixed(0);
+    if (this.manualPasswordFeedback.ok) {
+      feedback.textContent = `Looks good (~${bits} bits estimated).`;
+      feedback.className = "notice info";
+    } else {
+      feedback.textContent = `${this.manualPasswordFeedback.reason} (~${bits} bits estimated)`;
+      feedback.className = "notice warn";
+    }
+  }
+
   private async handlePreviewImport(): Promise<void> {
     const pasted = this.field("importKey").trim();
     if (!pasted) {
@@ -249,20 +313,35 @@ export class BitLoginAuthElement extends HTMLElement {
     this.loginName = name;
     this.generatedCredential = generatePassphrase().secret;
     this.savedCheckbox = false;
+    this.manualPasswordMode = false;
+    this.manualPasswordFeedback = null;
     this.goto("create-credential");
   }
 
   private async handleCreateCredentialSubmit(): Promise<void> {
+    let password = this.generatedCredential;
+    if (this.manualPasswordMode) {
+      const typed = this.field("manualPassword");
+      const check = checkManualPassword(typed, this.loginName);
+      if (!check.ok) {
+        this.errorMessage = `Password not accepted: ${check.reason}`;
+        this.render();
+        return;
+      }
+      password = typed;
+    }
     this.savedCheckbox = (this.root.querySelector("#saved-check") as HTMLInputElement | null)?.checked ?? false;
     if (!this.savedCheckbox) {
-      this.errorMessage = "Please confirm you saved your password before continuing.";
+      this.errorMessage = this.manualPasswordMode
+        ? "Please confirm you've saved your password (or written it down) before continuing."
+        : "Please confirm you saved your password before continuing.";
       this.render();
       return;
     }
     this.setBusy(true);
     const result = await this.worker.register({
       loginName: this.loginName,
-      password: this.generatedCredential,
+      password,
       importKey: this.importKey || undefined
     });
     // The pasted key is now wrapped in the capsules; drop the main-thread copy (§11.10).
@@ -275,11 +354,15 @@ export class BitLoginAuthElement extends HTMLElement {
     this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId };
     this.busy = false;
     this.goto("confirm-phrase");
-    // §15.8/§19.6 — publish relay preferences immediately after successful registration.
+    // §15.8/§19.6 — publish relay preferences immediately after successful registration,
+    // defaulting the public profile name to the chosen login name so the account isn't
+    // just a bare npub in every other Nostr client.
     void this.worker.publishProfileAndRelayLists({
+      name: this.loginName,
       generalRelays: this.vaultRelayUrls,
       dmRelays: this.vaultRelayUrls
     });
+    void this.offerToSaveCredential(this.loginName, password);
   }
 
   private handleConfirmPhraseSubmit(): void {
@@ -307,6 +390,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.busy = false;
     this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: result.everydayPublicKey } }));
     this.goto("dashboard");
+    void this.offerToSaveCredential(loginName, password);
   }
 
   private async handleRecoverPhraseSubmit(): Promise<void> {
@@ -338,6 +422,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.busy = false;
     this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: this.session?.publicKey } }));
     this.goto("dashboard");
+    void this.offerToSaveCredential(newLoginName, this.newCredentialAfterRecovery);
   }
 
   private async handleChangePasswordSubmit(): Promise<void> {
@@ -350,6 +435,7 @@ export class BitLoginAuthElement extends HTMLElement {
     });
     this.busy = false;
     this.goto("dashboard");
+    void this.offerToSaveCredential(this.loginName, this.changePasswordNewCredential);
   }
 
   private async handleDownloadRecoveryExport(): Promise<void> {
@@ -442,30 +528,51 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="link" data-action="goto-welcome">Back</button>
         `;
 
-      case "create-credential":
+      case "create-credential": {
+        const submitLabel = this.busy
+          ? `<span class="spinner"></span>${this.importKey ? "Importing…" : "Creating account…"}`
+          : this.importKey
+            ? "Import account"
+            : "Create account";
+
+        if (this.manualPasswordMode) {
+          return `
+            <h2>Choose your own password</h2>
+            <p class="sub">Not recommended: a downloadable encrypted file can be guessed against forever, offline, with no rate limit. BitLogin can only run basic checks here — not a breach-database lookup — so weak or reused passwords are still your risk to carry.</p>
+            <div class="notice warn">Offline guessing against this password can never be fully prevented. The generated passphrase remains the safer default.</div>
+            ${this.renderError()}
+            <form data-form="create-credential">
+              <label for="manualPassword">Password</label>
+              <input type="password" name="manualPassword" id="manualPassword" autocomplete="new-password" required minlength="12" />
+              <div class="notice info" id="manual-password-feedback"></div>
+              <label class="checkbox-row">
+                <input type="checkbox" id="saved-check" ${this.savedCheckbox ? "checked" : ""} />
+                I have saved this password somewhere safe.
+              </label>
+              <button class="primary" type="submit" ${this.busy ? "disabled" : ""}>${submitLabel}</button>
+            </form>
+            <button class="link" data-action="toggle-manual-password">Use a generated password instead (recommended)</button>
+          `;
+        }
+
         return `
           <h2>Your generated password</h2>
-          <p class="sub">BitLogin generates your password because no server can rate-limit guesses against a downloadable encrypted file. Manual passwords aren't allowed in this alpha.</p>
+          <p class="sub">BitLogin generates your password because no server can rate-limit guesses against a downloadable encrypted file.</p>
           <div class="credential-box" id="credential-box">${escapeHtml(this.generatedCredential)}</div>
           <button class="secondary" type="button" data-action="copy-credential">Copy</button>
           <button class="secondary" type="button" data-action="regenerate-credential">Generate a different one</button>
           ${this.renderError()}
-          <form data-form="create-credential">
+          <form data-form="create-credential" autocomplete="on">
+            <input type="text" name="username" autocomplete="username" value="${escapeHtml(this.loginName)}" readonly hidden />
             <label class="checkbox-row">
               <input type="checkbox" id="saved-check" ${this.savedCheckbox ? "checked" : ""} />
               I have saved this password somewhere safe.
             </label>
-            <button class="primary" type="submit" ${this.busy ? "disabled" : ""}>
-              ${
-                this.busy
-                  ? `<span class="spinner"></span>${this.importKey ? "Importing…" : "Creating account…"}`
-                  : this.importKey
-                    ? "Import account"
-                    : "Create account"
-              }
-            </button>
+            <button class="primary" type="submit" ${this.busy ? "disabled" : ""}>${submitLabel}</button>
           </form>
+          <button class="link" data-action="toggle-manual-password">Use my own password instead (not recommended)</button>
         `;
+      }
 
       case "confirm-phrase":
         return `

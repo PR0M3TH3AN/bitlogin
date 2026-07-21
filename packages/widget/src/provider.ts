@@ -17,6 +17,15 @@ export interface Nip07Provider {
     encrypt(peerPublicKey: string, plaintext: string): Promise<string>;
     decrypt(peerPublicKey: string, payload: string): Promise<string>;
   };
+  /**
+   * Identifies this provider as BitLogin's, distinct from a browser extension (Alby, nos2x,
+   * …) that may also implement window.nostr. Only one provider can occupy window.nostr at a
+   * time — this lets a host site that supports multiple signing methods tell which one is
+   * actually active, e.g. `window.nostr?._bitlogin === true`. Prefer `window.bitlogin` (see
+   * index.ts) for this check where available; it survives another provider later overwriting
+   * window.nostr, which this flag on the object itself cannot.
+   */
+  readonly _bitlogin: true;
 }
 
 const NOT_UNLOCKED_MESSAGE =
@@ -52,6 +61,7 @@ export function createNip07Provider(workerClient: WorkerClient, configuredRelays
         const { plaintext } = await wrapUnlockError(workerClient.nip44Decrypt({ peerPublicKey, payload }));
         return plaintext;
       }
-    }
+    },
+    _bitlogin: true
   };
 }

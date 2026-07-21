@@ -24,6 +24,8 @@ export interface LoginResult {
   accountId: string;
   generation: number;
   credentialEvent: NostrEvent;
+  /** The signed recovery capsule event embedded in the credential capsule (§12.1, §24.4) — needed to build a recovery export or rebroadcast replicas without re-deriving anything from the phrase. */
+  recoveryCapsuleEvent: NostrEvent;
   /** Set when the accepted generation is lower than one this device has previously seen (§16.2 step 6). */
   rollbackWarning?: string;
   /** Set when responsive relays disagree about which capsule is newest (§16.2 step 8). */
@@ -71,6 +73,7 @@ export async function loginWithPassword(params: LoginParams): Promise<LoginResul
       accountId: payload.account_id,
       generation: payload.generation,
       credentialEvent: result.best.event,
+      recoveryCapsuleEvent: payload.recovery_capsule_event,
       rollbackWarning,
       relayDisagreementWarning
     };
