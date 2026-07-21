@@ -142,3 +142,10 @@ HKDF, ScalarExpand, AES-256-GCM, JCS, fixed padding buckets).
 - Passphrases are generated from the EFF long Diceware wordlist
   (`diceware-wordlist-en-eff`), matching the spec's ~12.9-bits/word,
   six-word/~77-bit default (§9.2).
+
+## Contributing
+
+MIT licensed — see `LICENSE`. See `CONTRIBUTING.md` for the dev workflow,
+mock-relay testing (no route to public relays in most sandboxes/CI), and
+the spec-first process for anything touching wire format or crypto. Found
+a security issue? See `SECURITY.md` rather than opening a public issue.

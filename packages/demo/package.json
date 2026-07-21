@@ -2,6 +2,7 @@
   "name": "@bitlogin/demo",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "BitLogin marketing/landing site, integration docs, and account manager — a plain static site consuming @bitlogin/widget via a <script> tag.",
   "scripts": {
