@@ -12,7 +12,7 @@ import { repairReplicas } from "./repair.js";
 import { InMemoryKeyValueStore } from "../storage/interface.js";
 import { raiseHighWaterMark } from "./highWaterMark.js";
 import { RelayPool } from "../nostr/pool.js";
-import { AccountNotFoundError } from "./errors.js";
+import { AccountNotFoundError, RollbackDetectedError } from "./errors.js";
 import { derivePasswordKeys, normalizeLoginName } from "./normalize.js";
 import { buildCredentialCapsuleEvent, decryptCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
 import { RelayConnection } from "../nostr/relay.js";
@@ -278,7 +278,7 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
   );
 
   it(
-    "a device that has seen a higher generation warns on rollback to a lower one (§16.2 step 6)",
+    "a device that has seen a higher generation refuses a lower one by default, unless explicitly acknowledged (§16.2 step 6)",
     async () => {
       const loginName = "rollback";
       const password = generatePassphrase().secret;
@@ -288,11 +288,58 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       // Simulate this device having previously observed a higher generation for this account.
       await raiseHighWaterMark(store, registration.everydayPublicKey, { generation: 5 });
 
-      const login = await loginWithPassword({ loginName, password, vaultRelayUrls, store });
+      // Fails closed by default -- the client cannot tell "old, replayed credential" apart
+      // from "relay is merely lagging," so it must not silently grant a session either way.
+      await expect(loginWithPassword({ loginName, password, vaultRelayUrls, store })).rejects.toThrow(RollbackDetectedError);
+
+      // An explicit override still allows the (still-warned) login through.
+      const login = await loginWithPassword({ loginName, password, vaultRelayUrls, store, acknowledgeRollback: true });
       expect(login.generation).toBe(0);
       expect(login.rollbackWarning).toBeDefined();
     },
     ARGON2_TIMEOUT
+  );
+
+  it(
+    "old password rotated away on another device still fails closed even when a holdout relay never received the tombstone (§16.2 step 6, §18.1)",
+    async () => {
+      const loginName = "holdout";
+      const oldPassword = generatePassphrase().secret;
+      const newPassword = generatePassphrase().secret;
+      await registerAccount({ loginName, password: oldPassword, vaultRelayUrls });
+
+      // Rotate using only two of the three relays -- the third (relays[2]) never receives the
+      // new capsule NOR the tombstone/deletion request, so it keeps serving the original,
+      // "revoked" capsule indefinitely (a relay is never obligated to honor a deletion request).
+      const rotatingRelays = [relays[0]!.url, relays[1]!.url];
+      await changePassword({ loginName, oldPassword, newPassword, vaultRelayUrls: rotatingRelays });
+
+      // Simulate one continuously-used device/browser: it logs in with the new password (across
+      // all relays, including the holdout) and so locally records having seen the new generation.
+      const store = new InMemoryKeyValueStore();
+      const afterRotationLogin = await loginWithPassword({ loginName, password: newPassword, vaultRelayUrls, store });
+      expect(afterRotationLogin.generation).toBe(1);
+
+      // The same device is now asked to log in with the OLD password, querying ONLY the
+      // holdout relay that still has the pre-rotation capsule. Before the fix, this granted a
+      // full session (with only a non-blocking warning) because the old password's locator
+      // address still decrypts successfully there. It must now fail closed instead.
+      await expect(
+        loginWithPassword({ loginName, password: oldPassword, vaultRelayUrls: [relays[2]!.url], store })
+      ).rejects.toThrow(RollbackDetectedError);
+
+      // The explicit escape hatch still exists for a human who is confident this is relay lag.
+      const acknowledged = await loginWithPassword({
+        loginName,
+        password: oldPassword,
+        vaultRelayUrls: [relays[2]!.url],
+        store,
+        acknowledgeRollback: true
+      });
+      expect(acknowledged.generation).toBe(0);
+      expect(acknowledged.rollbackWarning).toBeDefined();
+    },
+    ARGON2_TIMEOUT * 2
   );
 
   it(

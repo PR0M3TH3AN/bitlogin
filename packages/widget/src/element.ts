@@ -26,7 +26,8 @@ type Screen =
   | "recover-new-credentials"
   | "dashboard"
   | "change-password"
-  | "export";
+  | "export"
+  | "rollback-confirm";
 
 interface ConfirmSlot {
   index: number;
@@ -80,6 +81,18 @@ export class BitLoginAuthElement extends HTMLElement {
   private exportedNsec = "";
   private changePasswordNewCredential = "";
 
+  // Rollback confirmation (§16.2 step 6). A RollbackDetectedError from either login or
+  // password-change means this device has already seen a newer credential generation than the
+  // one just read -- most likely a rotated-away password being replayed from a relay that never
+  // processed its tombstone. Rather than a passive dashboard banner shown after the fact (which
+  // let an old, "revoked" password fully unlock a session), this blocks BEFORE claiming the
+  // signer or dispatching bitlogin-login, and requires an explicit second step to proceed.
+  private pendingRollback:
+    | { kind: "login"; loginName: string; password: string }
+    | { kind: "change-password"; oldPassword: string; newPassword: string }
+    | null = null;
+  private rollbackMessage = "";
+
   constructor() {
     super();
     this.root = this.attachShadow({ mode: "open" });
@@ -115,6 +128,20 @@ export class BitLoginAuthElement extends HTMLElement {
   }
   async signEvent(event: { kind: number; tags?: string[][]; content: string; created_at?: number }) {
     return this.worker.signEvent(event);
+  }
+  /**
+   * Element-scoped NIP-44 encryption, matching getPublicKey/signEvent above. A host page
+   * embedding multiple signing methods (its own extension detection, another widget) should
+   * prefer this over reaching through `window.nostr.nip44` -- window.nostr is a single global
+   * slot that whichever provider signed in last currently owns, so a host holding a direct
+   * reference to ITS OWN `<bitlogin-auth>` element can talk to it deterministically instead of
+   * racing other providers for that slot.
+   */
+  async nip44Encrypt(peerPublicKey: string, plaintext: string): Promise<string> {
+    return (await this.worker.nip44Encrypt({ peerPublicKey, plaintext })).ciphertext;
+  }
+  async nip44Decrypt(peerPublicKey: string, payload: string): Promise<string> {
+    return (await this.worker.nip44Decrypt({ peerPublicKey, payload })).plaintext;
   }
   async logout(): Promise<void> {
     await this.worker.logout();
@@ -263,6 +290,7 @@ export class BitLoginAuthElement extends HTMLElement {
         this.goto("recover-phrase");
         return;
       case "goto-welcome":
+        this.pendingRollback = null;
         this.goto("welcome");
         return;
       case "goto-dashboard":
@@ -311,6 +339,14 @@ export class BitLoginAuthElement extends HTMLElement {
         return this.handleRevealNsec();
       case "logout":
         return this.logout();
+      case "rollback-retry": {
+        const kind = this.pendingRollback?.kind;
+        this.pendingRollback = null;
+        this.goto(kind === "change-password" ? "change-password" : "login");
+        return;
+      }
+      case "rollback-continue":
+        return this.handleRollbackContinue();
       default:
         return;
     }
@@ -537,16 +573,50 @@ export class BitLoginAuthElement extends HTMLElement {
   private async handleLoginSubmit(): Promise<void> {
     const loginName = this.field("loginName").trim().toLowerCase();
     const password = this.field("password");
+    await this.attemptLogin(loginName, password);
+  }
+
+  /**
+   * Shared by the login form and the "continue anyway" rollback-confirmation step so both
+   * paths grant a session identically -- claimSigner() and the bitlogin-login event only ever
+   * fire once a RollbackDetectedError (if any) has been resolved one way or the other.
+   */
+  private async attemptLogin(loginName: string, password: string, acknowledgeRollback = false): Promise<void> {
     this.setBusy(true);
-    const result = await this.worker.login({ loginName, password });
-    this.loginName = loginName;
-    this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId };
-    this.sessionWarnings = [result.rollbackWarning, result.relayDisagreementWarning].filter((w): w is string => !!w);
-    this.busy = false;
-    this.claimSigner();
-    this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: result.everydayPublicKey } }));
-    this.goto("dashboard");
-    void this.offerToSaveCredential(loginName, password);
+    try {
+      const result = await this.worker.login({ loginName, password, acknowledgeRollback });
+      this.loginName = loginName;
+      this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId };
+      this.sessionWarnings = [result.rollbackWarning, result.relayDisagreementWarning].filter((w): w is string => !!w);
+      this.busy = false;
+      this.claimSigner();
+      this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: result.everydayPublicKey } }));
+      this.goto("dashboard");
+      void this.offerToSaveCredential(loginName, password);
+    } catch (err) {
+      if (err instanceof Error && err.name === "RollbackDetectedError") {
+        this.pendingRollback = { kind: "login", loginName, password };
+        this.rollbackMessage = err.message;
+        this.busy = false;
+        this.goto("rollback-confirm");
+        return;
+      }
+      this.fail(err);
+    }
+  }
+
+  private async handleRollbackContinue(): Promise<void> {
+    const pending = this.pendingRollback;
+    this.pendingRollback = null;
+    if (!pending) {
+      this.goto("welcome");
+      return;
+    }
+    if (pending.kind === "login") {
+      await this.attemptLogin(pending.loginName, pending.password, true);
+    } else {
+      await this.attemptChangePassword(pending.oldPassword, pending.newPassword, true);
+    }
   }
 
   private async handleRecoverPhraseSubmit(): Promise<void> {
@@ -608,16 +678,33 @@ export class BitLoginAuthElement extends HTMLElement {
       }
       newPassword = password;
     }
+    await this.attemptChangePassword(oldPassword, newPassword);
+  }
+
+  /** Shared by the rotation form and the "continue anyway" rollback-confirmation step; see attemptLogin. */
+  private async attemptChangePassword(oldPassword: string, newPassword: string, acknowledgeRollback = false): Promise<void> {
     this.setBusy(true);
-    await this.worker.changePassword({
-      loginName: this.loginName,
-      oldPassword,
-      newPassword
-    });
-    this.busy = false;
-    this.claimSigner();
-    this.goto("dashboard");
-    void this.offerToSaveCredential(this.loginName, newPassword);
+    try {
+      await this.worker.changePassword({
+        loginName: this.loginName,
+        oldPassword,
+        newPassword,
+        acknowledgeRollback
+      });
+      this.busy = false;
+      this.claimSigner();
+      this.goto("dashboard");
+      void this.offerToSaveCredential(this.loginName, newPassword);
+    } catch (err) {
+      if (err instanceof Error && err.name === "RollbackDetectedError") {
+        this.pendingRollback = { kind: "change-password", oldPassword, newPassword };
+        this.rollbackMessage = err.message;
+        this.busy = false;
+        this.goto("rollback-confirm");
+        return;
+      }
+      this.fail(err);
+    }
   }
 
   private async handleDownloadRecoveryExport(): Promise<void> {
@@ -877,10 +964,20 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="secondary" type="button" data-action="logout">Log out</button>
         `;
 
+      case "rollback-confirm":
+        return `
+          <h2>This looks like a stale or revoked credential</h2>
+          <div class="notice warn">${escapeHtml(this.rollbackMessage)}</div>
+          <p class="sub">This usually means the password just entered was rotated away in an earlier session on this device, and a relay hasn't caught up with that change. If you rotated your password, use the new one instead. Only continue if you're confident this is relay lag, not a stale credential.</p>
+          <button class="primary" type="button" data-action="rollback-retry">Try again</button>
+          <button class="link" type="button" data-action="rollback-continue">I understand the risk — continue anyway</button>
+          <button class="link" data-action="goto-welcome">Cancel</button>
+        `;
+
       case "change-password":
         return `
           <h2>Rotate password</h2>
-          <p class="sub">Your old password's capsule will be tombstoned and a deletion request issued. This does not erase copies an attacker may already have downloaded.</p>
+          <p class="sub">Your old password's capsule will be tombstoned and a deletion request issued. This does not erase copies an attacker may already have downloaded, and a relay that hasn't processed the deletion may keep serving the old password's capsule until a device that has already seen the new generation refuses it.</p>
           ${
             this.manualPasswordMode
               ? `<div class="notice warn">Offline guessing against this password can never be fully prevented. The generated passphrase remains the safer default.</div>`

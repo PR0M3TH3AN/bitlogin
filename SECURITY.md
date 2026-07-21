@@ -37,3 +37,14 @@ status (protocol-level test suite plus manual real-browser verification).
 Treat that as part of the threat model when reporting: we'd rather hear
 about a real issue than have it wait for a formal audit that hasn't happened
 yet.
+
+An external integration pass (embedding this widget in a separate Nostr
+commerce app) found and fixed one real account-takeover-adjacent gap:
+password rotation's old-locator tombstone (§18.1) is only advisory — a relay
+that never processes it can keep serving the pre-rotation capsule
+indefinitely — and the client accepted that stale capsule with only a
+non-blocking warning rather than refusing it. Devices that have previously
+logged in to the account (and so hold a local generation high-water mark)
+now fail closed on this instead; see "Changes from v0.3" in `docs/spec.md`
+and §16.2/§29.7 for the full writeup, including the residual case this does
+not cover (a brand-new device with no local high-water mark).

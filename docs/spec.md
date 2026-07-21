@@ -2,15 +2,23 @@
 
 ## Static, Relay-Backed Portable Account Protocol
 
-**Document version:** 0.3
+**Document version:** 0.4
 **Status:** Revised MVP specification (incorporates external protocol review)
-**Date:** July 20, 2026
+**Date:** July 21, 2026
 **Client architecture:** Static progressive web application
 **Storage architecture:** Nostr relays
 **Canonical identity:** Nostr public key
 **Daily authentication:** Login name and strong password
 **Recovery:** BIP-39 mnemonic phrase
 **Email dependency:** None
+
+---
+
+## Changes from v0.3
+
+1. **Rollback detection is now enforced, not just displayed.** §16.2 step 6 previously surfaced a regression against the local generation high-water mark as a warning string while still granting the session — meaning an old, rotated-away password replayed from a relay that never processed its tombstone (§18.1) could fully unlock the account on any device that happened to query that relay. The client now fails closed by default in this case (`RollbackDetectedError`), on both password login and password change; a caller may explicitly override this (`acknowledgeRollback`) for the narrower, non-adversarial case of a single relay merely lagging behind on the *same* password's own capsule. This closes the gap between §16.2's stated guarantee ("a single relay withholding the newest capsule cannot silently roll the account back on a device that has seen the newer generation") and what the reference implementation actually did. The brand-new-device weak case described in §16.2 is unchanged by this — a device with no prior high-water mark still has only the quorum requirement.
+2. **NIP-44 extended-length payloads.** The `window.nostr.nip44` surface previously capped plaintext at 65535 bytes; it now implements the full extended-length prefix for payloads up to 2^32-1 bytes, matching the reference `nostr-tools` implementation byte-for-byte (verified by direct cross-implementation round-trip testing, not just unit tests against this codebase's own encoder/decoder pair).
+3. **Element-scoped NIP-44 methods.** `<bitlogin-auth>` now exposes `nip44Encrypt`/`nip44Decrypt` directly on the element instance, alongside the existing `getPublicKey`/`signEvent`. A host page holding a reference to its own widget instance can now reach every signing/encryption capability without going through the single shared `window.nostr` slot, which another provider may have since claimed. (The current `window.nostr` shim and this element-scoped mirror are a widget-level convenience layered on top of this protocol, not part of the core numbered spec; see the README's "Embedding BitLogin" section for the full API.)
 
 ---
 
@@ -1069,11 +1077,11 @@ The client:
 3. Groups valid events by generation.
 4. Attempts decryption from newest to oldest.
 5. Accepts the highest valid generation.
-6. Compares the accepted generation against the device's stored high-water mark for this account, if any. A regression triggers a prominent warning: either relays are serving stale data or an old capsule is being replayed.
+6. Compares the accepted generation against the device's stored high-water mark for this account, if any. A regression fails closed by default (§29.7): the client refuses to grant a session rather than merely warning, since it cannot distinguish an old, rotated-away password being replayed from a relay that never processed its tombstone (§18.1) from a relay that is simply lagging behind. A caller may explicitly override this (`acknowledgeRollback`) for the latter case; the client must still surface the same warning to the human either way.
 7. Updates the local high-water mark on success.
 8. Warns if responsive relays disagree about the latest generation.
 
-A single relay withholding the newest capsule therefore cannot silently roll the account back on a device that has seen the newer generation. A brand-new device has only the quorum requirement, which is a weaker defense: if a majority of responsive relays are stale, censored, or malicious, a new device cannot detect the rollback. This is a fundamental limit of trust-on-first-use in a static system, and the interface must not overstate the protection.
+A single relay withholding the newest capsule therefore cannot silently roll the account back on a device that has seen the newer generation — step 6 is now an enforced refusal, not just a display. A brand-new device has only the quorum requirement, which is a weaker defense: if a majority of responsive relays are stale, censored, or malicious, a new device cannot detect the rollback. This is a fundamental limit of trust-on-first-use in a static system, and the interface must not overstate the protection.
 
 ## 16.3 Failure behavior
 
@@ -1574,7 +1582,7 @@ Mitigations: one-time phrase display, secure physical backup, no cloud clipboard
 
 Consequences: everyday identity disclosure from any retained capsule, historical and future impersonation, potential message disclosure.
 
-Changing the password does not invalidate retained old ciphertext (§18.3). The attacker gains no signing authority over the recovery capsule, though they can replay an old embedded recovery event to stale or empty relays (§14.2); within the availability limits stated there, the phrase-recovery and identity-rotation path (§18.4) remains open to the victim.
+Changing the password does not invalidate retained old ciphertext (§18.3). The attacker gains no signing authority over the recovery capsule, though they can replay an old embedded recovery event to stale or empty relays (§14.2); within the availability limits stated there, the phrase-recovery and identity-rotation path (§18.4) remains open to the victim. On any device that has previously logged in to the account since the rotation (and so holds a local generation high-water mark), §16.2 step 6 now refuses such a replayed old capsule outright rather than merely warning — the residual exposure is a brand-new device with no local high-water mark, which retains only the weaker quorum defense described in §16.2.
 
 ## 29.8 Device malware
 
@@ -1729,7 +1737,7 @@ The MVP is complete when:
 8. Phrase recovery refreshes the recovery capsule and re-embeds it in the new credential capsule.
 9. A known-password change tombstones the old locator and issues a NIP-09 deletion request.
 10. Incorrect credentials reveal no useful distinction between account absence and decryption failure.
-11. The client rejects invalid signatures, corrupted capsules, and generation rollback below the local high-water mark (with warning).
+11. The client rejects invalid signatures, corrupted capsules, and generation rollback below the local high-water mark (fails closed by default; an explicit override exists for the non-adversarial relay-lag case, §16.2).
 12. Sensitive values have the shortest practical lifetime in DOM and JavaScript string form, are transferred immediately to the cryptographic worker, are never persisted, logged, or serialized, and are never sent to a server or relay in plaintext.
 13. Capsule operations and everyday-identity operations never share a relay connection.
 14. The client can publish a Nostr profile and kinds 10002/10050.
@@ -1750,6 +1758,8 @@ The MVP is complete when:
 Resolved since v0.1: manual passwords (prohibited in alpha, §9.3); default credential form (multiword passphrase, §9.2); recovery-capsule update authority (phrase-only write moments, §14.1); tombstones (mandatory, §18.1); bootstrap relay updates (signed maintainer channel, §19.1).
 
 Resolved since v0.2: padding buckets and relay-limit compliance (§11.8); replacement-timestamp semantics (§24.6); Argon2 profile labeling and six-word default (§9.2, §11.2); credential-capsule minimization (§12.2); discovery relays (§19.6); recovery hash chain (§12.3).
+
+Resolved since v0.3: generation-rollback detection now enforced (fail-closed) rather than warn-only (§16.2); NIP-44 extended-length payload support, verified against the `nostr-tools` reference implementation; element-scoped `nip44Encrypt`/`nip44Decrypt` on `<bitlogin-auth>` (see README).
 
 Still open before implementation:
 

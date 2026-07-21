@@ -4,7 +4,7 @@ import { base64urlToBytes } from "../crypto/encoding.js";
 import { derivePasswordKeys, normalizeLoginName } from "./normalize.js";
 import { RelayPool } from "../nostr/pool.js";
 import { readCredentialCapsule } from "./capsuleReader.js";
-import { AccountNotFoundError } from "./errors.js";
+import { AccountNotFoundError, RollbackDetectedError } from "./errors.js";
 import { getHighWaterMark, raiseHighWaterMark } from "./highWaterMark.js";
 import { InMemoryKeyValueStore, type KeyValueStore } from "../storage/interface.js";
 import type { NostrEvent } from "../nostr/event.js";
@@ -15,6 +15,15 @@ export interface LoginParams {
   vaultRelayUrls: string[];
   store?: KeyValueStore;
   timeoutMs?: number;
+  /**
+   * Proceed even if this device has previously observed a higher credential
+   * generation than the one this capsule reports (§16.2 step 6). Off by default:
+   * without it, that condition throws {@link RollbackDetectedError} instead of
+   * granting a session, since the client cannot distinguish "an old, rotated-away
+   * password replayed from a stale relay" from "this relay is merely lagging" --
+   * failing closed is the safe default for the former, far more consequential case.
+   */
+  acknowledgeRollback?: boolean;
 }
 
 export interface LoginResult {
@@ -56,10 +65,13 @@ export async function loginWithPassword(params: LoginParams): Promise<LoginResul
 
     const store = params.store ?? new InMemoryKeyValueStore();
     const hwm = await getHighWaterMark(store, payload.operational_public_key);
-    const rollbackWarning =
-      payload.generation < hwm.generation
-        ? `This device previously saw credential generation ${hwm.generation}, but the accepted capsule is generation ${payload.generation}. Relays may be serving stale data, or an old capsule is being replayed.`
-        : undefined;
+    const isRollback = payload.generation < hwm.generation;
+    if (isRollback && !params.acknowledgeRollback) {
+      throw new RollbackDetectedError(hwm.generation, payload.generation);
+    }
+    const rollbackWarning = isRollback
+      ? `This device previously saw credential generation ${hwm.generation}, but the accepted capsule is generation ${payload.generation}. Relays may be serving stale data, or an old capsule is being replayed.`
+      : undefined;
     await raiseHighWaterMark(store, payload.operational_public_key, { generation: payload.generation });
 
     const relayDisagreementWarning = result.relayDisagreement

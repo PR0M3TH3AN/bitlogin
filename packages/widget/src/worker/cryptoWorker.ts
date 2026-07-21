@@ -132,7 +132,13 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     case "login": {
       const p = payload as LoginPayload;
-      const result = await loginWithPassword({ loginName: p.loginName, password: p.password, vaultRelayUrls, store });
+      const result = await loginWithPassword({
+        loginName: p.loginName,
+        password: p.password,
+        vaultRelayUrls,
+        store,
+        acknowledgeRollback: p.acknowledgeRollback
+      });
       clearSession();
       session.signer = new NostrSigner(result.everydayPrivateKey);
       session.everydayPrivateKey = result.everydayPrivateKey;
@@ -201,7 +207,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         oldPassword: p.oldPassword,
         newPassword: p.newPassword,
         vaultRelayUrls,
-        store
+        store,
+        acknowledgeRollback: p.acknowledgeRollback
       });
       // Keep the session's capsule references current so a recovery export or replica
       // repair requested right after rotation (without an intervening re-login) still

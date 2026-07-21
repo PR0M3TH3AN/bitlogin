@@ -65,6 +65,31 @@ guide, and `packages/demo/public/account.html` for a working example
 (create → confirm recovery phrase → sign an event → rotate password →
 export identity).
 
+The `<bitlogin-auth>` element also mirrors `window.nostr` directly on the
+element instance (`getPublicKey`, `signEvent`, `nip44Encrypt`, `nip44Decrypt`)
+— prefer this over `window.nostr` when your host page holds a reference to
+its own widget instance, since `window.nostr` is a single global slot that
+whichever provider signed in last currently owns.
+
+**Integration gotcha:** the element's `disconnectedCallback` terminates its
+crypto Web Worker (that's the correct cleanup when the element is genuinely
+being removed). If your host app re-renders its own DOM by resetting an
+ancestor's `innerHTML` — a common pattern in hand-rolled UI without a
+framework's reconciler — and the widget happens to be a descendant of that
+subtree, this **silently kills the in-progress session**: `getPublicKey()`
+already resolved before the render still looks fine, but every call after
+that hangs forever, because the worker is gone and nothing ever replies.
+Mount `<bitlogin-auth>` into a container that your own re-renders never
+replace (toggle visibility with the `hidden` attribute instead of removing
+it from the DOM), not into a template string that gets thrown away and
+rebuilt. See `packages/demo/public/account.html` for a working single-page
+example. The BitRoad project (a sibling Nostr commerce app that embeds
+BitLogin as a sign-in option) hit exactly this bug during integration and
+fixed it by giving the element a permanent, never-replaced mount point in
+its static shell HTML, only toggling `hidden` — see its
+`src/nostr/bitloginAdapter.mjs` and the `#bitloginMount` container in its
+`index.html` for a worked example of the pattern.
+
 ## Deployment
 
 The demo site deploys to Vercel: `vercel.json` at the repo root sets the
@@ -79,28 +104,59 @@ assets at `/vendor/bitlogin/`, **any other site can point directly at the
 Vercel deployment today** without installing anything locally:
 
 ```html
-<script type="module" src="https://bitlogin.vercel.app/vendor/bitlogin/bitlogin.js"></script>
+<script type="module" src="https://bitlogin.network/vendor/bitlogin/bitlogin.js"></script>
 <bitlogin-auth></bitlogin-auth>
 ```
+
+`bitlogin.network` and `www.bitlogin.network` are attached to the same
+Vercel project as production domains (`bitlogin.vercel.app` keeps working as
+the underlying `*.vercel.app` alias regardless). DNS for a domain bought
+outside Vercel has to be pointed at it separately — see "Custom domain DNS"
+below if you're standing this project up on a new domain yourself.
 
 This is fine for prototyping across multiple projects; for production use in
 someone else's app, self-hosting the built files (or a future published npm
 package / CDN release) avoids depending on this demo deployment's uptime.
+
+### Custom domain DNS
+
+Vercel doesn't manage DNS for a domain unless its nameservers are delegated
+to Vercel; with third-party DNS (this project's domains sit on Cloudflare
+nameservers, registrar-agnostic), add these records at whichever provider
+actually serves the zone:
+
+```text
+A       bitlogin.network         76.76.21.21
+A       www.bitlogin.network     76.76.21.21
+```
+
+Run `vercel domains inspect bitlogin.network` (from a machine with the
+Vercel CLI linked to this project) to confirm the exact records currently
+expected — Vercel occasionally changes its recommended anycast IP, and that
+command always reflects the live requirement rather than whatever's written
+here. If the DNS host proxies through something like Cloudflare, set the
+record to DNS-only (grey cloud) rather than proxied — a proxying layer in
+front of Vercel's own edge can interfere with certificate issuance and
+routing.
 
 ## What's implemented
 
 This build covers the protocol's Phase 0 (cryptographic core + test vectors)
 and the load-bearing parts of Phase 1 (account MVP), verified two ways:
 
-- **Protocol-level tests** (`npm test`, 49 tests): Argon2id/ScalarExpand/JCS/
-  padding/timestamp unit tests with the spec's exact byte layouts (§11), and
-  full end-to-end scenarios — create → clean-device login, phrase recovery →
-  new credentials → clean-device login, password change with mandatory
-  tombstone + NIP-09 deletion, relay-loss → replica repair (including
-  keyless recovery-event rebroadcast), rollback-warning and
-  relay-disagreement detection — run against an in-memory mock relay
+- **Protocol-level tests** (`npm test`, 75 tests): Argon2id/ScalarExpand/JCS/
+  padding/timestamp/NIP-44 unit tests with the spec's exact byte layouts
+  (§11), and full end-to-end scenarios — create → clean-device login, phrase
+  recovery → new credentials → clean-device login, password change with
+  mandatory tombstone + NIP-09 deletion, relay-loss → replica repair
+  (including keyless recovery-event rebroadcast), and generation-rollback
+  detection now failing closed by default rather than only warning (§16.2
+  step 6) — run against an in-memory mock relay
   (`packages/core/src/test-support/mockRelay.ts`), since this sandbox has no
-  route to public Nostr relays.
+  route to public Nostr relays. NIP-44 has additionally been cross-tested
+  directly against the `nostr-tools` reference implementation (conversation
+  keys, padding at every bucket boundary, and round trips in both directions)
+  during the BitRoad integration — see "Changes from v0.3" in `docs/spec.md`.
 - **Real-browser verification**: the same flows were driven end-to-end in
   actual Chromium against the built widget, confirming the crypto worker,
   IndexedDB storage, and `window.nostr` provider work together outside the

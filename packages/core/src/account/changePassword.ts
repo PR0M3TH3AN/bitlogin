@@ -10,8 +10,8 @@ import { buildDeletionRequest } from "../nostr/nip09.js";
 import { PROTOCOL_CAPSULE_ENCRYPTION, PROTOCOL_PASSWORD_KDF, PROTOCOL_RECOVERY_DERIVATION } from "../capsules/types.js";
 import type { CredentialPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
-import { AccountNotFoundError, RegistrationFailedError } from "./errors.js";
-import { raiseHighWaterMark } from "./highWaterMark.js";
+import { AccountNotFoundError, RegistrationFailedError, RollbackDetectedError } from "./errors.js";
+import { getHighWaterMark, raiseHighWaterMark } from "./highWaterMark.js";
 import { InMemoryKeyValueStore, type KeyValueStore } from "../storage/interface.js";
 import type { NostrEvent } from "../nostr/event.js";
 
@@ -24,6 +24,8 @@ export interface ChangePasswordParams {
   minAcknowledgements?: number;
   timeoutMs?: number;
   now?: number;
+  /** See {@link RollbackDetectedError} and the equivalent option on `LoginParams` (§16.2 step 6). */
+  acknowledgeRollback?: boolean;
 }
 
 export interface ChangePasswordResult {
@@ -62,6 +64,17 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
   }
   const oldPayload = readResult.best.payload!;
   const oldEvent = readResult.best.event;
+
+  // §16.2 step 6: the "old password" supplied here derives its own locator address, distinct
+  // from any other password's -- if this device has already seen a newer generation than what
+  // that address reports, the safe assumption is that this password itself is stale (already
+  // rotated away elsewhere) and a relay is simply replaying its last-known capsule, not that
+  // this is a legitimate in-progress rotation.
+  const store = params.store ?? new InMemoryKeyValueStore();
+  const hwm = await getHighWaterMark(store, oldPayload.operational_public_key);
+  if (oldPayload.generation < hwm.generation && !params.acknowledgeRollback) {
+    throw new RollbackDetectedError(hwm.generation, oldPayload.generation);
+  }
 
   const newKeys = await derivePasswordKeys(params.newPassword, normalizedLoginName);
   const newLocatorPublicKey = getPublicKeyHex(newKeys.locatorPrivateKey);
@@ -122,7 +135,6 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
     );
   }
 
-  const store = params.store ?? new InMemoryKeyValueStore();
   await raiseHighWaterMark(store, oldPayload.operational_public_key, { generation: newGeneration });
 
   return {

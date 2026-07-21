@@ -44,6 +44,8 @@ export interface PreviewImportKeyResult {
 export interface LoginPayload {
   loginName: string;
   password: string;
+  /** See `LoginParams.acknowledgeRollback` in `@bitlogin/core/account` (§16.2 step 6). */
+  acknowledgeRollback?: boolean;
 }
 export interface LoginResult {
   everydayPublicKey: string;
@@ -85,6 +87,8 @@ export interface ChangePasswordPayload {
   loginName: string;
   oldPassword: string;
   newPassword: string;
+  /** See `ChangePasswordParams.acknowledgeRollback` in `@bitlogin/core/account` (§16.2 step 6). */
+  acknowledgeRollback?: boolean;
 }
 export interface ChangePasswordResult {
   newLocatorPublicKey: string;

@@ -8,6 +8,7 @@ import { entropyToRecoveryPhrase, isValidRecoveryPhrase, recoveryPhraseToSeed } 
 import { generatePrivateKey, getPublicKeyHex, isValidScalar, sign, verify } from "./secp256k1.js";
 import { aesGcmOpen, aesGcmSeal } from "./aesGcm.js";
 import { bytesToHex, hexToBytes, bytesToBase64url, base64urlToBytes, utf8ToBytes } from "./encoding.js";
+import { getConversationKey, nip44Encrypt, nip44Decrypt } from "./nip44.js";
 
 describe("ScalarExpand (§11.4 test vector)", () => {
   it("derives a stable, valid scalar for fixed input on counter 0", () => {
@@ -180,6 +181,55 @@ describe("AES-256-GCM (§11.7)", () => {
     await expect(aesGcmOpen(key, sealed.nonce, tampered, aad)).rejects.toThrow();
   });
 });
+
+describe("NIP-44 v2 (window.nostr.nip44 provider surface)", () => {
+  it("derives the same conversation key from either side of the ECDH exchange", () => {
+    const skA = generatePrivateKey();
+    const skB = generatePrivateKey();
+    const pubA = getPublicKeyHex(skA);
+    const pubB = getPublicKeyHex(skB);
+    expect(bytesToHex(getConversationKey(skA, pubB))).toBe(bytesToHex(getConversationKey(skB, pubA)));
+  });
+
+  it.each([1, 31, 32, 33, 64, 100, 1000, 65535, 65536, 70000])(
+    "round-trips a %i-byte plaintext",
+    (len) => {
+      const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+      const plaintext = "x".repeat(len);
+      const encrypted = nip44Encrypt(key, plaintext);
+      expect(nip44Decrypt(key, encrypted)).toBe(plaintext);
+    }
+  );
+
+  it("rejects a plaintext of zero bytes", () => {
+    const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    expect(() => nip44Encrypt(key, "")).toThrow();
+  });
+
+  it("fails to decrypt with the wrong conversation key", () => {
+    const keyA = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    const keyB = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    const encrypted = nip44Encrypt(keyA, "secret message");
+    expect(() => nip44Decrypt(keyB, encrypted)).toThrow();
+  });
+
+  it("fails to decrypt a tampered payload", () => {
+    const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    const encrypted = nip44Encrypt(key, "secret message");
+    const bytes = base64urlToBytesForTest(encrypted);
+    bytes[bytes.length - 1] ^= 0xff;
+    expect(() => nip44Decrypt(key, bytesToBase64urlForTest(bytes))).toThrow();
+  });
+});
+
+// Standard (non-url-safe) base64 round trip, local to this test file only -- NIP-44
+// payloads use plain base64, unlike the rest of BitLogin's base64url capsule encoding.
+function base64urlToBytesForTest(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (ch) => ch.charCodeAt(0));
+}
+function bytesToBase64urlForTest(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
 
 describe("Encoding helpers", () => {
   it("hex round-trips", () => {
