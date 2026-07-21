@@ -1,0 +1,23 @@
+{
+  "name": "bitlogin-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BitLogin — static, relay-backed portable Nostr account protocol and embeddable login widget",
+  "workspaces": [
+    "packages/core",
+    "packages/widget",
+    "packages/demo"
+  ],
+  "scripts": {
+    "build": "npm run build -w @bitlogin/core && npm run build -w @bitlogin/widget",
+    "dev:demo": "npm run dev -w @bitlogin/demo",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "npm run typecheck -w @bitlogin/core && npm run typecheck -w @bitlogin/widget"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.5"
+  }
+}

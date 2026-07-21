@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Integrate BitLogin — docs</title>
+<meta name="description" content="How to add the BitLogin login widget to any static site in a few minutes." />
+<link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="stylesheet" href="./assets/site.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <a class="brand" href="./index.html"><span class="dot"></span>BitLogin</a>
+  <div class="links">
+    <a href="./index.html">Overview</a>
+    <a class="active" href="./docs.html">Integrate</a>
+    <a href="./account.html">Try it</a>
+  </div>
+</nav>
+
+<header class="hero" style="padding-top:48px">
+  <h1 style="font-size:38px">Add BitLogin to your site</h1>
+  <p class="lead">No npm install required. Two files, one custom element.</p>
+</header>
+
+<section class="container narrow">
+  <ol class="step-list">
+    <li>
+      <h3>Copy the widget files next to your site</h3>
+      <p>Grab <code>bitlogin.js</code> and <code>cryptoWorker.js</code> (plus the shared chunk they both import) from a BitLogin release (or build <code>@bitlogin/widget</code> yourself) and drop them in a folder your site serves, e.g. <code>/vendor/bitlogin/</code>. All of them must live in the same directory — the main script loads the worker by a relative URL.</p>
+    </li>
+    <li>
+      <h3>Include the script and the element</h3>
+      <pre><code>&lt;script type="module" src="/vendor/bitlogin/bitlogin.js"&gt;&lt;/script&gt;
+&lt;bitlogin-auth
+  vault-relays="wss://relay-one.example,wss://relay-two.example,wss://relay-three.example"
+  discovery-relays="wss://discovery-one.example,wss://discovery-two.example"&gt;
+&lt;/bitlogin-auth&gt;</code></pre>
+      <p class="section-sub" style="margin:10px 0 0">That's it — the element renders its own sign-in/create/recover UI inside a shadow root, so it won't collide with your site's CSS.</p>
+    </li>
+    <li>
+      <h3>React to sign-in and sign-out</h3>
+      <pre><code>const bl = document.querySelector('bitlogin-auth');
+
+bl.addEventListener('bitlogin-login', (e) => {
+  console.log('signed in as', e.detail.publicKey);
+});
+
+bl.addEventListener('bitlogin-logout', () => {
+  console.log('signed out');
+});</code></pre>
+    </li>
+    <li>
+      <h3>Sign events from anywhere on the page</h3>
+      <p>Once a user is signed in, BitLogin installs a <code>window.nostr</code> provider shaped like the de facto NIP-07 interface used by browser extensions (Alby, nos2x, …). Any existing Nostr web app code that already calls <code>window.nostr</code> works unmodified.</p>
+      <pre><code>const pubkey = await window.nostr.getPublicKey();
+
+const signed = await window.nostr.signEvent({
+  kind: 1,
+  content: 'hello from my app',
+  tags: [],
+  created_at: Math.floor(Date.now() / 1000),
+});
+
+// NIP-44 encrypted DMs
+const cipher = await window.nostr.nip44.encrypt(peerPubkeyHex, 'hi there');
+const plain  = await window.nostr.nip44.decrypt(peerPubkeyHex, cipher);</code></pre>
+      <div class="callout">
+        <strong>Private keys never leave a dedicated Web Worker.</strong> The main thread — your page's JS — only ever
+        sees public keys, signed events, and ciphertext. <code>window.nostr</code> calls are proxied into the worker
+        and back.
+      </div>
+    </li>
+    <li>
+      <h3>Choose your relays</h3>
+      <p>BitLogin ships with a small built-in bootstrap relay list, but you should point <code>vault-relays</code> and
+      <code>discovery-relays</code> at relays you trust for your users. Use at least three vault relays for
+      redundancy — capsule publication and reads use a quorum, so no single relay is a single point of failure.</p>
+    </li>
+    <li>
+      <h3>That's the whole integration</h3>
+      <p>No account database, no password-reset email, no server-side session. The <a href="./account.html">account manager demo</a>
+      shows the full loop: create an account, sign a test event, rotate the password, and export a recovery file.</p>
+    </li>
+  </ol>
+</section>
+
+<footer>
+  BitLogin is an experimental alpha protocol. This demo is a reference implementation, not a production account service.
+</footer>
+
+
+<script>
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>
