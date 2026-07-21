@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BitLogin — a portable login for the open web</title>
+<meta name="description" content="A familiar login name and password that unlocks a portable Nostr identity, stored as encrypted capsules across public relays. No account server required." />
+<link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="stylesheet" href="./assets/site.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <a class="brand" href="./index.html"><span class="dot"></span>BitLogin</a>
+  <div class="links">
+    <a class="active" href="./index.html">Overview</a>
+    <a href="./docs.html">Integrate</a>
+    <a href="./account.html">Try it</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <h1>A login your users<br />actually take with them.</h1>
+  <p class="lead">
+    Login name and password on the outside. A portable Nostr identity underneath —
+    encrypted and stored on public relays, with no account server, no password-reset
+    email, and no vendor lock-in.
+  </p>
+  <div class="cta-row">
+    <a class="btn primary" href="./account.html">Try the demo →</a>
+    <a class="btn secondary" href="./docs.html">Add it to your site</a>
+  </div>
+
+  <div class="diagram">
+    <div class="step"><div class="k">Everyday login</div>Login name + password</div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="k">Locally derived</div>Password-locked locator key</div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="k">Public relays</div>Encrypted capsule lookup</div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="k">Result</div>Portable Nostr identity</div>
+  </div>
+</header>
+
+<section class="container">
+  <h2>Two independent ways in, one identity</h2>
+  <p class="section-sub">Forgetting a password and losing a device are different emergencies. BitLogin keeps them cryptographically separate.</p>
+  <div class="grid">
+    <div class="feature">
+      <h3>🔑 Password path</h3>
+      <p>Login name + password deterministically derive a private "locator" key and an encryption key. That key finds and decrypts a small credential capsule on public relays — no lookup table, no server, no email.</p>
+    </div>
+    <div class="feature">
+      <h3>🌱 Recovery phrase</h3>
+      <p>A 12-word phrase derives a completely independent recovery identity. A cracked password can never sign, replace, or delete the recovery capsule — it has no authority over that path at all.</p>
+    </div>
+    <div class="feature">
+      <h3>🪪 One everyday identity</h3>
+      <p>Both paths unlock the exact same everyday Nostr keypair — your real, canonical, portable identity. Change your password as often as you like; the identity never moves.</p>
+    </div>
+  </div>
+</section>
+
+<section class="container">
+  <h2>Why this is different</h2>
+  <p class="section-sub">Every design choice traces back to one constraint: it has to work with nothing but static files and public relays.</p>
+  <div class="grid">
+    <div class="feature">
+      <h3>Static-first</h3>
+      <p>The whole client — crypto, UI, worker — ships as files. Host it anywhere: Pages, IPFS, a folder on a CDN. No backend to run or pay for.</p>
+    </div>
+    <div class="feature">
+      <h3>Relay-redundant storage</h3>
+      <p>Encrypted capsules are published to multiple Nostr relays with quorum reads and readback verification, so no single relay is a single point of failure.</p>
+    </div>
+    <div class="feature">
+      <h3>Generated credentials only</h3>
+      <p>A downloadable encrypted capsule can be attacked offline forever. So BitLogin generates a high-entropy passphrase for you — no "password123", ever.</p>
+    </div>
+    <div class="feature">
+      <h3>Argon2id + AES-256-GCM</h3>
+      <p>Memory-hard key derivation, authenticated encryption, canonical JSON serialization, and fixed padding buckets so ciphertext size doesn't leak contents.</p>
+    </div>
+    <div class="feature">
+      <h3>Rollback-resistant</h3>
+      <p>A local generation high-water mark and monotonic timestamps mean a stale or malicious relay can't quietly roll a logged-in device back to an older capsule.</p>
+    </div>
+    <div class="feature">
+      <h3>NIP-07-compatible signing</h3>
+      <p>Once unlocked, BitLogin exposes a <code>window.nostr</code> provider — the same shape browser extensions use. Existing Nostr apps work with zero code changes.</p>
+    </div>
+  </div>
+</section>
+
+<section class="container narrow">
+  <h2>Drop it into any static page</h2>
+  <p class="section-sub">One script tag, one custom element. No build step, no framework required.</p>
+  <pre><code>&lt;script type="module" src="/vendor/bitlogin/bitlogin.js"&gt;&lt;/script&gt;
+&lt;bitlogin-auth vault-relays="wss://relay.example,wss://relay2.example"&gt;&lt;/bitlogin-auth&gt;</code></pre>
+  <p><a href="./docs.html">Read the full integration guide →</a></p>
+</section>
+
+<footer>
+  BitLogin is an experimental alpha protocol. This demo is a reference implementation, not a production account service.
+</footer>
+
+
+<script>
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>

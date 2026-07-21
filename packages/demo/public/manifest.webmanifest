@@ -1,0 +1,13 @@
+{
+  "name": "BitLogin",
+  "short_name": "BitLogin",
+  "description": "A portable Nostr identity behind a familiar login name and password.",
+  "start_url": "/account.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0b12",
+  "theme_color": "#8b5cf6",
+  "icons": [
+    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

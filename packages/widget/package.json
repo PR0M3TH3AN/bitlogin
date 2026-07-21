@@ -1,0 +1,20 @@
+{
+  "name": "@bitlogin/widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BitLogin embeddable login widget: a <bitlogin-auth> custom element plus a window.nostr NIP-07-compatible provider, backed by a dedicated crypto Web Worker.",
+  "main": "./dist/bitlogin.js",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bitlogin/core": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}

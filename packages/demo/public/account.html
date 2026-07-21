@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BitLogin — account manager demo</title>
+<meta name="description" content="Create, sign in to, recover, and manage a BitLogin account — including password rotation and identity export." />
+<link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="stylesheet" href="./assets/site.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <a class="brand" href="./index.html"><span class="dot"></span>BitLogin</a>
+  <div class="links">
+    <a href="./index.html">Overview</a>
+    <a href="./docs.html">Integrate</a>
+    <a class="active" href="./account.html">Try it</a>
+  </div>
+</nav>
+
+<div class="app-layout">
+  <div class="side">
+    <h1>Try a real account</h1>
+    <p>
+      This page embeds the exact <code>&lt;bitlogin-auth&gt;</code> element any static site would use — nothing
+      special is happening behind the scenes.
+    </p>
+    <p>
+      Create an account to see a generated passphrase and a 12-word recovery phrase, sign a test Nostr event,
+      rotate your password (old capsule is tombstoned), and export a recovery file — or reload this page and
+      sign back in from a "clean" browser state.
+    </p>
+    <p class="section-sub" style="margin:0">
+      Uses BitLogin's built-in public relay list by default. Point <code>vault-relays</code> /
+      <code>discovery-relays</code> attributes at your own relays for production use.
+    </p>
+  </div>
+  <bitlogin-auth id="bitlogin"></bitlogin-auth>
+</div>
+
+<footer>
+  BitLogin is an experimental alpha protocol. Accounts created here live on public Nostr relays — don't use a real password or phrase you rely on elsewhere.
+</footer>
+
+<script type="module" src="./vendor/bitlogin/bitlogin.js"></script>
+<script type="module">
+  const el = document.getElementById('bitlogin');
+  el.addEventListener('bitlogin-login', (e) => console.log('[bitlogin] signed in', e.detail.publicKey));
+  el.addEventListener('bitlogin-logout', () => console.log('[bitlogin] signed out'));
+</script>
+
+
+<script>
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>
