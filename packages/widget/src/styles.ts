@@ -68,6 +68,21 @@ h2 {
   font-weight: 600;
   margin: 0 0 4px;
 }
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  color: var(--bl-fg);
+}
+.brand-lockup .mark {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.brand-lockup .mark svg { width: 100%; height: 100%; display: block; }
+.brand-lockup .wordmark { height: 17px; width: auto; display: block; }
 p.sub {
   color: var(--bl-muted);
   margin: 0 0 18px;
