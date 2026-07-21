@@ -6,17 +6,21 @@
  * not on that list passes straight through to the network untouched.
  */
 const CACHE_NAME = "bitlogin-demo-v1";
-const PRECACHE_URLS = [
-  "/",
-  "/index.html",
-  "/docs.html",
-  "/account.html",
-  "/assets/site.css",
-  "/assets/icon.svg",
-  "/manifest.webmanifest",
-  "/vendor/bitlogin/bitlogin.js",
-  "/vendor/bitlogin/cryptoWorker.js"
+// Relative to this script's own location, so the same file works whether the
+// site is served from a domain root or a subpath (e.g. a GitHub Pages project
+// site at /bitlogin/).
+const PRECACHE_PATHS = [
+  "./",
+  "./index.html",
+  "./docs.html",
+  "./account.html",
+  "./assets/site.css",
+  "./assets/icon.svg",
+  "./manifest.webmanifest",
+  "./vendor/bitlogin/bitlogin.js",
+  "./vendor/bitlogin/cryptoWorker.js"
 ];
+const PRECACHE_URLS = PRECACHE_PATHS.map((p) => new URL(p, self.location.href).toString());
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -36,7 +40,7 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
-  if (!PRECACHE_URLS.includes(url.pathname)) return;
+  if (!PRECACHE_URLS.includes(url.toString())) return;
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
