@@ -151,7 +151,12 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     case "recover": {
       const p = payload as RecoverPayload;
-      const recovered = await recoverWithPhrase({ phrase: p.phrase, vaultRelayUrls, discoveryRelayUrls });
+      const recovered = await recoverWithPhrase({
+        phrase: p.phrase,
+        vaultRelayUrls,
+        discoveryRelayUrls,
+        offlineRecoveryCapsuleEvents: p.offlineExportFile?.recovery_capsule_events
+      });
       clearSession();
       session.pendingRecovery = recovered;
       session.signer = new NostrSigner(recovered.everydayPrivateKey);

@@ -17,6 +17,7 @@ import { derivePasswordKeys, normalizeLoginName } from "./normalize.js";
 import { buildCredentialCapsuleEvent, decryptCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
 import { RelayConnection } from "../nostr/relay.js";
 import { readCredentialCapsule } from "./capsuleReader.js";
+import { buildRecoveryExport, parseRecoveryExport } from "./exportImport.js";
 
 const ARGON2_TIMEOUT = 20000;
 
@@ -184,6 +185,48 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       expect(recoveredAgain.currentRecoveryPayload.previous_recovery_event_id).toBe(registration.recoveryEvent.id);
     },
     ARGON2_TIMEOUT * 2
+  );
+
+  it(
+    "recovery export file lets recovery succeed even when every configured relay is unreachable (§19.5)",
+    async () => {
+      const loginName = "offlinerecover";
+      const password = generatePassphrase().secret;
+      const registration = await registerAccount({ loginName, password, vaultRelayUrls });
+
+      // Build (and round-trip through JSON, as the downloaded file would be) the recovery
+      // export exactly as the widget does right after registration.
+      const exportFile = buildRecoveryExport({
+        recoveryPublicKeyHex: registration.recoveryPublicKey,
+        vaultRelayUrls,
+        recoveryCapsuleEvents: [registration.recoveryEvent],
+        relayListEvents: []
+      });
+      const parsedExportFile = parseRecoveryExport(JSON.parse(JSON.stringify(exportFile)));
+
+      // Simulate every configured relay being unreachable (not just empty -- an actual closed
+      // port, so the quorum read genuinely fails rather than vacuously succeeding on zero relays).
+      const unreachableRelayUrls = ["ws://127.0.0.1:1"];
+
+      const recovered = await recoverWithPhrase({
+        phrase: registration.recoveryPhrase,
+        vaultRelayUrls: unreachableRelayUrls,
+        discoveryRelayUrls: unreachableRelayUrls,
+        offlineRecoveryCapsuleEvents: parsedExportFile.recovery_capsule_events
+      });
+      expect(recovered.everydayPublicKey).toBe(registration.everydayPublicKey);
+      expect(recovered.accountId).toBe(registration.accountId);
+
+      // Without the offline file, the same unreachable relays must fail outright.
+      await expect(
+        recoverWithPhrase({
+          phrase: registration.recoveryPhrase,
+          vaultRelayUrls: unreachableRelayUrls,
+          discoveryRelayUrls: unreachableRelayUrls
+        })
+      ).rejects.toThrow(AccountNotFoundError);
+    },
+    ARGON2_TIMEOUT
   );
 
   it(

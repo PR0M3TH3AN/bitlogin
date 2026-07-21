@@ -1,5 +1,6 @@
 /** Request/response envelope for the main-thread <-> crypto-worker RPC channel. */
 import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
+import type { RecoveryExportFile } from "@bitlogin/core/account";
 
 export interface WorkerRequest<TAction extends string = string, TPayload = unknown> {
   id: string;
@@ -54,6 +55,13 @@ export interface LoginResult {
 
 export interface RecoverPayload {
   phrase: string;
+  /**
+   * A previously downloaded recovery export file (§19.5), parsed on the main thread and
+   * passed through as-is. Used as a fallback alongside the live relay read when every
+   * configured relay is unreachable or has lost the capsule -- never a replacement for the
+   * phrase, which the file never contains.
+   */
+  offlineExportFile?: RecoveryExportFile;
 }
 export interface RecoverResult {
   everydayPublicKey: string;

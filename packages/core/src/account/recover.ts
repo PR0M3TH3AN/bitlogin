@@ -14,8 +14,8 @@ import {
   SCHEMA_CREDENTIAL_V1,
   SCHEMA_RECOVERY_V1
 } from "../nostr/kinds.js";
-import { readRecoveryCapsule, checkRecoveryChainAcrossCandidates } from "./capsuleReader.js";
-import { buildRecoveryCapsuleEvent } from "../capsules/recoveryCapsule.js";
+import { readRecoveryCapsule, checkRecoveryChainAcrossCandidates, type Candidate } from "./capsuleReader.js";
+import { buildRecoveryCapsuleEvent, decryptRecoveryCapsuleEvent } from "../capsules/recoveryCapsule.js";
 import { buildCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
 import { PROTOCOL_CAPSULE_ENCRYPTION, PROTOCOL_PASSWORD_KDF, PROTOCOL_RECOVERY_DERIVATION } from "../capsules/types.js";
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
@@ -28,6 +28,14 @@ export interface RecoverWithPhraseParams {
   vaultRelayUrls: string[];
   discoveryRelayUrls: string[];
   timeoutMs?: number;
+  /**
+   * Recovery-capsule events from a previously downloaded recovery export file (§19.5), used
+   * as a fallback alongside the live relay read. The file alone can never recover an account
+   * on its own — it holds only the encrypted capsule, never the phrase or a phrase-derived
+   * key — so this only ever supplements the phrase-derived read, e.g. when every configured
+   * relay is unreachable or has lost the capsule.
+   */
+  offlineRecoveryCapsuleEvents?: NostrEvent[];
 }
 
 export interface RecoveredIdentity {
@@ -66,6 +74,23 @@ export async function recoverWithPhrase(params: RecoverWithPhraseParams): Promis
     result = await readRecoveryCapsule(vaultPool, recoveryPublicKey, capsuleKey, params.timeoutMs);
   } finally {
     vaultPool.closeAll();
+  }
+
+  if (params.offlineRecoveryCapsuleEvents?.length) {
+    const offlineCandidates: Array<Candidate<RecoveryPayload>> = [];
+    for (const event of params.offlineRecoveryCapsuleEvents) {
+      if (!verifyNostrEvent(event)) continue;
+      try {
+        offlineCandidates.push({ event, payload: await decryptRecoveryCapsuleEvent(event, capsuleKey) });
+      } catch (err) {
+        offlineCandidates.push({ event, payload: null, error: (err as Error).message });
+      }
+    }
+    const merged = new Map<string, Candidate<RecoveryPayload>>();
+    for (const candidate of [...result.candidates, ...offlineCandidates]) merged.set(candidate.event.id, candidate);
+    const candidates = [...merged.values()].sort((a, b) => b.event.created_at - a.event.created_at);
+    const best = candidates.find((c) => c.payload !== null) ?? null;
+    result = { ...result, candidates, best, quorumMet: result.quorumMet || best !== null };
   }
 
   if (!result.quorumMet) throw new AccountNotFoundError("quorum-not-met");

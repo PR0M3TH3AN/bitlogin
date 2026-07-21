@@ -14,6 +14,16 @@ export interface BitLoginGlobal {
    * unlike checking `window.nostr._bitlogin` directly — since it's read fresh each call.
    */
   isActiveSigner(): boolean;
+  /**
+   * Releases window.nostr back to undefined, but only if BitLogin currently occupies it —
+   * a no-op otherwise, so it's always safe to call speculatively. Lets a host page that
+   * offers several signing methods (an extension, a NIP-46 bunker, BitLogin) hand the slot
+   * back when a user switches away from BitLogin, without needing a reference to a specific
+   * <bitlogin-auth> element or a page reload. The element itself also exposes an
+   * instance-scoped `releaseSigner()`/`claimSigner()` pair for finer control when a page
+   * holds several widget instances. Returns whether it actually released anything.
+   */
+  releaseSigner(): boolean;
 }
 
 declare global {
@@ -37,6 +47,15 @@ window.bitlogin = {
   version: "0.1.0",
   isActiveSigner(): boolean {
     return (window as unknown as { nostr?: { _bitlogin?: boolean } }).nostr?._bitlogin === true;
+  },
+  releaseSigner(): boolean {
+    const w = window as unknown as { nostr?: { _bitlogin?: boolean } };
+    if (w.nostr?._bitlogin === true) {
+      delete (w as { nostr?: unknown }).nostr;
+      window.dispatchEvent(new CustomEvent("bitlogin-signer-released"));
+      return true;
+    }
+    return false;
   }
 };
 
