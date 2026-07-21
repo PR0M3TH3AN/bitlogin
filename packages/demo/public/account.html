@@ -7,12 +7,24 @@
 <meta name="description" content="Create, sign in to, recover, and manage a BitLogin account — including password rotation and identity export." />
 <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
 <link rel="manifest" href="./manifest.webmanifest" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="./assets/site.css" />
 </head>
 <body>
 
 <nav class="nav">
-  <a class="brand" href="./index.html"><span class="dot"></span>BitLogin</a>
+  <a class="brand" href="./index.html">
+    <span class="dot">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <circle cx="32" cy="32" r="30" fill="none" stroke="#d1a85a" stroke-width="4" />
+        <circle cx="32" cy="32" r="20" fill="#8368ff" />
+        <path d="M22 32.5l7 7 13-14.5" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </span>
+    BitLogin
+  </a>
   <div class="links">
     <a href="./index.html">Overview</a>
     <a href="./docs.html">Integrate</a>
@@ -22,13 +34,14 @@
 
 <div class="app-layout">
   <div class="side">
+    <span class="eyebrow">Live demo</span>
     <h1>Try a real account</h1>
     <p>
       This page embeds the exact <code>&lt;bitlogin-auth&gt;</code> element any static site would use — nothing
       special is happening behind the scenes.
     </p>
     <p>
-      Create an account to see a generated passphrase and a 12-word recovery phrase, sign a test Nostr event,
+      Create an account to see a generated passphrase and a 12-word recovery phrase, sign a test event,
       rotate your password (old capsule is tombstoned), and export a recovery file — or reload this page and
       sign back in from a "clean" browser state.
     </p>

@@ -3,16 +3,28 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>BitLogin — a portable login for the open web</title>
-<meta name="description" content="A familiar login name and password that unlocks a portable Nostr identity, stored as encrypted capsules across public relays. No account server required." />
+<title>BitLogin — one login for every site that uses it</title>
+<meta name="description" content="A login name and password that work on every BitLogin site — no extension to install, no separate signer to keep running. Built on the open Nostr network, with no account server anyone can shut down." />
 <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
 <link rel="manifest" href="./manifest.webmanifest" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="./assets/site.css" />
 </head>
 <body>
 
 <nav class="nav">
-  <a class="brand" href="./index.html"><span class="dot"></span>BitLogin</a>
+  <a class="brand" href="./index.html">
+    <span class="dot">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <circle cx="32" cy="32" r="30" fill="none" stroke="#d1a85a" stroke-width="4" />
+        <circle cx="32" cy="32" r="20" fill="#8368ff" />
+        <path d="M22 32.5l7 7 13-14.5" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </span>
+    BitLogin
+  </a>
   <div class="links">
     <a class="active" href="./index.html">Overview</a>
     <a href="./docs.html">Integrate</a>
@@ -21,58 +33,126 @@
 </nav>
 
 <header class="hero">
-  <h1>A login your users<br />actually take with them.</h1>
-  <p class="lead">
-    Login name and password on the outside. A portable Nostr identity underneath —
-    encrypted and stored on public relays, with no account server, no password-reset
-    email, and no vendor lock-in.
-  </p>
-  <div class="cta-row">
-    <a class="btn primary" href="./account.html">Try the demo →</a>
-    <a class="btn secondary" href="./docs.html">Add it to your site</a>
+  <div class="hero-grid">
+    <div>
+      <span class="eyebrow">One login. Every BitLogin site.</span>
+      <h1>One password.<br />Every door it <em>opens</em>.</h1>
+      <p class="lead">
+        Create a BitLogin account on any site that supports it, and the same login name
+        and password sign you into every other one. No new account to make, no extension
+        to install, no separate signer app to keep paired and running.
+      </p>
+      <div class="cta-row">
+        <a class="btn primary" href="./account.html">Try the demo →</a>
+        <a class="btn secondary" href="./docs.html">Add it to your site</a>
+      </div>
+    </div>
+    <div class="credential-scene" aria-hidden="true">
+      <div class="credential-card">
+        <div class="cc-top">
+          <span class="cc-seal">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6 12.5l4 4 8-9" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div>
+            <div class="cc-label">One credential</div>
+            <div class="cc-name">river&thinsp;·&thinsp;a few good words</div>
+          </div>
+        </div>
+        <div class="cc-id">npub1a3x…f92e</div>
+      </div>
+      <div class="door-rail">
+        <div class="door-row" style="--stamp-order:0">
+          <span class="door-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 9l8-5 8 5v10H4V9z" stroke="currentColor" stroke-width="1.6"/></svg></span>
+          <span class="door-label">Marketplace</span>
+          <span class="door-stamp"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l4 4 10-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+        <div class="door-row" style="--stamp-order:1">
+          <span class="door-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16v10H8l-4 4V5z" stroke="currentColor" stroke-width="1.6"/></svg></span>
+          <span class="door-label">Community forum</span>
+          <span class="door-stamp"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l4 4 10-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+        <div class="door-row" style="--stamp-order:2">
+          <span class="door-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M4 9h16" stroke="currentColor" stroke-width="1.6"/></svg></span>
+          <span class="door-label">Personal blog</span>
+          <span class="door-stamp"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l4 4 10-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+        <div class="door-row" style="--stamp-order:3">
+          <span class="door-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" stroke="currentColor" stroke-width="1.6"/></svg></span>
+          <span class="door-label">Your site, next</span>
+          <span class="door-stamp"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l4 4 10-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+      </div>
+      <div class="scene-caption">Same login name and password. Every site that speaks BitLogin.</div>
+    </div>
   </div>
+</header>
 
+<section class="container">
+  <h2>What actually happens at sign-in</h2>
+  <p class="section-sub">No account database to breach, no password-reset email to intercept — just math, run locally, every time.</p>
   <div class="diagram">
     <div class="step"><div class="k">Everyday login</div>Login name + password</div>
     <div class="arrow">→</div>
     <div class="step"><div class="k">Locally derived</div>Password-locked locator key</div>
     <div class="arrow">→</div>
-    <div class="step"><div class="k">Public relays</div>Encrypted capsule lookup</div>
+    <div class="step"><div class="k">Public network</div>Encrypted capsule lookup</div>
     <div class="arrow">→</div>
-    <div class="step"><div class="k">Result</div>Portable Nostr identity</div>
+    <div class="step"><div class="k">Result</div>Your portable identity, unlocked</div>
   </div>
-</header>
+</section>
 
 <section class="container">
   <h2>Two independent ways in, one identity</h2>
   <p class="section-sub">Forgetting a password and losing a device are different emergencies. BitLogin keeps them cryptographically separate.</p>
   <div class="grid">
     <div class="feature">
-      <h3>🔑 Password path</h3>
-      <p>Login name + password deterministically derive a private "locator" key and an encryption key. That key finds and decrypts a small credential capsule on public relays — no lookup table, no server, no email.</p>
+      <h3>Password path</h3>
+      <p>Login name + password deterministically derive a private "locator" key and an encryption key. That key finds and decrypts a small credential capsule — no lookup table, no server, no email.</p>
     </div>
     <div class="feature">
-      <h3>🌱 Recovery phrase</h3>
+      <h3>Recovery phrase</h3>
       <p>A 12-word phrase derives a completely independent recovery identity. A cracked password can never sign, replace, or delete the recovery capsule — it has no authority over that path at all.</p>
     </div>
     <div class="feature">
-      <h3>🪪 One everyday identity</h3>
-      <p>Both paths unlock the exact same everyday Nostr keypair — your real, canonical, portable identity. Change your password as often as you like; the identity never moves.</p>
+      <h3>One everyday identity</h3>
+      <p>Both paths unlock the exact same everyday keypair — your real, canonical, portable identity. Change your password as often as you like; the identity underneath never moves.</p>
+    </div>
+  </div>
+</section>
+
+<section class="container">
+  <h2>Not a browser extension. Not a remote signer.</h2>
+  <p class="section-sub">Both of those are good tools for the people already running them. BitLogin exists for everyone else.</p>
+  <div class="compare-grid">
+    <div class="compare-card">
+      <span class="compare-kicker">A browser extension (NIP-07)</span>
+      <h3>Lives in one browser</h3>
+      <p>Sign in on your phone, at work, or in a private window, and you're locked out — the keys never left that one browser profile.</p>
+    </div>
+    <div class="compare-card">
+      <span class="compare-kicker">A remote signer (NIP-46)</span>
+      <h3>Needs another device online</h3>
+      <p>Every sign-in bounces through a separate signing app or "bunker" that you have to keep running, paired, and reachable.</p>
+    </div>
+    <div class="compare-card is-bitlogin">
+      <span class="compare-kicker">BitLogin</span>
+      <h3>Just a login name and password</h3>
+      <p>The two things you already remember. Nothing to install, nothing else to keep online, works the same on any device or browser.</p>
     </div>
   </div>
 </section>
 
 <section class="container">
   <h2>Why this is different</h2>
-  <p class="section-sub">Every design choice traces back to one constraint: it has to work with nothing but static files and public relays.</p>
+  <p class="section-sub">Every design choice traces back to one constraint: it has to work with nothing but static files and a public network.</p>
   <div class="grid">
     <div class="feature">
       <h3>Static-first</h3>
       <p>The whole client — crypto, UI, worker — ships as files. Host it anywhere: Pages, IPFS, a folder on a CDN. No backend to run or pay for.</p>
     </div>
     <div class="feature">
-      <h3>Relay-redundant storage</h3>
-      <p>Encrypted capsules are published to multiple Nostr relays with quorum reads and readback verification, so no single relay is a single point of failure.</p>
+      <h3>No single point of failure</h3>
+      <p>Encrypted capsules are published to multiple independent relays with quorum reads and readback verification, so losing any one of them doesn't lock anyone out.</p>
     </div>
     <div class="feature">
       <h3>Generated by default, never weak</h3>
@@ -80,15 +160,15 @@
     </div>
     <div class="feature">
       <h3>Argon2id + AES-256-GCM</h3>
-      <p>Memory-hard key derivation, authenticated encryption, canonical JSON serialization, and fixed padding buckets so ciphertext size doesn't leak contents.</p>
+      <p>Memory-hard key derivation, authenticated encryption, canonical serialization, and fixed padding buckets so ciphertext size doesn't leak contents.</p>
     </div>
     <div class="feature">
       <h3>Rollback-resistant</h3>
       <p>A local generation high-water mark and monotonic timestamps mean a stale or malicious relay can't quietly roll a logged-in device back to an older capsule.</p>
     </div>
     <div class="feature">
-      <h3>NIP-07-compatible signing</h3>
-      <p>Once unlocked, BitLogin exposes a <code>window.nostr</code> provider — the same shape browser extensions use. Existing Nostr apps work with zero code changes.</p>
+      <h3>Works with existing Nostr apps</h3>
+      <p>Once unlocked, BitLogin quietly plugs into the same <code>window.nostr</code> interface browser extensions use — apps built for those work with zero code changes.</p>
     </div>
   </div>
 </section>
@@ -102,7 +182,7 @@
 </section>
 
 <footer>
-  BitLogin is an experimental alpha protocol. This demo is a reference implementation, not a production account service.
+  BitLogin is an experimental alpha protocol, built on the open Nostr network. This demo is a reference implementation, not a production account service.
   <div class="footer-links"><a href="https://github.com/PR0M3TH3AN/bitlogin">Source on GitHub</a> · MIT licensed — <a href="https://github.com/PR0M3TH3AN/bitlogin/blob/main/LICENSE">LICENSE</a></div>
 </footer>
 
