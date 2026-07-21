@@ -7,7 +7,7 @@ password that unlocks a portable Nostr identity, plus an independent 12-word
 recovery phrase. Encrypted account material lives on public Nostr relays —
 no account server, no password-reset email, no database.
 
-This repo implements the protocol from `docs/spec.md` (v0.3) as a modular
+This repo implements the protocol from `docs/spec.md` (v0.4) as a modular
 system any static site can embed for login and Nostr signing.
 
 ## Layout

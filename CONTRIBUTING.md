@@ -51,7 +51,7 @@ reachable from most contributor sandboxes either.
 
 ## The spec is canonical
 
-`docs/spec.md` (currently v0.3) is the source of truth for the protocol
+`docs/spec.md` (currently v0.4) is the source of truth for the protocol
 itself — wire formats, KDF parameters, capsule structure, derivation paths,
 threat model. Code comments reference it by section (`§11.2`, `§17.4`, …).
 

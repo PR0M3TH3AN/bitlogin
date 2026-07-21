@@ -39,6 +39,20 @@
   discovery-relays="wss://discovery-one.example,wss://discovery-two.example"&gt;
 &lt;/bitlogin-auth&gt;</code></pre>
       <p class="section-sub" style="margin:10px 0 0">That's it — the element renders its own sign-in/create/recover UI inside a shadow root, so it won't collide with your site's CSS.</p>
+      <div class="callout">
+        <strong>Mount it somewhere your own re-renders won't touch.</strong> Removing
+        <code>&lt;bitlogin-auth&gt;</code> from the DOM (including indirectly, by resetting an
+        ancestor's <code>innerHTML</code> — a common pattern in hand-rolled UI without a
+        framework's reconciler) tears down its crypto Web Worker. If that happens mid-session,
+        every signing call made afterward just hangs forever with no error, because the worker
+        is gone and nothing ever replies — a call already in flight when it happens can even
+        look like it succeeded. If your app re-renders the container this element lives in,
+        give it a container that's never replaced wholesale and toggle the <code>hidden</code>
+        attribute instead of removing the element. See the account manager demo's source for a
+        single-page example, or BitRoad's <code>src/nostr/bitloginAdapter.mjs</code> /
+        <code>#bitloginMount</code> (a sibling Nostr commerce app that embeds BitLogin) for a
+        worked example of keeping the element alive across a host app's own re-renders.
+      </div>
     </li>
     <li>
       <h3>React to sign-in and sign-out</h3>
@@ -72,6 +86,23 @@ const plain  = await window.nostr.nip44.decrypt(peerPubkeyHex, cipher);</code></
         sees public keys, signed events, and ciphertext. <code>window.nostr</code> calls are proxied into the worker
         and back.
       </div>
+    </li>
+    <li>
+      <h3>Or talk to the element directly — no <code>window.nostr</code> contention</h3>
+      <p><code>&lt;bitlogin-auth&gt;</code> mirrors the same four calls as instance methods, scoped to that specific
+      element rather than the single shared <code>window.nostr</code> slot:</p>
+      <pre><code>const bl = document.querySelector('bitlogin-auth');
+
+const pubkey = await bl.getPublicKey();
+const signed = await bl.signEvent({ kind: 1, content: 'hello', tags: [] });
+const cipher = await bl.nip44Encrypt(peerPubkeyHex, 'hi there');
+const plain  = await bl.nip44Decrypt(peerPubkeyHex, cipher);</code></pre>
+      <p>Prefer this if your app already holds a reference to the element — e.g. you built the sign-in UI yourself
+      instead of relying on <code>window.nostr</code>-reading app code. It keeps working even if something else
+      currently owns <code>window.nostr</code> (another extension, a different widget instance), and it's what a host
+      app should use if it wants a specific, known signer rather than "whichever provider is active this moment."
+      BitRoad's <code>src/nostr/bitloginAdapter.mjs</code> is a real example: its signer adapter calls these four
+      methods directly and never touches <code>window.nostr</code> at all.</p>
     </li>
     <li>
       <h3>Supporting multiple signing methods (extensions, NIP-46, BitLogin)</h3>
@@ -120,12 +151,49 @@ if (window.bitlogin?.releaseSigner()) {
       <code>window.bitlogin.releaseSigner()</code> also fire <code>bitlogin-signer-claimed</code> /
       <code>bitlogin-signer-released</code> events (on the element and on <code>window</code>, respectively) if you'd
       rather react to the change than check a return value.</p>
+      <div class="callout">
+        <strong><code>claimSigner()</code> can fail without breaking anything.</strong> Some NIP-07 extensions
+        install <code>window.nostr</code> as a non-configurable, non-writable property specifically to stop another
+        script from overwriting it. When that happens, <code>claimSigner()</code> returns <code>false</code> instead
+        of throwing (and <code>bitlogin-signer-claimed</code>'s <code>event.detail</code> carries
+        <code>{ windowNostrClaimed: false, error }</code>), and every BitLogin sign-in flow completes normally
+        regardless — the failure only means <code>window.nostr</code> still points at that other extension. If your
+        app talks to the element directly (previous step) this never matters at all; only code that reads
+        <code>window.nostr</code> itself is affected, and only for as long as the other extension holds the slot.
+      </div>
     </li>
     <li>
       <h3>Choose your relays</h3>
       <p>BitLogin ships with a small built-in bootstrap relay list, but you should point <code>vault-relays</code> and
       <code>discovery-relays</code> at relays you trust for your users. Use at least three vault relays for
       redundancy — capsule publication and reads use a quorum, so no single relay is a single point of failure.</p>
+    </li>
+    <li>
+      <h3>Make it look like your site</h3>
+      <p>The widget renders in a shadow root, but every color, radius, font, and its max-width are all read from CSS
+      custom properties on <code>:host</code> — and custom properties inherit through the shadow boundary, so your
+      page's own CSS can override every one of them without touching the widget's internals:</p>
+      <pre><code>bitlogin-auth {
+  --bl-accent: #3d9bff;       /* primary button / link / focus ring color */
+  --bl-accent-hover: #2f86e0; /* primary button hover */
+  --bl-accent-fg: #04101f;    /* text color on top of --bl-accent */
+  --bl-bg: #12151f;           /* card background */
+  --bl-fg: #eaeef6;           /* body text */
+  --bl-muted: #98a2b6;        /* secondary text */
+  --bl-border: rgba(255, 255, 255, 0.10);
+  --bl-input-bg: #1a1e2b;     /* input / credential-box background */
+  --bl-danger: #ff6b6b;
+  --bl-danger-bg: rgba(255, 107, 107, 0.16);
+  --bl-radius: 14px;
+  --bl-font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  --bl-max-width: none;       /* default 380px keeps it a fixed-width card;
+                                  override to fill a wider container */
+}</code></pre>
+      <p class="section-sub" style="margin:10px 0 0">Overriding none of these is a valid choice — the widget falls
+      back to its own light theme, a <code>prefers-color-scheme: dark</code> media query, and a
+      <code>data-theme="dark"|"light"</code> attribute override for pages with their own theme toggle. See BitRoad's
+      <code>bitlogin-auth { ... }</code> rule in its <code>src/styles.css</code> for a real integration that maps
+      every one of these onto its own design tokens.</p>
     </li>
     <li>
       <h3>That's the whole integration</h3>
