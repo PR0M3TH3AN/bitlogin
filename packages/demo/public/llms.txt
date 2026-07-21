@@ -33,11 +33,24 @@ deployment above.
   existing Nostr app code that already calls `window.nostr` works unmodified,
   same as it would against a browser extension (Alby, nos2x, …).
 - `window.bitlogin` — installed as soon as the script loads, independent of
-  login state: `{ version, isActiveSigner() }`. Use
+  login state: `{ version, isActiveSigner(), releaseSigner() }`. Use
   `window.bitlogin.isActiveSigner()` to tell whether BitLogin specifically
-  (not another extension) currently backs `window.nostr`.
-- Events on the element: `bitlogin-login` (`detail.publicKey`) and
-  `bitlogin-logout`.
+  (not another extension) currently backs `window.nostr`, and
+  `releaseSigner()` to hand `window.nostr` back (a safe no-op if BitLogin
+  doesn't hold it) when a user switches to a different signing method in
+  your own UI.
+- The `<bitlogin-auth>` element also exposes instance-scoped
+  `claimSigner()` / `releaseSigner()` methods for the same purpose;
+  `claimSigner()` is called automatically on every successful sign-in,
+  sign-up, or recovery, and `releaseSigner()` on logout and on removal
+  from the DOM — so by default a page with a single widget never needs to
+  call either manually. Without this, `window.nostr` would stay pointed at
+  a signed-out BitLogin provider forever, blocking a switch to another
+  method without a page reload.
+- Events on the element: `bitlogin-login` (`detail.publicKey`),
+  `bitlogin-logout`, `bitlogin-signer-claimed`, `bitlogin-signer-released`
+  (the last also fires on `window` when triggered via
+  `window.bitlogin.releaseSigner()`).
 - Private keys never leave a dedicated Web Worker; the main thread only ever
   sees public keys, signed events, and ciphertext.
 

@@ -102,6 +102,24 @@ if (window.bitlogin?.isActiveSigner()) {
         shadowing the API object described above. Use something like <code>id="bitlogin-widget"</code> instead
         (as this demo does).
       </div>
+      <h4 style="margin-top:20px">Letting a user switch away from BitLogin without reloading</h4>
+      <p>By default, once <code>&lt;bitlogin-auth&gt;</code> mounts it claims <code>window.nostr</code> and keeps it —
+      even after the user logs out of BitLogin, since they might just be about to log back in with the same widget.
+      If your site offers a signer picker and the user switches to a different method, call
+      <code>window.bitlogin.releaseSigner()</code> to hand the slot back (it's a no-op, safe to call speculatively,
+      if BitLogin doesn't currently hold it):</p>
+      <pre><code>// User picked a different signing method in your own UI
+if (window.bitlogin?.releaseSigner()) {
+  // window.nostr is now undefined; install the other method's provider
+}</code></pre>
+      <p>If they switch back to BitLogin later, call <code>claimSigner()</code> on the element instance to reclaim
+      the slot (this also happens automatically every time a user completes sign-in, sign-up, or recovery through
+      the widget itself, so you only need this for a picker UI that lives outside the widget):</p>
+      <pre><code>document.querySelector('bitlogin-auth').claimSigner();</code></pre>
+      <p>Both <code>claimSigner()</code>/<code>releaseSigner()</code> on the element and
+      <code>window.bitlogin.releaseSigner()</code> also fire <code>bitlogin-signer-claimed</code> /
+      <code>bitlogin-signer-released</code> events (on the element and on <code>window</code>, respectively) if you'd
+      rather react to the change than check a return value.</p>
     </li>
     <li>
       <h3>Choose your relays</h3>
