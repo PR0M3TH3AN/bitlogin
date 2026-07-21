@@ -113,7 +113,13 @@ export class BitLoginAuthElement extends HTMLElement {
 
     this.installedProvider = createNip07Provider(this.worker, () => this.vaultRelayUrls);
     if (!(window as unknown as { nostr?: unknown }).nostr) {
-      (window as unknown as { nostr: unknown }).nostr = this.installedProvider;
+      // See claimSigner()'s doc comment: an extension can make this property
+      // non-configurable, which makes even this guarded assignment throw.
+      try {
+        (window as unknown as { nostr: unknown }).nostr = this.installedProvider;
+      } catch {
+        // Not fatal -- this element's own API surface doesn't depend on window.nostr.
+      }
     }
   }
 
@@ -158,10 +164,42 @@ export class BitLoginAuthElement extends HTMLElement {
    * explicit signal they want BitLogin active. Also public: a host page offering several
    * signing methods can call it directly (e.g. `document.querySelector('bitlogin-auth').claimSigner()`)
    * when the user re-selects BitLogin from its own method picker, without a page reload.
+   *
+   * Best-effort: some NIP-07 extensions install window.nostr as a non-configurable,
+   * non-writable property specifically to prevent another script from overwriting it, and
+   * the plain assignment below throws a TypeError in that case ("Cannot assign to read only
+   * property 'nostr'..."). This is never fatal to BitLogin's own session -- a host page
+   * holding a reference to this element (getPublicKey/signEvent/nip44Encrypt/nip44Decrypt
+   * above) never depends on window.nostr at all -- so the failure is caught and reported
+   * through the returned boolean and the event detail rather than thrown, and every caller
+   * below proceeds to complete sign-in regardless. Only a host page that reads window.nostr
+   * directly (instead of talking to this element) is actually affected, and only for as long
+   * as the other extension holds the slot.
    */
-  claimSigner(): void {
-    (window as unknown as { nostr: unknown }).nostr = this.installedProvider;
-    this.dispatchEvent(new CustomEvent("bitlogin-signer-claimed"));
+  claimSigner(): boolean {
+    try {
+      (window as unknown as { nostr: unknown }).nostr = this.installedProvider;
+      this.dispatchEvent(new CustomEvent("bitlogin-signer-claimed", { detail: { windowNostrClaimed: true } }));
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.dispatchEvent(new CustomEvent("bitlogin-signer-claimed", { detail: { windowNostrClaimed: false, error: message } }));
+      return false;
+    }
+  }
+
+  /**
+   * Surfaces a claimSigner() failure on the dashboard itself (not just the event detail),
+   * using the same sessionWarnings/renderWarnings mechanism already shown for rollback and
+   * relay-disagreement warnings -- so a user isn't left wondering why some other app still
+   * seems to be using a different signer.
+   */
+  private noteSignerClaim(claimed: boolean): void {
+    if (claimed) return;
+    this.sessionWarnings = [
+      ...this.sessionWarnings,
+      "Another Nostr signer (browser extension) is active in this browser and couldn't be replaced. You're signed in to BitLogin, but any app that reads window.nostr directly may still use that other signer instead of this one."
+    ];
   }
 
   /**
@@ -171,12 +209,18 @@ export class BitLoginAuthElement extends HTMLElement {
    * the DOM, so a page offering multiple signing methods (an extension, a NIP-46 bunker,
    * BitLogin) can let a user switch away from BitLogin without a full page reload — before
    * this existed, window.nostr stayed pointed at a signed-out BitLogin provider forever.
-   * Returns whether it actually released anything.
+   * Returns whether it actually released anything. Best-effort for the same reason as
+   * claimSigner above: a property some other extension made non-configurable can also fail
+   * to `delete`, and that must not block logout either.
    */
   releaseSigner(): boolean {
     const w = window as unknown as { nostr?: unknown };
     if (this.installedProvider && w.nostr === this.installedProvider) {
-      delete w.nostr;
+      try {
+        delete w.nostr;
+      } catch {
+        return false;
+      }
       this.dispatchEvent(new CustomEvent("bitlogin-signer-released"));
       return true;
     }
@@ -328,7 +372,22 @@ export class BitLoginAuthElement extends HTMLElement {
         return;
       case "copy-credential": {
         const box = this.root.querySelector<HTMLElement>("#credential-box");
-        if (box) void navigator.clipboard?.writeText(box.textContent ?? "");
+        const button = target;
+        const original = button.textContent ?? "Copy";
+        const flash = (text: string) => {
+          button.textContent = text;
+          setTimeout(() => {
+            if (button.isConnected) button.textContent = original;
+          }, 2000);
+        };
+        if (!box || !navigator.clipboard?.writeText) {
+          flash("Copy not available — select the text manually");
+          return;
+        }
+        navigator.clipboard.writeText(box.textContent ?? "").then(
+          () => flash("Copied"),
+          () => flash("Copy failed — select the text manually")
+        );
         return;
       }
       case "download-recovery-export":
@@ -565,7 +624,8 @@ export class BitLoginAuthElement extends HTMLElement {
         return;
       }
     }
-    this.claimSigner();
+    this.sessionWarnings = [];
+    this.noteSignerClaim(this.claimSigner());
     this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: this.session?.publicKey } }));
     this.goto("dashboard");
   }
@@ -589,7 +649,7 @@ export class BitLoginAuthElement extends HTMLElement {
       this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId };
       this.sessionWarnings = [result.rollbackWarning, result.relayDisagreementWarning].filter((w): w is string => !!w);
       this.busy = false;
-      this.claimSigner();
+      this.noteSignerClaim(this.claimSigner());
       this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: result.everydayPublicKey } }));
       this.goto("dashboard");
       void this.offerToSaveCredential(loginName, password);
@@ -660,7 +720,8 @@ export class BitLoginAuthElement extends HTMLElement {
     await this.worker.completeRecovery({ newLoginName, newPassword });
     this.loginName = newLoginName;
     this.busy = false;
-    this.claimSigner();
+    this.sessionWarnings = [];
+    this.noteSignerClaim(this.claimSigner());
     this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: this.session?.publicKey } }));
     this.goto("dashboard");
     void this.offerToSaveCredential(newLoginName, newPassword);
@@ -692,7 +753,8 @@ export class BitLoginAuthElement extends HTMLElement {
         acknowledgeRollback
       });
       this.busy = false;
-      this.claimSigner();
+      this.sessionWarnings = [];
+      this.noteSignerClaim(this.claimSigner());
       this.goto("dashboard");
       void this.offerToSaveCredential(this.loginName, newPassword);
     } catch (err) {

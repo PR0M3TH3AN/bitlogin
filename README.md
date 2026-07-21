@@ -90,6 +90,25 @@ its static shell HTML, only toggling `hidden` — see its
 `src/nostr/bitloginAdapter.mjs` and the `#bitloginMount` container in its
 `index.html` for a worked example of the pattern.
 
+**Another integration gotcha, now fixed:** some NIP-07 browser extensions
+install `window.nostr` as a non-configurable, non-writable property
+specifically to stop another script from overwriting it. `claimSigner()`
+(called automatically after every sign-in) used to do a plain
+`window.nostr = ...` assignment with no guard, so on a page where such an
+extension is active, that line threw `TypeError: Cannot assign to read only
+property 'nostr' of object '#<Window>'` — and since it ran synchronously
+before the widget dispatched `bitlogin-login` or moved to the dashboard
+screen, this **froze account creation/import at the final "verify your
+recovery phrase" step**, with that raw TypeError as the only (confusing)
+feedback. `claimSigner()` now catches this, returns `false` instead of
+throwing, and every caller proceeds to complete sign-in regardless — a host
+page using this element's own methods (as documented above) was never
+actually affected by the failed `window.nostr` takeover anyway. The widget's
+own dashboard now also shows a plain-language warning in this case ("Another
+Nostr signer (browser extension) is active in this browser and couldn't be
+replaced...") using the same warning banner already shown for rollback and
+relay-disagreement conditions.
+
 ### Theming
 
 `<bitlogin-auth>` renders in a shadow root, but its colors, radius, font, and
