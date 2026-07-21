@@ -74,6 +74,36 @@ const plain  = await window.nostr.nip44.decrypt(peerPubkeyHex, cipher);</code></
       </div>
     </li>
     <li>
+      <h3>Supporting multiple signing methods (extensions, NIP-46, BitLogin)</h3>
+      <p><code>window.nostr</code> is a single global slot — only one provider can occupy it at a time. If a user also
+      has a NIP-07 extension (Alby, nos2x, …) installed, BitLogin will not overwrite it: it only installs
+      <code>window.nostr</code> when nothing is already there. The reverse isn't in BitLogin's control — an extension
+      that loads after BitLogin can still overwrite it, same as any two NIP-07 providers would collide.</p>
+      <p>To know specifically whether BitLogin is the active signer (as opposed to an extension), check
+      <code>window.bitlogin?.isActiveSigner()</code> rather than just <code>typeof window.nostr !== 'undefined'</code> —
+      the latter only tells you <em>a</em> signer is present, not which one. <code>window.bitlogin</code> is installed
+      as soon as the script loads, independent of whether <code>&lt;bitlogin-auth&gt;</code> has signed anyone in yet,
+      so it's safe to feature-detect immediately.</p>
+      <pre><code>if (window.bitlogin) {
+  console.log('BitLogin is available, version', window.bitlogin.version);
+}
+if (window.bitlogin?.isActiveSigner()) {
+  // window.nostr is currently backed by BitLogin specifically
+}</code></pre>
+      <p>NIP-46 (remote "bunker" signers) is a different transport — it doesn't typically hook
+      <code>window.nostr</code> directly, so it isn't something BitLogin needs to avoid colliding with. A site can
+      offer "Sign in with BitLogin," "Connect an extension," and "Connect a bunker" as separate options; whichever
+      the user picks becomes the active signer, and your app code should call whatever's currently active rather
+      than assume a specific one.</p>
+      <div class="callout">
+        <strong>Don't give your <code>&lt;bitlogin-auth&gt;</code> element <code>id="bitlogin"</code>.</strong>
+        Browsers automatically expose any element with a matching <code>id</code> or <code>name</code> attribute as
+        a same-named global — an element with <code>id="bitlogin"</code> becomes <code>window.bitlogin</code>,
+        shadowing the API object described above. Use something like <code>id="bitlogin-widget"</code> instead
+        (as this demo does).
+      </div>
+    </li>
+    <li>
       <h3>Choose your relays</h3>
       <p>BitLogin ships with a small built-in bootstrap relay list, but you should point <code>vault-relays</code> and
       <code>discovery-relays</code> at relays you trust for your users. Use at least three vault relays for
@@ -85,6 +115,18 @@ const plain  = await window.nostr.nip44.decrypt(peerPubkeyHex, cipher);</code></
       shows the full loop: create an account, sign a test event, rotate the password, and export a recovery file.</p>
     </li>
   </ol>
+
+  <div class="callout">
+    <strong>Password-manager save prompts.</strong> Because the widget's login form lives inside
+    a shadow root and submits via JavaScript (never a real form POST), browsers' passive
+    "offer to save this password" heuristics don't reliably fire — and the generated-password
+    screen never puts the password into a real input at all, since it's only shown as text.
+    The widget works around this by explicitly calling the Credential Management API
+    (<code>navigator.credentials.store()</code>) after every successful registration, login,
+    password rotation, and recovery. This is Chromium-only (Chrome, Edge, Brave, Opera) —
+    Firefox and Safari never implemented <code>PasswordCredential</code>, so users on those
+    browsers will need to save their generated password manually.
+  </div>
 </section>
 
 <footer>

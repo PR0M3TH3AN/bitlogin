@@ -1,6 +1,7 @@
 export * from "./errors.js";
 export * from "./wordlist.js";
 export * from "./passphrase.js";
+export * from "./manualPassword.js";
 export * from "./normalize.js";
 export * from "./timestamp.js";
 export * from "./highWaterMark.js";

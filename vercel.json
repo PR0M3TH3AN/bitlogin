@@ -1,5 +1,4 @@
 {
   "buildCommand": "npm run build -w @bitlogin/core && npm run build -w @bitlogin/widget && npm run build -w @bitlogin/demo",
-  "outputDirectory": "packages/demo/dist",
-  "cleanUrls": true
+  "outputDirectory": "packages/demo/dist"
 }

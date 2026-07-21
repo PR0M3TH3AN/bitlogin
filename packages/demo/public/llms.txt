@@ -1,0 +1,79 @@
+# BitLogin
+
+> A static, relay-backed portable Nostr account protocol. A familiar login
+> name and password (or an existing `nsec`) unlocks a portable Nostr identity
+> stored as encrypted "capsules" on public Nostr relays — no account server,
+> no password-reset email, no database. Ships as an embeddable custom element
+> plus a NIP-07-compatible `window.nostr` provider that any static site can
+> drop in with one script tag.
+
+## Integrate in one snippet
+
+```html
+<script type="module" src="https://bitlogin.vercel.app/vendor/bitlogin/bitlogin.js"></script>
+<bitlogin-auth
+  vault-relays="wss://relay-one.example,wss://relay-two.example,wss://relay-three.example"
+  discovery-relays="wss://discovery-one.example,wss://discovery-two.example">
+</bitlogin-auth>
+```
+
+`bitlogin.js` and `cryptoWorker.js` (plus the shared chunk they both import)
+must be deployed side by side — the main script resolves the worker's URL at
+runtime relative to its own location, so this works from any path. For
+production, self-host these files rather than depending on the demo
+deployment above.
+
+## What it gives your app
+
+- A `<bitlogin-auth>` custom element (Shadow DOM, no CSS collisions) handling
+  create account, sign in, forgot-password recovery via a 12-word phrase, and
+  password rotation.
+- A `window.nostr` provider shaped like the de facto NIP-07 interface
+  (`getPublicKey`, `signEvent`, `getRelays`, `nip44.encrypt`/`decrypt`) —
+  existing Nostr app code that already calls `window.nostr` works unmodified,
+  same as it would against a browser extension (Alby, nos2x, …).
+- `window.bitlogin` — installed as soon as the script loads, independent of
+  login state: `{ version, isActiveSigner() }`. Use
+  `window.bitlogin.isActiveSigner()` to tell whether BitLogin specifically
+  (not another extension) currently backs `window.nostr`.
+- Events on the element: `bitlogin-login` (`detail.publicKey`) and
+  `bitlogin-logout`.
+- Private keys never leave a dedicated Web Worker; the main thread only ever
+  sees public keys, signed events, and ciphertext.
+
+## Key facts for integration
+
+- No build step required to consume it — plain `<script type="module">`.
+- Don't give the element `id="bitlogin"` — browsers auto-expose elements with
+  a matching `id`/`name` as a same-named global, which shadows
+  `window.bitlogin`. Use `id="bitlogin-widget"` or similar.
+- Configure relays via the `vault-relays` and `discovery-relays` attributes
+  (comma-separated `wss://` URLs); omit to use BitLogin's small built-in
+  bootstrap list.
+- Manual (user-chosen) passwords are opt-in and discouraged by default — the
+  widget generates a high-entropy passphrase and recommends it, since a
+  downloadable encrypted capsule can be guessed against offline forever.
+- Recovery is a 12-word BIP-39-style phrase, independent of the password;
+  losing the password never locks the user out if they still have the
+  phrase.
+
+## Reference docs
+
+- [Integration guide](/docs.html) — full walkthrough with code samples.
+- [Live account manager demo](/account.html) — create/login/recover, sign a
+  test event, rotate password, export identity.
+- [Protocol specification](https://github.com/PR0M3TH3AN/bitlogin/blob/main/docs/spec.md) —
+  the full BitLogin v0.3 protocol (crypto construction, capsule formats,
+  relay architecture, threat model).
+- [Second-factor / recovery options design notes](https://github.com/PR0M3TH3AN/bitlogin/blob/main/docs/second-factor.md)
+  and [future recovery-path options](https://github.com/PR0M3TH3AN/bitlogin/blob/main/docs/future-recovery-options.md) —
+  proposals, not all implemented; each notes its own status.
+- [Source repository](https://github.com/PR0M3TH3AN/bitlogin) — monorepo:
+  `packages/core` (protocol implementation), `packages/widget` (the embeddable
+  element + provider), `packages/demo` (this site).
+
+## Status
+
+Experimental alpha. Verified with an in-memory mock-relay test suite and
+real-browser end-to-end runs, but not independently audited. See the README
+in the source repository for the full implemented/deferred feature list.

@@ -37,7 +37,7 @@
       <code>discovery-relays</code> attributes at your own relays for production use.
     </p>
   </div>
-  <bitlogin-auth id="bitlogin"></bitlogin-auth>
+  <bitlogin-auth id="bitlogin-widget"></bitlogin-auth>
 </div>
 
 <footer>
@@ -46,7 +46,7 @@
 
 <script type="module" src="./vendor/bitlogin/bitlogin.js"></script>
 <script type="module">
-  const el = document.getElementById('bitlogin');
+  const el = document.getElementById('bitlogin-widget');
   el.addEventListener('bitlogin-login', (e) => console.log('[bitlogin] signed in', e.detail.publicKey));
   el.addEventListener('bitlogin-logout', () => console.log('[bitlogin] signed out'));
 </script>

@@ -15,10 +15,13 @@ import {
   buildProfileEvent,
   buildRecoveryExport,
   repairReplicas,
+  importAccount,
+  decodeEverydayPrivateKey,
   NostrSigner,
   type RecoveredIdentity
 } from "@bitlogin/core/account";
 import { RelayPool, countAcknowledgements, BUILTIN_VAULT_RELAYS, BUILTIN_DISCOVERY_RELAYS, encodeNsec, encodeNpub, type NostrEvent } from "@bitlogin/core/nostr";
+import { getPublicKeyHex } from "@bitlogin/core/crypto";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import type {
   WorkerRequest,
@@ -32,7 +35,8 @@ import type {
   PublishProfilePayload,
   SignEventPayload,
   Nip44EncryptPayload,
-  Nip44DecryptPayload
+  Nip44DecryptPayload,
+  PreviewImportKeyPayload
 } from "./protocol.js";
 
 interface SessionState {
@@ -94,7 +98,9 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     case "register": {
       const p = payload as RegisterPayload;
-      const result = await registerAccount({ loginName: p.loginName, password: p.password, vaultRelayUrls });
+      const result = p.importKey
+        ? await importAccount({ nsecOrHex: p.importKey, loginName: p.loginName, password: p.password, vaultRelayUrls })
+        : await registerAccount({ loginName: p.loginName, password: p.password, vaultRelayUrls });
       clearSession();
       session.signer = new NostrSigner(result.everydayPrivateKey);
       session.everydayPrivateKey = result.everydayPrivateKey;
@@ -107,9 +113,21 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         everydayPublicKey: result.everydayPublicKey,
         recoveryPublicKey: result.recoveryPublicKey,
         accountId: result.accountId,
+        imported: result.imported,
         credentialEventId: result.credentialEvent.id,
         recoveryEventId: result.recoveryEvent.id
       };
+    }
+
+    case "previewImportKey": {
+      // Validates and previews the npub WITHOUT publishing anything, so the user can
+      // confirm they pasted the right key before committing to registration (§SF10).
+      const p = payload as PreviewImportKeyPayload;
+      const key = decodeEverydayPrivateKey(p.nsecOrHex);
+      const everydayPublicKey = getPublicKeyHex(key);
+      const preview = { everydayPublicKey, npub: encodeNpub(everydayPublicKey) };
+      key.fill(0); // §11.10 — the previewed key is not retained
+      return preview;
     }
 
     case "login": {
@@ -121,6 +139,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.accountId = result.accountId;
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeCredentialEvent = result.credentialEvent;
+      session.activeRecoveryEvent = result.recoveryCapsuleEvent;
       return {
         everydayPublicKey: result.everydayPublicKey,
         accountId: result.accountId,
@@ -179,6 +198,12 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         vaultRelayUrls,
         store
       });
+      // Keep the session's capsule references current so a recovery export or replica
+      // repair requested right after rotation (without an intervening re-login) still
+      // finds the NEW credential capsule and the (unchanged) recovery capsule.
+      session.activeCredentialEvent = result.newCredentialEvent;
+      session.recoveryPublicKey = result.recoveryPublicKey;
+      session.activeRecoveryEvent = result.recoveryCapsuleEvent;
       return {
         newLocatorPublicKey: result.newLocatorPublicKey,
         newGeneration: result.newGeneration,
