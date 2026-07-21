@@ -2,6 +2,7 @@
   "name": "@bitlogin/core",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "BitLogin protocol core: crypto, capsules, Nostr relay I/O, account flows. Framework- and DOM-free.",
   "main": "./dist/index.js",

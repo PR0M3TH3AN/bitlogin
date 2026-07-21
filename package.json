@@ -2,6 +2,7 @@
   "name": "bitlogin-monorepo",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "BitLogin — static, relay-backed portable Nostr account protocol and embeddable login widget",
   "workspaces": [
     "packages/core",
