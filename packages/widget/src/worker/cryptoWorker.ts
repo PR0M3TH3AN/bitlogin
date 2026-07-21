@@ -10,9 +10,7 @@ import {
   recoverWithPhrase,
   completeRecoveryWithNewCredentials,
   changePassword as changePasswordFlow,
-  buildRelayListEvent,
-  buildDmRelayListEvent,
-  buildProfileEvent,
+  publishInitialProfile,
   buildRecoveryExport,
   repairReplicas,
   importAccount,
@@ -20,7 +18,7 @@ import {
   NostrSigner,
   type RecoveredIdentity
 } from "@bitlogin/core/account";
-import { RelayPool, countAcknowledgements, BUILTIN_VAULT_RELAYS, BUILTIN_DISCOVERY_RELAYS, encodeNsec, encodeNpub, type NostrEvent } from "@bitlogin/core/nostr";
+import { RelayPool, BUILTIN_VAULT_RELAYS, BUILTIN_DISCOVERY_RELAYS, encodeNsec, encodeNpub, type NostrEvent } from "@bitlogin/core/nostr";
 import { getPublicKeyHex } from "@bitlogin/core/crypto";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import type {
@@ -227,32 +225,15 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "publishProfileAndRelayLists": {
       const p = payload as PublishProfilePayload;
       const { everydayPrivateKey } = requireUnlocked();
-      const now = Math.floor(Date.now() / 1000);
-      const events: NostrEvent[] = [];
-      let profilePublished = false;
-      if (p.name || p.about || p.picture) {
-        events.push(buildProfileEvent(everydayPrivateKey, { name: p.name, about: p.about, picture: p.picture }, now));
-      }
-      const relayListEvent = buildRelayListEvent(
+      return publishInitialProfile({
         everydayPrivateKey,
-        p.generalRelays.map((url) => ({ url, read: true, write: true })),
-        now
-      );
-      const dmRelayListEvent = buildDmRelayListEvent(everydayPrivateKey, p.dmRelays, now);
-
-      // §19.6: publish to both the user's general relays and the discovery relays.
-      const targets = [...new Set([...p.generalRelays, ...p.dmRelays, ...discoveryRelayUrls])];
-      const pool = new RelayPool(targets);
-      const outcomes = await Promise.all([
-        ...events.map((e) => pool.publishAll(e)),
-        pool.publishAll(relayListEvent),
-        pool.publishAll(dmRelayListEvent)
-      ]);
-      pool.closeAll();
-      profilePublished = events.length > 0 && countAcknowledgements(outcomes[0]!) > 0;
-      const relayListAcknowledgedCount = countAcknowledgements(outcomes[outcomes.length - 2]!);
-      const dmRelayListAcknowledgedCount = countAcknowledgements(outcomes[outcomes.length - 1]!);
-      return { profilePublished, relayListAcknowledgedCount, dmRelayListAcknowledgedCount };
+        name: p.name,
+        about: p.about,
+        picture: p.picture,
+        generalRelays: p.generalRelays,
+        dmRelays: p.dmRelays,
+        discoveryRelays: discoveryRelayUrls
+      });
     }
 
     case "getPublicKey": {

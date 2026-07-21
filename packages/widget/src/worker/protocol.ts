@@ -108,6 +108,12 @@ export interface PublishProfileResult {
   profilePublished: boolean;
   relayListAcknowledgedCount: number;
   dmRelayListAcknowledgedCount: number;
+  /** True when an existing kind:0 profile was already found for this identity, so BitLogin left it untouched (§28.1). */
+  profileSkippedExisting: boolean;
+  /** True when an existing NIP-65 relay list was already found and left untouched (§28.1). */
+  relayListSkippedExisting: boolean;
+  /** True when an existing NIP-17 DM relay list was already found and left untouched (§28.1). */
+  dmRelayListSkippedExisting: boolean;
 }
 
 export interface SignEventPayload {

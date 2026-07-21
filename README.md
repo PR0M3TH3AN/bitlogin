@@ -199,14 +199,16 @@ routing.
 This build covers the protocol's Phase 0 (cryptographic core + test vectors)
 and the load-bearing parts of Phase 1 (account MVP), verified two ways:
 
-- **Protocol-level tests** (`npm test`, 75 tests): Argon2id/ScalarExpand/JCS/
+- **Protocol-level tests** (`npm test`, 77 tests): Argon2id/ScalarExpand/JCS/
   padding/timestamp/NIP-44 unit tests with the spec's exact byte layouts
   (§11), and full end-to-end scenarios — create → clean-device login, phrase
   recovery → new credentials → clean-device login, password change with
   mandatory tombstone + NIP-09 deletion, relay-loss → replica repair
-  (including keyless recovery-event rebroadcast), and generation-rollback
-  detection now failing closed by default rather than only warning (§16.2
-  step 6) — run against an in-memory mock relay
+  (including keyless recovery-event rebroadcast), generation-rollback
+  detection failing closed by default rather than only warning (§16.2 step
+  6), and initial profile/relay-list publication never overwriting an
+  existing kind 0/10002/10050 event when the everyday identity is an
+  imported nsec (§15.8, §28.1) — run against an in-memory mock relay
   (`packages/core/src/test-support/mockRelay.ts`), since this sandbox has no
   route to public Nostr relays. NIP-44 has additionally been cross-tested
   directly against the `nostr-tools` reference implementation (conversation

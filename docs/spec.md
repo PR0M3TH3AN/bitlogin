@@ -2,7 +2,7 @@
 
 ## Static, Relay-Backed Portable Account Protocol
 
-**Document version:** 0.4
+**Document version:** 0.5
 **Status:** Revised MVP specification (incorporates external protocol review)
 **Date:** July 21, 2026
 **Client architecture:** Static progressive web application
@@ -11,6 +11,12 @@
 **Daily authentication:** Login name and strong password
 **Recovery:** BIP-39 mnemonic phrase
 **Email dependency:** None
+
+---
+
+## Changes from v0.4
+
+1. **Initial profile publication no longer overwrites an existing profile.** §15.8's kind `0`/`10002`/`10050` publication previously ran unconditionally after every successful registration, including nsec imports — since all three are NIP-01/NIP-65/NIP-17 *replaceable* events, this silently erased an imported identity's real, pre-existing profile and relay lists, replacing them with BitLogin defaults (just the chosen login name as `name`, and only the vault relays). The client now queries for an existing event of each kind before publishing and only fills in whichever one comes back empty, never overwriting one that already exists (§15.8, §28.1).
 
 ---
 
@@ -1021,6 +1027,8 @@ After successful capsule backup, the client may publish:
 
 NIP-65 uses kind `10002` for general read/write relay preferences and recommends small relay lists. NIP-17 uses kind `10050` for preferred private-message relays. These public events are also what phrase recovery uses to restore relay preferences (§17.4), so publishing kinds `10002` and `10050` is required, not optional, in the MVP — and they must be published to the discovery relays (§19.6) in addition to the user's own general relays, so that phrase recovery has a defined place to find them.
 
+Kinds `0`, `10002`, and `10050` are all NIP-01/NIP-65/NIP-17 *replaceable* events: a relay keeps only the newest one it has seen for a given public key, and every other client treats that newest copy as authoritative. This matters because the everyday identity behind a BitLogin account is not always brand new (§28.1) — an imported `nsec` may already have a real kind `0` profile (display name, bio, avatar, NIP-05) and/or kind `10002`/`10050` lists published elsewhere. Before publishing any of the three, the client **must** query the target relays for an existing event of that kind for this public key; it publishes a default only for whichever kind comes back empty, and never overwrites one that already exists. A freshly generated identity has nothing to find, so this check is a no-op for the common case and only changes behavior for imports.
+
 Everyday-identity events shall not be published over the same relay connections used for capsule operations in the same session (§23.4).
 
 ---
@@ -1538,6 +1546,8 @@ Users who have not saved a recovery export receive a periodic, dismissible remin
 
 The client may allow the user to import an existing raw `nsec`, hexadecimal private key, or `ncryptsec`. The imported identity becomes the everyday identity and is wrapped by newly generated BitLogin password and recovery capsules.
 
+Wrapping the key in new capsules must never touch anything the identity already had published under its own name. In particular, the initial-profile-publication step (§15.8) applies its existing-event check here specifically: an imported identity commonly already has a real kind `0` profile and/or relay lists, and the client must leave all of that exactly as it found it rather than replacing it with BitLogin defaults.
+
 ## 28.2 NIP-49 export
 
 NIP-49 defines the `ncryptsec` format using scrypt and XChaCha20-Poly1305 for password-encrypted Nostr private keys. BitLogin may use it for user-controlled export even though the internal roaming capsule uses a separate versioned format.
@@ -1761,6 +1771,8 @@ Resolved since v0.2: padding buckets and relay-limit compliance (§11.8); replac
 
 Resolved since v0.3: generation-rollback detection now enforced (fail-closed) rather than warn-only (§16.2); NIP-44 extended-length payload support, verified against the `nostr-tools` reference implementation; element-scoped `nip44Encrypt`/`nip44Decrypt` on `<bitlogin-auth>` (see README).
 
+Resolved since v0.4: initial profile publication (§15.8) now checks for an existing kind `0`/`10002`/`10050` event before publishing and never overwrites one that already exists, closing the profile-clobbering gap for imported identities (§28.1).
+
 Still open before implementation:
 
 1. Which bootstrap relays ship with the client, and who holds the maintainer relay-list key (single key, or threshold)?
@@ -1771,7 +1783,7 @@ Still open before implementation:
 6. Should the local cache be password-encrypted or passkey-encrypted?
 7. Should an existing `nsec` be importable during the MVP?
 8. Should the MVP include a basic NIP-17 inbox, or ship account-only first?
-9. Should public-profile creation be optional (note: kinds 10002/10050 are required regardless, §15.8)?
+9. Should public-profile creation be optional (note: kinds 10002/10050 are required regardless, §15.8)? Independent of this, publishing now never overwrites an existing profile/relay-list event (§15.8) — this decision is only about whether to publish a *default* at all when nothing already exists.
 10. Should BitLogin operate a dedicated archival vault relay?
 11. Should future password login offer an optional OPAQUE overlay for hosted deployments that want revocable credentials? (Framed as an overlay, not a protocol evolution: OPAQUE reintroduces exactly the server dependency the base protocol exists to eliminate, so it must remain strictly optional and interoperable with pure-relay login.)
 12. Should identity rotation be included before public beta?

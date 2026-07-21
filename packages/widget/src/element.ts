@@ -605,7 +605,9 @@ export class BitLoginAuthElement extends HTMLElement {
     this.goto("confirm-phrase");
     // §15.8/§19.6 — publish relay preferences immediately after successful registration,
     // defaulting the public profile name to the chosen login name so the account isn't
-    // just a bare npub in every other Nostr client.
+    // just a bare npub in every other Nostr client. This same call also runs after
+    // importing an existing nsec; the worker checks for an existing profile/relay list
+    // first and never overwrites one, so an imported identity's real profile survives (§28.1).
     void this.worker.publishProfileAndRelayLists({
       name: this.loginName,
       generalRelays: this.vaultRelayUrls,
