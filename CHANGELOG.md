@@ -46,3 +46,24 @@ would plausibly want. Newest first.
   `window.nostr.nip04` — a real NIP-07 extension always has it, so anything
   written against "whatever `window.nostr` provides" may already assume it's
   there. No attribute/config changes needed; this is purely additive.
+
+## 2026-07-22
+
+- **Feature: sessions persist across a page reload.** Previously every reload
+  destroyed the crypto worker, requiring the full login-name + password flow
+  again — re-running Argon2id and a relay quorum read on every navigation,
+  not just the first sign-in. After a successful register/login/recover/
+  changePassword, the everyday private key and active capsule events are now
+  cached in IndexedDB; `connectedCallback()` tries to restore that cache
+  before ever showing the welcome screen, firing `bitlogin-login` exactly as
+  a fresh login would if one is found. Logout clears it. (`9e3787d`)
+  **Security note:** this means the decrypted everyday private key now sits
+  in the browser's IndexedDB for that origin until logout — the same
+  tradeoff every NIP-07 extension and crypto wallet already makes for the
+  same "don't ask for the password every navigation" reason, scoped by
+  IndexedDB's own per-origin isolation. The recovery phrase and login
+  name/password are never cached.
+  **Re-vendor if:** you want this — it's the reason to re-vendor this entry.
+  No attribute/config or host-integration changes needed; a host page's
+  existing `bitlogin-login` listener (see "Embedding BitLogin" below) fires
+  the same way whether the sign-in was just typed or silently restored.

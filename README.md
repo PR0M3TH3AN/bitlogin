@@ -65,6 +65,15 @@ guide, and `packages/demo/public/account.html` for a working example
 (create → confirm recovery phrase → sign an event → rotate password →
 export identity).
 
+**Sessions persist across a page reload.** After a successful sign-in, the
+everyday private key is cached in IndexedDB for that origin, so a later
+reload restores the session and fires `bitlogin-login` automatically —
+your existing listener doesn't need to distinguish "just typed" from
+"silently restored." This trades "nothing persists locally" for "the
+decrypted key sits in this browser's IndexedDB until logout," the same
+tradeoff a NIP-07 extension already makes. Calling `logout()` (or the
+element's dashboard "Log out" button) clears it.
+
 The `<bitlogin-auth>` element also mirrors `window.nostr` directly on the
 element instance (`getPublicKey`, `signEvent`, `nip44Encrypt`, `nip44Decrypt`)
 — prefer this over `window.nostr` when your host page holds a reference to
