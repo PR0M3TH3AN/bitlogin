@@ -101,6 +101,16 @@ export class BitLoginAuthElement extends HTMLElement {
   constructor() {
     super();
     this.root = this.attachShadow({ mode: "open" });
+    // A parsed CSSStyleSheet assigned via adoptedStyleSheets isn't subject to a page's
+    // style-src CSP the way an inline <style> element (or repeatedly re-injecting one on
+    // every render()) is -- a host with a strict `style-src 'self'` (no 'unsafe-inline')
+    // silently drops an inline <style>'s rules entirely, which left every shadow-DOM
+    // element unstyled (the brand SVG rendering at its raw intrinsic ~590x119 size instead
+    // of the intended 20px-tall lockup was the visible symptom). Built once here rather
+    // than in render(), since the stylesheet text itself never changes between renders.
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(WIDGET_STYLES);
+    this.root.adoptedStyleSheets = [sheet];
     this.worker = new WorkerClient();
   }
 
@@ -802,7 +812,7 @@ export class BitLoginAuthElement extends HTMLElement {
 
   private render(): void {
     const successOverlay = this.pendingSuccessLabel ? this.renderSuccessOverlay(this.pendingSuccessLabel) : "";
-    this.root.innerHTML = `<style>${WIDGET_STYLES}</style><div class="card">${this.renderScreen()}${successOverlay}</div>`;
+    this.root.innerHTML = `<div class="card">${this.renderScreen()}${successOverlay}</div>`;
   }
 
   private renderSuccessOverlay(label: string): string {
