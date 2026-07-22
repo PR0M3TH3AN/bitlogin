@@ -14,7 +14,9 @@ import type {
   PublishProfilePayload,
   SignEventPayload,
   Nip44EncryptPayload,
-  Nip44DecryptPayload
+  Nip44DecryptPayload,
+  Nip04EncryptPayload,
+  Nip04DecryptPayload
 } from "./protocol.js";
 
 export class WorkerClient {
@@ -91,6 +93,12 @@ export class WorkerClient {
   }
   nip44Decrypt(payload: Nip44DecryptPayload) {
     return this.call("nip44Decrypt", payload);
+  }
+  nip04Encrypt(payload: Nip04EncryptPayload) {
+    return this.call("nip04Encrypt", payload);
+  }
+  nip04Decrypt(payload: Nip04DecryptPayload) {
+    return this.call("nip04Decrypt", payload);
   }
   exportIdentity() {
     return this.call("exportIdentity", {});

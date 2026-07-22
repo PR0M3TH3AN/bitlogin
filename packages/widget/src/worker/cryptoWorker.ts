@@ -34,6 +34,8 @@ import type {
   SignEventPayload,
   Nip44EncryptPayload,
   Nip44DecryptPayload,
+  Nip04EncryptPayload,
+  Nip04DecryptPayload,
   PreviewImportKeyPayload
 } from "./protocol.js";
 
@@ -257,6 +259,18 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const { signer } = requireUnlocked();
       const p = payload as Nip44DecryptPayload;
       return { plaintext: signer.nip44Decrypt(p.peerPublicKey, p.payload) };
+    }
+
+    case "nip04Encrypt": {
+      const { signer } = requireUnlocked();
+      const p = payload as Nip04EncryptPayload;
+      return { ciphertext: signer.nip04Encrypt(p.peerPublicKey, p.plaintext) };
+    }
+
+    case "nip04Decrypt": {
+      const { signer } = requireUnlocked();
+      const p = payload as Nip04DecryptPayload;
+      return { plaintext: signer.nip04Decrypt(p.peerPublicKey, p.payload) };
     }
 
     case "exportIdentity": {

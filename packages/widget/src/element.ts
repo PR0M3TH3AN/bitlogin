@@ -165,6 +165,17 @@ export class BitLoginAuthElement extends HTMLElement {
   async nip44Decrypt(peerPublicKey: string, payload: string): Promise<string> {
     return (await this.worker.nip44Decrypt({ peerPublicKey, payload })).plaintext;
   }
+  /**
+   * Legacy relative to nip44Encrypt/nip44Decrypt above, but still what a real NIP-07
+   * extension exposes as window.nostr.nip04 -- implemented for drop-in parity with sites
+   * (or their older DM code paths) that still expect NIP-04 rather than NIP-44.
+   */
+  async nip04Encrypt(peerPublicKey: string, plaintext: string): Promise<string> {
+    return (await this.worker.nip04Encrypt({ peerPublicKey, plaintext })).ciphertext;
+  }
+  async nip04Decrypt(peerPublicKey: string, payload: string): Promise<string> {
+    return (await this.worker.nip04Decrypt({ peerPublicKey, payload })).plaintext;
+  }
   async logout(): Promise<void> {
     await this.worker.logout();
     this.session = null;

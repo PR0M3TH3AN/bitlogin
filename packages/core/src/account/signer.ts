@@ -6,6 +6,7 @@
  */
 import { getPublicKeyHex } from "../crypto/secp256k1.js";
 import { getConversationKey, nip44Decrypt, nip44Encrypt } from "../crypto/nip44.js";
+import { nip04Decrypt, nip04Encrypt } from "../crypto/nip04.js";
 import { wipe } from "../crypto/memory.js";
 import { signNostrEvent, type NostrEvent, type NostrTag } from "../nostr/event.js";
 
@@ -57,6 +58,18 @@ export class NostrSigner {
   nip44Decrypt(peerPublicKeyHex: string, payload: string): string {
     this.assertAlive();
     return nip44Decrypt(getConversationKey(this.privateKey, peerPublicKeyHex), payload);
+  }
+
+  /** Legacy relative to nip44Encrypt above, but still what a real NIP-07 extension exposes as
+   * window.nostr.nip04.encrypt -- implemented for drop-in parity. */
+  nip04Encrypt(peerPublicKeyHex: string, plaintext: string): string {
+    this.assertAlive();
+    return nip04Encrypt(this.privateKey, peerPublicKeyHex, plaintext);
+  }
+
+  nip04Decrypt(peerPublicKeyHex: string, payload: string): string {
+    this.assertAlive();
+    return nip04Decrypt(this.privateKey, peerPublicKeyHex, payload);
   }
 
   /** Best-practical secret wipe (§11.10, §21.4): overwrites the private key buffer in place. */

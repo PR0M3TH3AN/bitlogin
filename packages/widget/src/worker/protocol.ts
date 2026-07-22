@@ -132,6 +132,15 @@ export interface Nip44DecryptPayload {
   payload: string;
 }
 
+export interface Nip04EncryptPayload {
+  peerPublicKey: string;
+  plaintext: string;
+}
+export interface Nip04DecryptPayload {
+  peerPublicKey: string;
+  payload: string;
+}
+
 export interface ExportIdentityResult {
   nsec: string;
   npub: string;
@@ -161,6 +170,8 @@ export type WorkerActionMap = {
   signEvent: [SignEventPayload, NostrEvent];
   nip44Encrypt: [Nip44EncryptPayload, { ciphertext: string }];
   nip44Decrypt: [Nip44DecryptPayload, { plaintext: string }];
+  nip04Encrypt: [Nip04EncryptPayload, { ciphertext: string }];
+  nip04Decrypt: [Nip04DecryptPayload, { plaintext: string }];
   exportIdentity: [Record<string, never>, ExportIdentityResult];
   buildRecoveryExport: [Record<string, never>, unknown];
   repairReplicas: [Record<string, never>, RepairReplicasResult];

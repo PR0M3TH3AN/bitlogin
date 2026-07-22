@@ -17,6 +17,12 @@ export interface Nip07Provider {
     encrypt(peerPublicKey: string, plaintext: string): Promise<string>;
     decrypt(peerPublicKey: string, payload: string): Promise<string>;
   };
+  /** Legacy relative to nip44 above, but present on every real NIP-07 extension -- kept for
+   * drop-in parity with sites (or their older DM code paths) that still expect it. */
+  nip04: {
+    encrypt(peerPublicKey: string, plaintext: string): Promise<string>;
+    decrypt(peerPublicKey: string, payload: string): Promise<string>;
+  };
   /**
    * Identifies this provider as BitLogin's, distinct from a browser extension (Alby, nos2x,
    * …) that may also implement window.nostr. Only one provider can occupy window.nostr at a
@@ -59,6 +65,16 @@ export function createNip07Provider(workerClient: WorkerClient, configuredRelays
       },
       async decrypt(peerPublicKey: string, payload: string): Promise<string> {
         const { plaintext } = await wrapUnlockError(workerClient.nip44Decrypt({ peerPublicKey, payload }));
+        return plaintext;
+      }
+    },
+    nip04: {
+      async encrypt(peerPublicKey: string, plaintext: string): Promise<string> {
+        const { ciphertext } = await wrapUnlockError(workerClient.nip04Encrypt({ peerPublicKey, plaintext }));
+        return ciphertext;
+      },
+      async decrypt(peerPublicKey: string, payload: string): Promise<string> {
+        const { plaintext } = await wrapUnlockError(workerClient.nip04Decrypt({ peerPublicKey, payload }));
         return plaintext;
       }
     },

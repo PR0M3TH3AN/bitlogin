@@ -9,6 +9,7 @@ import { generatePrivateKey, getPublicKeyHex, isValidScalar, sign, verify } from
 import { aesGcmOpen, aesGcmSeal } from "./aesGcm.js";
 import { bytesToHex, hexToBytes, bytesToBase64url, base64urlToBytes, utf8ToBytes } from "./encoding.js";
 import { getConversationKey, nip44Encrypt, nip44Decrypt } from "./nip44.js";
+import { nip04Encrypt, nip04Decrypt } from "./nip04.js";
 
 describe("ScalarExpand (§11.4 test vector)", () => {
   it("derives a stable, valid scalar for fixed input on counter 0", () => {
@@ -219,6 +220,50 @@ describe("NIP-44 v2 (window.nostr.nip44 provider surface)", () => {
     const bytes = base64urlToBytesForTest(encrypted);
     bytes[bytes.length - 1] ^= 0xff;
     expect(() => nip44Decrypt(key, bytesToBase64urlForTest(bytes))).toThrow();
+  });
+});
+
+describe("NIP-04 (window.nostr.nip04 provider surface)", () => {
+  it.each([1, 15, 16, 17, 32, 100, 1000])("round-trips a %i-byte plaintext", (len) => {
+    const skA = generatePrivateKey();
+    const skB = generatePrivateKey();
+    const pubA = getPublicKeyHex(skA);
+    const pubB = getPublicKeyHex(skB);
+    const plaintext = "x".repeat(len);
+    const encrypted = nip04Encrypt(skA, pubB, plaintext);
+    expect(nip04Decrypt(skB, pubA, encrypted)).toBe(plaintext);
+  });
+
+  it("produces the documented \"<ciphertext>?iv=<iv>\" payload shape", () => {
+    const skA = generatePrivateKey();
+    const pubB = getPublicKeyHex(generatePrivateKey());
+    const encrypted = nip04Encrypt(skA, pubB, "hello");
+    expect(encrypted).toMatch(/^[A-Za-z0-9+/]+=*\?iv=[A-Za-z0-9+/]+=*$/);
+  });
+
+  it("fails to decrypt with the wrong private key", () => {
+    // Unlike NIP-44, NIP-04 has no MAC -- a wrong key either throws on invalid PKCS7
+    // padding (the overwhelmingly likely outcome) or, rarely, "succeeds" with garbage
+    // plaintext. Either way it must never reproduce the original plaintext.
+    const skA = generatePrivateKey();
+    const skB = generatePrivateKey();
+    const skC = generatePrivateKey();
+    const pubA = getPublicKeyHex(skA);
+    const encrypted = nip04Encrypt(skA, getPublicKeyHex(skB), "secret message");
+    let decrypted: string | null = null;
+    let threw = false;
+    try {
+      decrypted = nip04Decrypt(skC, pubA, encrypted);
+    } catch {
+      threw = true;
+    }
+    expect(threw || decrypted !== "secret message").toBe(true);
+  });
+
+  it("rejects a payload missing the \"?iv=\" suffix", () => {
+    const sk = generatePrivateKey();
+    const pub = getPublicKeyHex(generatePrivateKey());
+    expect(() => nip04Decrypt(sk, pub, "not-a-real-payload")).toThrow();
   });
 });
 

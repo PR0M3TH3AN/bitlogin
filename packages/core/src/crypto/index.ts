@@ -10,3 +10,4 @@ export * from "./bip39.js";
 export * from "./padding.js";
 export * from "./jcs.js";
 export * from "./nip44.js";
+export * from "./nip04.js";

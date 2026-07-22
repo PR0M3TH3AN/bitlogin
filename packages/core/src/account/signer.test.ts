@@ -56,6 +56,13 @@ describe("NostrSigner (NIP-07-shaped API, §26.2)", () => {
     expect(bob.nip44Decrypt(alice.getPublicKey(), encrypted)).toBe("hello bob");
   });
 
+  it("encrypts and decrypts legacy NIP-04 messages between two signers", () => {
+    const alice = new NostrSigner(generatePrivateKey());
+    const bob = new NostrSigner(generatePrivateKey());
+    const encrypted = alice.nip04Encrypt(bob.getPublicKey(), "hello bob");
+    expect(bob.nip04Decrypt(alice.getPublicKey(), encrypted)).toBe("hello bob");
+  });
+
   it("refuses to sign after destroy() (§21.4 logout)", () => {
     const signer = new NostrSigner(generatePrivateKey());
     signer.destroy();
