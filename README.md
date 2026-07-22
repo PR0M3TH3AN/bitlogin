@@ -90,6 +90,39 @@ its static shell HTML, only toggling `hidden` — see its
 `src/nostr/bitloginAdapter.mjs` and the `#bitloginMount` container in its
 `index.html` for a worked example of the pattern.
 
+**Moving the element is not a safe workaround, either.** A same-document
+move — `someContainer.appendChild(mount)`, `slot.replaceWith(mount)`, or
+similar, to relocate a statically-declared mount point into a
+dynamically-rendered slot — still fires `disconnectedCallback` (removal)
+and then `connectedCallback` (insertion) on `<bitlogin-auth>`, exactly like
+a genuine remove-and-recreate. The worker still gets terminated, and
+because `connectedCallback` doesn't construct a new `WorkerClient` (that
+only happens once, in the constructor), the element is left reusing a
+now-dead worker: every subsequent message — `configure`, `login`,
+everything — silently hangs forever with no error, since `postMessage` on
+a terminated `Worker` is a no-op. BitUnlock hit exactly this while trying
+to work around the innerHTML gotcha above: it kept `#bitloginMount` static
+but used `replaceWith()` to relocate it into a per-step placeholder,
+believing a move (vs. removal) would spare the worker. It doesn't. The fix
+is the same as above — never move it either; keep it in one fixed DOM
+position for its entire lifetime and let CSS/layout put other content
+around it.
+
+**Required CSP allowance:** password hashing (Argon2id, via `hash-wasm`)
+compiles a WebAssembly module inside the crypto worker. A `script-src` that
+doesn't include `'wasm-unsafe-eval'` (or the broader `'unsafe-eval'`) blocks
+`WebAssembly.compile()` outright — every action that touches a password
+(`register`, `login`, `recover`, `changePassword`) fails with a CSP error.
+If your site sets its own `script-src`, add `'wasm-unsafe-eval'` to it:
+
+```
+script-src 'self' 'wasm-unsafe-eval';
+```
+
+This is easy to miss because the failure is scoped to the crypto worker —
+the rest of the page (and even a plain main-thread `WebAssembly.compile()`
+check) can work fine while every BitLogin auth action still fails.
+
 **Another integration gotcha, now fixed:** some NIP-07 browser extensions
 install `window.nostr` as a non-configurable, non-writable property
 specifically to stop another script from overwriting it. `claimSigner()`
