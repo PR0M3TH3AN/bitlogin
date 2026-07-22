@@ -35,3 +35,14 @@ would plausibly want. Newest first.
   `'unsafe-inline'`, or you have no CSP, this was invisible to you either
   way, but re-vendoring is still a good idea (this fix also drops needless
   per-render CSS reparsing).
+
+- **Feature: NIP-04 support, for drop-in parity with a real NIP-07
+  extension.** `window.nostr.nip04` (and the element-scoped
+  `nip04Encrypt`/`nip04Decrypt`) didn't exist at all before this — only
+  NIP-44 was implemented. A site (or its own legacy DM code path) calling
+  `window.nostr.nip04.encrypt(...)` while BitLogin was the active signer got
+  `Cannot read properties of undefined` instead of a working call. (`2838402`)
+  **Re-vendor if:** your site (or any third-party code running on it) uses
+  `window.nostr.nip04` — a real NIP-07 extension always has it, so anything
+  written against "whatever `window.nostr` provides" may already assume it's
+  there. No attribute/config changes needed; this is purely additive.
