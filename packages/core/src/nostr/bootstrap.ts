@@ -17,15 +17,24 @@ import { D_TAG_BOOTSTRAP_RELAYS, KIND_APP_DATA } from "./kinds.js";
 export const MAINTAINER_PUBLIC_KEY_HEX =
   "0000000000000000000000000000000000000000000000000000000000000000".slice(0, 64);
 
+// §15.6's publishAndVerify enforces a fixed floor (minAcks/minReadbacks = 2)
+// regardless of how many relays are configured, so this list needs enough
+// healthy redundancy that losing any one relay still clears that floor
+// comfortably -- a 3-relay list has zero margin the moment one relay is
+// unreachable, which is exactly what "add more vault relays" (the
+// registration failure message) is telling operators to fix.
 export const BUILTIN_VAULT_RELAYS: readonly string[] = [
   "wss://relay.damus.io",
   "wss://nos.lol",
-  "wss://relay.nostr.band"
+  "wss://relay.nostr.band",
+  "wss://nostr.wine",
+  "wss://relay.snort.social"
 ];
 
 export const BUILTIN_DISCOVERY_RELAYS: readonly string[] = [
   "wss://purplepag.es",
-  "wss://relay.nostr.band"
+  "wss://relay.nostr.band",
+  "wss://nostr-pub.wellorder.net"
 ];
 
 /** Well-known static HTTPS fallback URLs for the signed relay-list document (§19.1). */
