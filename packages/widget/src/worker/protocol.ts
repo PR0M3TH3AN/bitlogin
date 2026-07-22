@@ -157,6 +157,12 @@ export interface SessionStatusResult {
   everydayPublicKey?: string;
 }
 
+export interface RestoreSessionResult {
+  restored: boolean;
+  everydayPublicKey?: string;
+  accountId?: string;
+}
+
 export type WorkerActionMap = {
   configure: [ConfigurePayload, Record<string, never>];
   register: [RegisterPayload, RegisterResult];
@@ -176,6 +182,7 @@ export type WorkerActionMap = {
   buildRecoveryExport: [Record<string, never>, unknown];
   repairReplicas: [Record<string, never>, RepairReplicasResult];
   getSessionStatus: [Record<string, never>, SessionStatusResult];
+  restoreSession: [Record<string, never>, RestoreSessionResult];
   logout: [Record<string, never>, Record<string, never>];
 };
 

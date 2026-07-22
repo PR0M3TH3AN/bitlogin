@@ -21,6 +21,7 @@ import {
 import { RelayPool, BUILTIN_VAULT_RELAYS, BUILTIN_DISCOVERY_RELAYS, encodeNsec, encodeNpub, type NostrEvent } from "@bitlogin/core/nostr";
 import { getPublicKeyHex } from "@bitlogin/core/crypto";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
+import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
 import type {
   WorkerRequest,
   WorkerResponse,
@@ -87,6 +88,30 @@ function clearSession(): void {
   }
 }
 
+// Caches the current session (§21) so a later page load can restore it via
+// "restoreSession" instead of asking for the login name + password again.
+// Best-effort and silent on any missing field -- every call site here runs
+// right after setting all five, so this only ever no-ops if IndexedDB itself
+// is unavailable (saveCachedSession's own concern, not this one's).
+async function persistSession(): Promise<void> {
+  if (
+    !session.everydayPrivateKey ||
+    !session.accountId ||
+    !session.recoveryPublicKey ||
+    !session.activeCredentialEvent ||
+    !session.activeRecoveryEvent
+  ) {
+    return;
+  }
+  await saveCachedSession(store, {
+    everydayPrivateKey: session.everydayPrivateKey,
+    accountId: session.accountId,
+    recoveryPublicKey: session.recoveryPublicKey,
+    activeCredentialEvent: session.activeCredentialEvent,
+    activeRecoveryEvent: session.activeRecoveryEvent
+  });
+}
+
 async function handle(action: string, payload: unknown): Promise<unknown> {
   switch (action) {
     case "configure": {
@@ -108,6 +133,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeCredentialEvent = result.credentialEvent;
       session.activeRecoveryEvent = result.recoveryEvent;
+      await persistSession();
       return {
         recoveryPhrase: result.recoveryPhrase,
         everydayPublicKey: result.everydayPublicKey,
@@ -146,6 +172,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeCredentialEvent = result.credentialEvent;
       session.activeRecoveryEvent = result.recoveryCapsuleEvent;
+      await persistSession();
       return {
         everydayPublicKey: result.everydayPublicKey,
         accountId: result.accountId,
@@ -193,6 +220,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       // The recovery phrase's signing key must not linger beyond the operations that need it (§7.1, §11.10).
       session.pendingRecovery.recoveryPrivateKey.fill(0);
       session.pendingRecovery = null;
+      await persistSession();
       return {
         locatorPublicKey: result.locatorPublicKey,
         credentialEventId: result.credentialEvent.id,
@@ -216,6 +244,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.activeCredentialEvent = result.newCredentialEvent;
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeRecoveryEvent = result.recoveryCapsuleEvent;
+      await persistSession();
       return {
         newLocatorPublicKey: result.newLocatorPublicKey,
         newGeneration: result.newGeneration,
@@ -306,8 +335,27 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       return { unlocked: !!session.signer, everydayPublicKey: session.signer?.getPublicKey() };
     }
 
+    // Called once, right after "configure", before the widget renders its welcome
+    // screen -- restores whatever persistSession() last cached for this origin, so
+    // a page reload doesn't ask for the login name + password again. A missing or
+    // corrupt cache is not an error: it just means the widget falls through to its
+    // normal welcome screen, exactly like it always has.
+    case "restoreSession": {
+      const cached = await loadCachedSession(store);
+      if (!cached) return { restored: false };
+      clearSession();
+      session.signer = new NostrSigner(cached.everydayPrivateKey);
+      session.everydayPrivateKey = cached.everydayPrivateKey;
+      session.accountId = cached.accountId;
+      session.recoveryPublicKey = cached.recoveryPublicKey;
+      session.activeCredentialEvent = cached.activeCredentialEvent;
+      session.activeRecoveryEvent = cached.activeRecoveryEvent;
+      return { restored: true, everydayPublicKey: session.signer.getPublicKey(), accountId: cached.accountId };
+    }
+
     case "logout": {
       clearSession();
+      await clearCachedSession(store);
       return {};
     }
 

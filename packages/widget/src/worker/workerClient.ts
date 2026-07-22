@@ -112,6 +112,9 @@ export class WorkerClient {
   getSessionStatus() {
     return this.call("getSessionStatus", {});
   }
+  restoreSession() {
+    return this.call("restoreSession", {});
+  }
   logout() {
     return this.call("logout", {});
   }

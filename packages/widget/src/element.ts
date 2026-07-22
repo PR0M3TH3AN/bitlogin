@@ -118,7 +118,9 @@ export class BitLoginAuthElement extends HTMLElement {
     const config = readConfigFromElement(this);
     this.vaultRelayUrls = config.vaultRelayUrls ?? [];
     this.discoveryRelayUrls = config.discoveryRelayUrls ?? [];
-    void this.worker.configure({ vaultRelayUrls: this.vaultRelayUrls, discoveryRelayUrls: this.discoveryRelayUrls });
+    void this.worker
+      .configure({ vaultRelayUrls: this.vaultRelayUrls, discoveryRelayUrls: this.discoveryRelayUrls })
+      .then(() => this.tryRestoreSession());
 
     this.root.addEventListener("click", (e) => this.onClick(e));
     this.root.addEventListener("submit", (e) => this.onSubmit(e));
@@ -663,6 +665,34 @@ export class BitLoginAuthElement extends HTMLElement {
     const loginName = this.field("loginName").trim().toLowerCase();
     const password = this.field("password");
     await this.attemptLogin(loginName, password);
+  }
+
+  /**
+   * Called once per connectedCallback, right after "configure" -- restores whatever
+   * a prior login/register/rotate cached locally (§21), so a page reload lands
+   * straight on the dashboard instead of asking for the login name + password
+   * again. Silent by design: no flashSuccess() stamp (that's reserved for a
+   * deliberate action the user just took) and no offerToSaveCredential (there's
+   * no password in hand to save). If the welcome screen already rendered by the
+   * time this resolves, goto() just re-renders over it -- a brief flash, not a
+   * correctness issue.
+   */
+  private async tryRestoreSession(): Promise<void> {
+    try {
+      const result = await this.worker.restoreSession();
+      if (!result.restored || !result.everydayPublicKey) return;
+      this.session = {
+        publicKey: result.everydayPublicKey,
+        npub: encodeNpub(result.everydayPublicKey),
+        accountId: result.accountId
+      };
+      this.noteSignerClaim(this.claimSigner());
+      this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: result.everydayPublicKey } }));
+      this.goto("dashboard");
+    } catch {
+      // No cached session, or the worker/IndexedDB isn't available -- fall
+      // through to the normal welcome screen already rendered.
+    }
   }
 
   /**
