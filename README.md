@@ -194,6 +194,38 @@ record to DNS-only (grey cloud) rather than proxied — a proxying layer in
 front of Vercel's own edge can interfere with certificate issuance and
 routing.
 
+## Updating your integration
+
+There's no npm package or auto-updating CDN release yet (see "Deployment"
+above) — each site vendors its own copy of the built widget, so **updates to
+this repo do not automatically reach a site that already integrated
+BitLogin.** This is deliberate, not an oversight: a shared script every site
+loads live would mean a single bad or compromised deploy here breaks (or
+worse, compromises) every consuming site at once, with no per-site review
+window. Since this widget handles private key crypto, that trade is worth
+the manual step.
+
+Check `CHANGELOG.md` periodically (or whenever a site reports an auth issue)
+for entries relevant to your integration — each one says whether it applies
+to sites using the default built-in relay list vs. a custom one, and similar
+integration-relevant conditions. To pull in a fix or update:
+
+```bash
+# from your site's repo, with a sibling ../bitlogin checkout pulled to the
+# commit you want (git log / CHANGELOG.md to pick one)
+node scripts/build-bitlogin-widget.mjs
+# or, if bitlogin isn't checked out as a sibling directory:
+BITLOGIN_ENTRY=/path/to/bitlogin node scripts/build-bitlogin-widget.mjs
+```
+
+This rebuilds `@bitlogin/core`/`@bitlogin/widget` if needed and copies the
+built `bitlogin.js`/`cryptoWorker.js`/shared-chunk output verbatim into your
+site's `vendor/bitlogin/` (or `src/vendor/bitlogin/`), alongside a
+`vendor/bitlogin.integrity.json` recording the exact file hashes vendored.
+Diff that file before and after to confirm what actually changed, then
+commit, test, and deploy through your site's normal process — the whole
+point of vendoring is that this is a reviewed step, not an automatic one.
+
 ## What's implemented
 
 This build covers the protocol's Phase 0 (cryptographic core + test vectors)
