@@ -47,10 +47,20 @@ deployment above.
   call either manually. Without this, `window.nostr` would stay pointed at
   a signed-out BitLogin provider forever, blocking a switch to another
   method without a page reload.
+- `requestNwcConnection({ appName, reason })` on the element — asks the user
+  to share an NWC wallet connection with the page's origin and resolves the
+  full `nostr+walletconnect://` URI (or null if declined). Handles sign-in,
+  one-tap approval for an origin-bound stored connection (connections are
+  encrypted Connection Vault records that follow the user across devices),
+  or first-time import via Bitcoin Connect's chooser / a pasted URI. REVEAL
+  mode: the origin receives the full bearer credential — wallet-side budgets
+  are the real security boundary. Requires `style-src-attr 'unsafe-inline'`
+  in the host CSP. Fires `bitlogin-connection-granted` after each share.
 - Events on the element: `bitlogin-login` (`detail.publicKey`),
   `bitlogin-logout`, `bitlogin-signer-claimed`, `bitlogin-signer-released`
   (the last also fires on `window` when triggered via
-  `window.bitlogin.releaseSigner()`).
+  `window.bitlogin.releaseSigner()`), `bitlogin-connection-granted`
+  (`detail.origin`).
 - Private keys never leave a dedicated Web Worker; the main thread only ever
   sees public keys, signed events, and ciphertext.
 
