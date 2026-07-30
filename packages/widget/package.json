@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bitlogin/core": "*"
+    "@bitlogin/core": "*",
+    "@getalby/bitcoin-connect": "^3.12.3"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

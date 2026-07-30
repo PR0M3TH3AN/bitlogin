@@ -80,6 +80,31 @@ element instance (`getPublicKey`, `signEvent`, `nip44Encrypt`, `nip44Decrypt`)
 its own widget instance, since `window.nostr` is a single global slot that
 whichever provider signed in last currently owns.
 
+**Wallet connections (Connection Vault, reveal mode).** An app can ask the
+user to share an NWC wallet connection with its origin:
+
+```javascript
+const uri = await document.querySelector("bitlogin-auth")
+  .requestNwcConnection({ appName: "Satisfied", reason: "Pay for meal analysis" });
+if (uri) payWith(uri); // full nostr+walletconnect:// URI, or null if declined
+```
+
+The widget owns the whole ceremony: sign-in first if needed, a one-tap
+approval when the account already has a connection bound to this origin
+(that's the new-phone moment the vault exists for), or a guided import —
+Bitcoin Connect's wallet chooser (loaded lazily; it never downloads unless
+the flow opens) or a pasted URI — stored as an encrypted vault record and
+restored on every device. Stated plainly: this is **reveal mode**. The
+requesting origin receives the full bearer credential and everything its
+wallet-side budget allows; an embedded same-origin widget cannot broker
+(`docs/connection-vault.md` §12.3), so it does not pretend to. Encourage
+users toward budget-capped connections — the wallet's own budget is the real
+security boundary. Users manage and revoke grants from the dashboard's
+"Wallet connections" screen. A `bitlogin-connection-granted` event fires on
+the element after each share. Hosts using this flow need one extra CSP line,
+`style-src-attr 'unsafe-inline'` (Bitcoin Connect's components set inline
+style attributes; a hash cannot cover those).
+
 **Integration gotcha:** the element's `disconnectedCallback` terminates its
 crypto Web Worker (that's the correct cleanup when the element is genuinely
 being removed). If your host app re-renders its own DOM by resetting an

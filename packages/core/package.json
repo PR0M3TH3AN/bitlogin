@@ -13,7 +13,8 @@
     "./nostr": "./dist/nostr/index.js",
     "./capsules": "./dist/capsules/index.js",
     "./account": "./dist/account/index.js",
-    "./storage": "./dist/storage/index.js"
+    "./storage": "./dist/storage/index.js",
+    "./vault": "./dist/vault/index.js"
   },
   "scripts": {
     "build": "tsc -b",

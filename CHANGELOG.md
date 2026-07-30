@@ -8,6 +8,18 @@ would plausibly want. Newest first.
 
 ## 2026-07-30
 
+- **Widget: `requestNwcConnection()` — the Connection Vault authorization
+  layer (reveal mode).** Apps ask for a wallet; the widget owns sign-in,
+  one-tap approval for an origin-bound connection, or guided import via
+  Bitcoin Connect's chooser (lazy chunks — never downloaded unless the flow
+  opens) or a pasted URI, stored as an encrypted vault record. Dashboard
+  gains a "Wallet connections" management screen (revoke app access vs
+  remove-from-BitLogin, honestly distinguished). The vault root now rides
+  the encrypted session cache, so restored sessions can use connections
+  without re-login; the sudo key is never cached. New deploy note: the
+  widget now ships FIVE files (two extra lazy chunks) that must travel
+  together, and hosts using the wallet flow need `style-src-attr
+  'unsafe-inline'` in their CSP.
 - **Connection Vault protocol layer in `@bitlogin/core`** (`src/vault/`):
   encrypted per-connection records signed by a derived vault identity, the
   finalized §CV6 key hierarchy with pinned test vectors, the NWC credential

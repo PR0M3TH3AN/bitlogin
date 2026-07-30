@@ -7,8 +7,12 @@
 (`src/vault/`, plus the capsule fields in `src/capsules/` and the migration in
 `src/account/enableVault.ts`), with test vectors pinned in
 `src/vault/vault.test.ts` and protocol round trips in `vault.e2e.test.ts`.
-The application-authorization layer (§12: consent UI, grants, Connected-apps
-management) is **not yet implemented** — it is the widget generation's work.
+The application-authorization layer (§12) is implemented in `@bitlogin/widget`
+in **reveal mode** for NWC: `requestNwcConnection()` with consent and
+one-tap origin-bound approval, Bitcoin Connect as the lazy-loaded wallet
+chooser, and a "Wallet connections" management screen. Brokered mode waits
+for a real execution boundary (§12.3). Personal-tier UI (sudo ceremony) is
+not yet built.
 See §18 for the decisions finalized at implementation time, including the
 **sensitivity-tier model and the sudo key**, which supersede this document
 where they differ. The companion `vault-ux.md` holds the user-experience

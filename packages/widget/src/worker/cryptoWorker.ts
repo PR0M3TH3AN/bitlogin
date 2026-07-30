@@ -19,9 +19,18 @@ import {
   type RecoveredIdentity
 } from "@bitlogin/core/account";
 import { RelayPool, BUILTIN_VAULT_RELAYS, BUILTIN_DISCOVERY_RELAYS, encodeNsec, encodeNpub, type NostrEvent } from "@bitlogin/core/nostr";
-import { getPublicKeyHex } from "@bitlogin/core/crypto";
+import { getPublicKeyHex, base64urlToBytes, wipe } from "@bitlogin/core/crypto";
+import {
+  VaultSession,
+  parseNwcUri,
+  toNwcUri,
+  validateNwcCredential,
+  type DecryptedConnectionRecord,
+  type NwcCredential
+} from "@bitlogin/core/vault";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
+import type { VaultConnectionSummary } from "./protocol.js";
 import type {
   WorkerRequest,
   WorkerResponse,
@@ -48,6 +57,14 @@ interface SessionState {
   activeCredentialEvent: NostrEvent | null;
   activeRecoveryEvent: NostrEvent | null;
   pendingRecovery: RecoveredIdentity | null;
+  /** Connection Vault root (§CV5.2), or null when the account predates the
+   *  vault OR the restored cache predates the field — vaultKnown tells the
+   *  two apart. The SUDO key is deliberately NOT session state: personal-tier
+   *  records are out of scope for the widget until a sudo ceremony exists,
+   *  and the key is wiped the moment a login result delivers it. */
+  connectionVaultRoot: Uint8Array | null;
+  vaultKnown: boolean;
+  vault: VaultSession | null;
 }
 
 const session: SessionState = {
@@ -57,7 +74,10 @@ const session: SessionState = {
   recoveryPublicKey: null,
   activeCredentialEvent: null,
   activeRecoveryEvent: null,
-  pendingRecovery: null
+  pendingRecovery: null,
+  connectionVaultRoot: null,
+  vaultKnown: false,
+  vault: null
 };
 
 let vaultRelayUrls: string[] = [...BUILTIN_VAULT_RELAYS];
@@ -81,11 +101,25 @@ function clearSession(): void {
   session.recoveryPublicKey = null;
   session.activeCredentialEvent = null;
   session.activeRecoveryEvent = null;
+  session.vault?.destroy();
+  session.vault = null;
+  if (session.connectionVaultRoot) session.connectionVaultRoot.fill(0);
+  session.connectionVaultRoot = null;
+  session.vaultKnown = false;
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
     session.pendingRecovery = null;
   }
+}
+
+/** Adopts vault material from a login/register/recovery result: keeps the
+ *  root, WIPES the sudo key immediately (see SessionState comment). */
+function adoptVaultMaterial(root: Uint8Array | undefined, sudoKey?: Uint8Array): void {
+  session.connectionVaultRoot = root ?? null;
+  session.vaultKnown = true;
+  session.vault = null;
+  if (sudoKey) wipe(sudoKey);
 }
 
 // Caches the current session (§21) so a later page load can restore it via
@@ -108,8 +142,67 @@ async function persistSession(): Promise<void> {
     accountId: session.accountId,
     recoveryPublicKey: session.recoveryPublicKey,
     activeCredentialEvent: session.activeCredentialEvent,
-    activeRecoveryEvent: session.activeRecoveryEvent
+    activeRecoveryEvent: session.activeRecoveryEvent,
+    ...(session.connectionVaultRoot ? { connectionVaultRoot: session.connectionVaultRoot } : {}),
+    ...(session.vaultKnown ? { vaultEnabled: session.connectionVaultRoot !== null } : {})
   });
+}
+
+function requireVault(): VaultSession {
+  if (!session.signer) throw new Error("No identity is unlocked in this session.");
+  if (!session.connectionVaultRoot) {
+    throw new Error(
+      session.vaultKnown
+        ? "This account predates the Connection Vault. Enable it from your BitLogin account manager (recovery phrase required)."
+        : "Sign in again to use wallet connections on this device."
+    );
+  }
+  session.vault ??= new VaultSession(session.connectionVaultRoot.slice());
+  return session.vault;
+}
+
+function summarize(decrypted: DecryptedConnectionRecord): VaultConnectionSummary {
+  const { record } = decrypted;
+  const summary: VaultConnectionSummary = {
+    connectionId: record.connection_id,
+    connectionType: record.connection_type,
+    label: record.label,
+    state: record.state,
+    origin: record.application_binding.origin,
+    createdAt: record.created_at,
+    updatedAt: record.updated_at
+  };
+  if (record.connection_type === "nwc" && record.state !== "deleted") {
+    const credential = record.credential as unknown as NwcCredential;
+    summary.walletPubkey = credential.wallet_pubkey;
+    summary.relayCount = credential.relays?.length;
+  }
+  return summary;
+}
+
+/** Fetch + decrypt the live (non-deleted) connections. */
+async function listLiveConnections(): Promise<{
+  vault: VaultSession;
+  connections: DecryptedConnectionRecord[];
+  rollbackWarnings: string[];
+}> {
+  const vault = requireVault();
+  const listed = await vault.listConnections({ relayUrls: vaultRelayUrls, store });
+  return {
+    vault,
+    connections: listed.connections.filter((c) => c.record.state !== "deleted"),
+    rollbackWarnings: listed.rollbackWarnings
+  };
+}
+
+async function findConnection(connectionId: string): Promise<{
+  vault: VaultSession;
+  connection: DecryptedConnectionRecord;
+}> {
+  const { vault, connections } = await listLiveConnections();
+  const connection = connections.find((c) => c.record.connection_id === connectionId);
+  if (!connection) throw new Error("That connection no longer exists.");
+  return { vault, connection };
 }
 
 async function handle(action: string, payload: unknown): Promise<unknown> {
@@ -133,6 +226,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeCredentialEvent = result.credentialEvent;
       session.activeRecoveryEvent = result.recoveryEvent;
+      adoptVaultMaterial(result.connectionVaultRoot, result.vaultSudoKey);
       await persistSession();
       return {
         recoveryPhrase: result.recoveryPhrase,
@@ -172,6 +266,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeCredentialEvent = result.credentialEvent;
       session.activeRecoveryEvent = result.recoveryCapsuleEvent;
+      adoptVaultMaterial(result.connectionVaultRoot, result.vaultSudoKey);
       await persistSession();
       return {
         everydayPublicKey: result.everydayPublicKey,
@@ -197,6 +292,12 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.accountId = recovered.accountId;
       session.recoveryPublicKey = recovered.recoveryPublicKey;
       session.activeRecoveryEvent = recovered.currentRecoveryEvent;
+      // §CV13.2 — the roots ride the recovery capsule; the sudo copy is not retained.
+      adoptVaultMaterial(
+        recovered.currentRecoveryPayload.connection_vault_root
+          ? base64urlToBytes(recovered.currentRecoveryPayload.connection_vault_root)
+          : undefined
+      );
       return {
         everydayPublicKey: recovered.everydayPublicKey,
         accountId: recovered.accountId,
@@ -350,12 +451,122 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.recoveryPublicKey = cached.recoveryPublicKey;
       session.activeCredentialEvent = cached.activeCredentialEvent;
       session.activeRecoveryEvent = cached.activeRecoveryEvent;
+      session.connectionVaultRoot = cached.connectionVaultRoot ?? null;
+      // vaultKnown only when the cache recorded a definitive answer; an old
+      // cache entry leaves it false so requireVault says "sign in again"
+      // rather than falsely claiming the account has no vault.
+      session.vaultKnown = cached.vaultEnabled !== undefined;
       return { restored: true, everydayPublicKey: session.signer.getPublicKey(), accountId: cached.accountId };
     }
 
     case "logout": {
       clearSession();
       await clearCachedSession(store);
+      return {};
+    }
+
+    // ---- Connection Vault (connection-vault.md §12, reveal mode) ----
+
+    case "vaultStatus": {
+      if (!session.signer) return { enabled: false };
+      if (session.connectionVaultRoot) {
+        return { enabled: true, vaultPublicKey: requireVault().vaultPublicKey };
+      }
+      return { enabled: false, reason: session.vaultKnown ? "no-vault" : "stale-cache" };
+    }
+
+    case "vaultList": {
+      const { connections, rollbackWarnings } = await listLiveConnections();
+      return { connections: connections.map(summarize), rollbackWarnings };
+    }
+
+    case "vaultSaveNwc": {
+      const p = payload as { uri: string; label: string; origin: string | null };
+      const vault = requireVault();
+      const credential = parseNwcUri(p.uri);
+      const label = p.label.trim().slice(0, 120) || "Wallet connection";
+      const { record, event } = await vault.createConnection({
+        connection_type: "nwc",
+        tier: "connectable",
+        label,
+        credential: credential as unknown as { schema: string } & Record<string, unknown>,
+        application_binding: { origin: p.origin, app_pubkey: null }
+      });
+      const publish = await vault.publish({
+        event,
+        connectionId: record.connection_id,
+        relayUrls: vaultRelayUrls,
+        store
+      });
+      if (!publish.success) {
+        // Nothing was stored anywhere durable -- say so instead of letting the
+        // user believe a connection exists that no device can ever restore.
+        throw new Error("The connection could not be saved to enough relays. Please try again.");
+      }
+      const decrypted = await vault.decryptEvent(event);
+      return summarize(decrypted!);
+    }
+
+    case "vaultFindForOrigin": {
+      const p = payload as { origin: string };
+      const { connections } = await listLiveConnections();
+      const match = connections.find(
+        (c) =>
+          c.record.connection_type === "nwc" &&
+          c.record.state === "active" &&
+          c.record.application_binding.origin === p.origin
+      );
+      return { connection: match ? summarize(match) : null };
+    }
+
+    case "vaultRevealNwc": {
+      const p = payload as { connectionId: string };
+      const { connection } = await findConnection(p.connectionId);
+      if (connection.record.connection_type !== "nwc" || connection.record.state !== "active") {
+        throw new Error("That connection is not an active wallet connection.");
+      }
+      const credential = connection.record.credential as unknown as NwcCredential;
+      validateNwcCredential(credential);
+      return { uri: toNwcUri(credential) };
+    }
+
+    case "vaultSetBinding": {
+      const p = payload as { connectionId: string; origin: string | null };
+      const { vault, connection } = await findConnection(p.connectionId);
+      const { record, event } = await vault.updateConnection(connection, {
+        application_binding: { origin: p.origin, app_pubkey: null }
+      });
+      const publish = await vault.publish({
+        event,
+        connectionId: record.connection_id,
+        relayUrls: vaultRelayUrls,
+        store
+      });
+      if (!publish.success) throw new Error("The change could not reach enough relays. Please try again.");
+      const decrypted = await vault.decryptEvent(event);
+      return summarize(decrypted!);
+    }
+
+    case "vaultDelete": {
+      const p = payload as { connectionId: string };
+      const { vault, connection } = await findConnection(p.connectionId);
+      const { record, event } = await vault.deleteConnection(connection);
+      const publish = await vault.publish({
+        event,
+        connectionId: record.connection_id,
+        relayUrls: vaultRelayUrls,
+        store
+      });
+      if (!publish.success) throw new Error("The deletion could not reach enough relays. Please try again.");
+      // §CV11 step 3: best-effort NIP-09 request for the replaced event id.
+      try {
+        const deletion = vault.buildDeletionRequest(connection.event.id);
+        const pool = new RelayPool(vaultRelayUrls);
+        await pool.publishAll(deletion);
+        pool.closeAll();
+      } catch {
+        // The tombstone is the durable part; a failed NIP-09 broadcast is not.
+      }
       return {};
     }
 

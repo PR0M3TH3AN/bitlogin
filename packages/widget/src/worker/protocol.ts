@@ -163,6 +163,63 @@ export interface RestoreSessionResult {
   accountId?: string;
 }
 
+// ---- Connection Vault (connection-vault.md §12, phase D; reveal mode) ----
+
+export interface VaultStatusResult {
+  /** True when this session holds the vault root and can use connections. */
+  enabled: boolean;
+  /** Set when enabled=false: the account predates the vault ("no-vault") or
+   *  the root simply wasn't in the restored cache and a fresh sign-in would
+   *  load it ("stale-cache"). */
+  reason?: "no-vault" | "stale-cache";
+  vaultPublicKey?: string;
+}
+
+/** Everything the UI needs and nothing an app must not see: no secrets. */
+export interface VaultConnectionSummary {
+  connectionId: string;
+  connectionType: string;
+  label: string;
+  state: string;
+  origin: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** NWC display metadata (non-secret). */
+  walletPubkey?: string;
+  relayCount?: number;
+}
+
+export interface VaultListResult {
+  connections: VaultConnectionSummary[];
+  rollbackWarnings: string[];
+}
+
+export interface VaultSaveNwcPayload {
+  uri: string;
+  label: string;
+  origin: string | null;
+}
+
+export interface VaultFindForOriginPayload {
+  origin: string;
+}
+
+export interface VaultRevealNwcPayload {
+  connectionId: string;
+}
+export interface VaultRevealNwcResult {
+  uri: string;
+}
+
+export interface VaultSetBindingPayload {
+  connectionId: string;
+  origin: string | null;
+}
+
+export interface VaultDeletePayload {
+  connectionId: string;
+}
+
 export type WorkerActionMap = {
   configure: [ConfigurePayload, Record<string, never>];
   register: [RegisterPayload, RegisterResult];
@@ -184,6 +241,13 @@ export type WorkerActionMap = {
   getSessionStatus: [Record<string, never>, SessionStatusResult];
   restoreSession: [Record<string, never>, RestoreSessionResult];
   logout: [Record<string, never>, Record<string, never>];
+  vaultStatus: [Record<string, never>, VaultStatusResult];
+  vaultList: [Record<string, never>, VaultListResult];
+  vaultSaveNwc: [VaultSaveNwcPayload, VaultConnectionSummary];
+  vaultFindForOrigin: [VaultFindForOriginPayload, { connection: VaultConnectionSummary | null }];
+  vaultRevealNwc: [VaultRevealNwcPayload, VaultRevealNwcResult];
+  vaultSetBinding: [VaultSetBindingPayload, VaultConnectionSummary];
+  vaultDelete: [VaultDeletePayload, Record<string, never>];
 };
 
 export type WorkerAction = keyof WorkerActionMap;

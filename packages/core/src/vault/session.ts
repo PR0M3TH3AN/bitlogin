@@ -14,11 +14,14 @@
  */
 import { wipe } from "../crypto/memory.js";
 import type { NostrEvent } from "../nostr/event.js";
+import { buildDeletionRequest } from "../nostr/nip09.js";
+import { KIND_APP_DATA } from "../nostr/kinds.js";
 import type { KeyValueStore } from "../storage/interface.js";
 import {
   derivePersonalPrk,
   deriveVaultPrk,
   deriveVaultPublicKey,
+  deriveVaultSigningKey,
   newConnectionId
 } from "./derivation.js";
 import {
@@ -153,6 +156,18 @@ export class VaultSession {
   /** Trial-decrypts one event; personal-tier records resolve only inside a sudo window. */
   decryptEvent(event: NostrEvent): Promise<DecryptedConnectionRecord | null> {
     return decryptConnectionRecordEvent(event, this.vaultPrk, this.personalPrk ?? undefined);
+  }
+
+  /** §CV11 step 3: a NIP-09 deletion request for a replaced record event,
+   *  signed by the vault identity. Best-effort by contract — the encrypted
+   *  tombstone is the durable part of a deletion, this is the courtesy ask. */
+  buildDeletionRequest(eventIdToDelete: string, now?: number): NostrEvent {
+    return buildDeletionRequest({
+      privateKey: deriveVaultSigningKey(this.vaultPrk),
+      eventIdToDelete,
+      deletedEventKind: KIND_APP_DATA,
+      createdAt: now ?? Math.floor(Date.now() / 1000)
+    });
   }
 
   publish(params: {

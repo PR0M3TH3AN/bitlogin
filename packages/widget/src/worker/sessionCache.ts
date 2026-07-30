@@ -24,6 +24,14 @@ export interface CachedSessionData {
   recoveryPublicKey: string;
   activeCredentialEvent: NostrEvent;
   activeRecoveryEvent: NostrEvent;
+  /** Connection Vault root (§CV5.2). Same sensitivity class as the everyday
+   *  key, cached under the same encrypted-at-rest tradeoff. The SUDO key is
+   *  deliberately never cached: re-obtaining it is the sudo ceremony. */
+  connectionVaultRoot?: Uint8Array;
+  /** False when the logged-in capsule definitively carried no vault root, so
+   *  a restored session can tell "account predates the vault" apart from
+   *  "root missing because this cache entry predates the field". */
+  vaultEnabled?: boolean;
 }
 
 interface PlainSession {
@@ -32,6 +40,8 @@ interface PlainSession {
   recoveryPublicKey: string;
   activeCredentialEvent: NostrEvent;
   activeRecoveryEvent: NostrEvent;
+  connectionVaultRootHex?: string;
+  vaultEnabled?: boolean;
 }
 
 interface EncryptedSession {
@@ -80,7 +90,15 @@ export async function saveCachedSession(store: SessionStore, data: CachedSession
     accountId: data.accountId,
     recoveryPublicKey: data.recoveryPublicKey,
     activeCredentialEvent: data.activeCredentialEvent,
-    activeRecoveryEvent: data.activeRecoveryEvent
+    activeRecoveryEvent: data.activeRecoveryEvent,
+    ...(data.connectionVaultRoot
+      ? {
+          connectionVaultRootHex: Array.from(data.connectionVaultRoot, (byte) =>
+            byte.toString(16).padStart(2, "0")
+          ).join("")
+        }
+      : {}),
+    ...(data.vaultEnabled !== undefined ? { vaultEnabled: data.vaultEnabled } : {})
   };
   // Best-effort: a full disk or a browser blocking IndexedDB (some private-
   // browsing modes) shouldn't break the login/register/rotate call that
@@ -148,7 +166,16 @@ export async function loadCachedSession(store: SessionStore): Promise<CachedSess
       accountId: parsed.accountId,
       recoveryPublicKey: parsed.recoveryPublicKey,
       activeCredentialEvent: parsed.activeCredentialEvent,
-      activeRecoveryEvent: parsed.activeRecoveryEvent
+      activeRecoveryEvent: parsed.activeRecoveryEvent,
+      ...(typeof parsed.connectionVaultRootHex === "string"
+        ? {
+            connectionVaultRoot: Uint8Array.from(
+              parsed.connectionVaultRootHex.match(/.{1,2}/g) || [],
+              (pair) => Number.parseInt(pair, 16)
+            )
+          }
+        : {}),
+      ...(typeof parsed.vaultEnabled === "boolean" ? { vaultEnabled: parsed.vaultEnabled } : {})
     };
   } catch {
     // Corrupt or unrecognized cache entry -- treat as "no session," not an error.

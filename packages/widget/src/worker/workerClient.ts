@@ -16,7 +16,12 @@ import type {
   Nip44EncryptPayload,
   Nip44DecryptPayload,
   Nip04EncryptPayload,
-  Nip04DecryptPayload
+  Nip04DecryptPayload,
+  VaultSaveNwcPayload,
+  VaultFindForOriginPayload,
+  VaultRevealNwcPayload,
+  VaultSetBindingPayload,
+  VaultDeletePayload
 } from "./protocol.js";
 
 export class WorkerClient {
@@ -114,6 +119,27 @@ export class WorkerClient {
   }
   restoreSession() {
     return this.call("restoreSession", {});
+  }
+  vaultStatus() {
+    return this.call("vaultStatus", {});
+  }
+  vaultList() {
+    return this.call("vaultList", {});
+  }
+  vaultSaveNwc(payload: VaultSaveNwcPayload) {
+    return this.call("vaultSaveNwc", payload);
+  }
+  vaultFindForOrigin(payload: VaultFindForOriginPayload) {
+    return this.call("vaultFindForOrigin", payload);
+  }
+  vaultRevealNwc(payload: VaultRevealNwcPayload) {
+    return this.call("vaultRevealNwc", payload);
+  }
+  vaultSetBinding(payload: VaultSetBindingPayload) {
+    return this.call("vaultSetBinding", payload);
+  }
+  vaultDelete(payload: VaultDeletePayload) {
+    return this.call("vaultDelete", payload);
   }
   logout() {
     return this.call("logout", {});

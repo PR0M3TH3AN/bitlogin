@@ -13,6 +13,8 @@ import { WorkerClient } from "./worker/workerClient.js";
 import { createNip07Provider, type Nip07Provider } from "./provider.js";
 import { readConfigFromElement } from "./config.js";
 import { WIDGET_STYLES } from "./styles.js";
+import { chooseWalletViaBitcoinConnect } from "./vault/bitcoinConnect.js";
+import type { VaultConnectionSummary } from "./worker/protocol.js";
 
 type Screen =
   | "welcome"
@@ -27,7 +29,10 @@ type Screen =
   | "dashboard"
   | "change-password"
   | "export"
-  | "rollback-confirm";
+  | "rollback-confirm"
+  | "vault-consent"
+  | "vault-import"
+  | "vault-manage";
 
 interface ConfirmSlot {
   index: number;
@@ -97,6 +102,24 @@ export class BitLoginAuthElement extends HTMLElement {
     | { kind: "change-password"; oldPassword: string; newPassword: string }
     | null = null;
   private rollbackMessage = "";
+
+  // ---- Connection Vault request flow (vault-ux.md §2-§4, reveal mode) ----
+  // stage "auth": waiting for the user to sign in first; the goto("dashboard")
+  // hook resumes the request exactly once. stage "active": the vault screens
+  // own navigation until finishVaultRequest() settles the promise.
+  private vaultRequest: {
+    appName: string;
+    reason?: string;
+    origin: string;
+    stage: "auth" | "active";
+    resolve: (uri: string | null) => void;
+  } | null = null;
+  private vaultCandidate: VaultConnectionSummary | null = null;
+  /** True when the account cannot store the connection (no vault root); the
+   *  flow still hands the URI to the app, labeled as unsaved. */
+  private vaultUnsaved = false;
+  private vaultUnsavedReason: "no-vault" | "stale-cache" | undefined;
+  private vaultConnections: VaultConnectionSummary[] | null = null;
 
   constructor() {
     super();
@@ -187,6 +210,178 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   /**
+   * Connection Vault request API (connection-vault.md §12, vault-ux.md §2-§4).
+   *
+   * Asks the user to share an NWC wallet connection with THIS page's origin
+   * and resolves the raw `nostr+walletconnect://` URI, or null if the user
+   * declines or dismisses. REVEAL MODE, stated plainly: the caller receives
+   * the full bearer credential and everything its wallet-side budget allows —
+   * an embedded same-origin widget cannot broker (§CV12.3), so it does not
+   * pretend to. The consent copy tells the user the same thing.
+   *
+   * If nobody is signed in, the widget shows its sign-in flow first and
+   * resumes the request after. If the account already has a connection bound
+   * to this origin, the user sees a one-tap approval; otherwise a guided
+   * import (Bitcoin Connect chooser, or paste).
+   */
+  async requestNwcConnection(options: { appName?: string; reason?: string } = {}): Promise<string | null> {
+    if (this.vaultRequest) throw new Error("A wallet connection request is already in progress.");
+    const origin = window.location.origin;
+    const appName = options.appName?.trim() || window.location.hostname || "This app";
+    return new Promise<string | null>((resolve) => {
+      this.vaultRequest = { appName, reason: options.reason, origin, stage: "auth", resolve };
+      void (async () => {
+        try {
+          const status = await this.worker.getSessionStatus();
+          if (!status.unlocked) {
+            // Sign-in first; the goto("dashboard") hook resumes the request.
+            this.goto("login");
+            return;
+          }
+          await this.continueVaultRequest();
+        } catch (err) {
+          this.fail(err);
+        }
+      })();
+    });
+  }
+
+  /** Settles the pending request exactly once and returns to a neutral screen. */
+  private finishVaultRequest(uri: string | null): void {
+    const request = this.vaultRequest;
+    if (!request) return;
+    this.vaultRequest = null;
+    this.vaultCandidate = null;
+    this.vaultUnsaved = false;
+    this.vaultUnsavedReason = undefined;
+    request.resolve(uri);
+    if (uri !== null) {
+      this.dispatchEvent(
+        new CustomEvent("bitlogin-connection-granted", { detail: { origin: request.origin } })
+      );
+    }
+    this.goto(this.session ? "dashboard" : "welcome");
+  }
+
+  private async continueVaultRequest(): Promise<void> {
+    const request = this.vaultRequest;
+    if (!request) return;
+    request.stage = "active";
+    const status = await this.worker.vaultStatus();
+    if (!status.enabled) {
+      this.vaultUnsaved = true;
+      this.vaultUnsavedReason = status.reason;
+      this.goto("vault-import");
+      return;
+    }
+    this.vaultUnsaved = false;
+    const found = await this.worker.vaultFindForOrigin({ origin: request.origin });
+    if (found.connection) {
+      this.vaultCandidate = found.connection;
+      this.goto("vault-consent");
+    } else {
+      this.goto("vault-import");
+    }
+  }
+
+  private async approveVaultCandidate(): Promise<void> {
+    const candidate = this.vaultCandidate;
+    if (!candidate || !this.vaultRequest) return;
+    this.setBusy(true);
+    try {
+      const { uri } = await this.worker.vaultRevealNwc({ connectionId: candidate.connectionId });
+      this.setBusy(false);
+      this.finishVaultRequest(uri);
+      this.flashSuccess(this.screen, "Wallet shared");
+    } catch (err) {
+      this.setBusy(false);
+      this.fail(err);
+    }
+  }
+
+  private async runVaultBcChooser(): Promise<void> {
+    const request = this.vaultRequest;
+    if (!request) return;
+    this.setBusy(true);
+    try {
+      const uri = await chooseWalletViaBitcoinConnect(request.appName);
+      if (uri === null) {
+        this.setBusy(false);
+        return; // modal dismissed — stay on the import screen
+      }
+      await this.saveAndShareVaultUri(uri, this.field("vaultLabel"));
+    } catch (err) {
+      this.setBusy(false);
+      this.fail(err);
+    }
+  }
+
+  private async handleVaultImportSubmit(): Promise<void> {
+    const uri = this.field("vaultUri").trim();
+    if (!uri) return;
+    this.setBusy(true);
+    try {
+      await this.saveAndShareVaultUri(uri, this.field("vaultLabel"));
+    } catch (err) {
+      this.setBusy(false);
+      this.fail(err);
+    }
+  }
+
+  private async saveAndShareVaultUri(uri: string, labelDraft: string): Promise<void> {
+    const request = this.vaultRequest;
+    if (!request) return;
+    if (this.vaultUnsaved) {
+      // No vault root in this session: hand the URI to the app, honestly unsaved.
+      this.setBusy(false);
+      this.finishVaultRequest(uri);
+      return;
+    }
+    const label = labelDraft.trim() || `${request.appName} wallet`;
+    await this.worker.vaultSaveNwc({ uri, label, origin: request.origin });
+    this.setBusy(false);
+    this.finishVaultRequest(uri);
+    this.flashSuccess(this.screen, "Wallet connected");
+  }
+
+  private async loadVaultManage(): Promise<void> {
+    this.vaultConnections = null;
+    this.goto("vault-manage");
+    try {
+      const listed = await this.worker.vaultList();
+      this.vaultConnections = listed.connections;
+    } catch (err) {
+      this.errorMessage = err instanceof Error ? err.message : String(err);
+      this.vaultConnections = [];
+    }
+    this.render();
+  }
+
+  private async vaultUnbind(connectionId: string): Promise<void> {
+    this.setBusy(true);
+    try {
+      await this.worker.vaultSetBinding({ connectionId, origin: null });
+      this.busy = false;
+      await this.loadVaultManage();
+    } catch (err) {
+      this.setBusy(false);
+      this.fail(err);
+    }
+  }
+
+  private async vaultDeleteConnection(connectionId: string): Promise<void> {
+    this.setBusy(true);
+    try {
+      await this.worker.vaultDelete({ connectionId });
+      this.busy = false;
+      await this.loadVaultManage();
+    } catch (err) {
+      this.setBusy(false);
+      this.fail(err);
+    }
+  }
+
+  /**
    * (Re)installs this element's own provider as window.nostr, taking over from whatever is
    * currently there (an extension, a different BitLogin instance, or nothing). Called
    * automatically whenever a user completes sign-in through this widget — that's an
@@ -257,6 +452,17 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   private goto(screen: Screen): void {
+    // A pending wallet request hijacks the two navigation moments that decide
+    // its fate: landing on the dashboard after the sign-in it was waiting for
+    // (resume), and backing all the way out to welcome (decline).
+    if (screen === "dashboard" && this.vaultRequest?.stage === "auth") {
+      void this.continueVaultRequest().catch((err) => this.fail(err));
+      return;
+    }
+    if (screen === "welcome" && this.vaultRequest) {
+      this.finishVaultRequest(null);
+      return;
+    }
     this.screen = screen;
     this.errorMessage = undefined;
     this.render();
@@ -339,6 +545,23 @@ export class BitLoginAuthElement extends HTMLElement {
     if (!target) return;
     const action = target.dataset.action!;
     switch (action) {
+      case "vault-approve":
+        return this.approveVaultCandidate();
+      case "vault-different":
+        this.vaultCandidate = null;
+        this.goto("vault-import");
+        return;
+      case "vault-bc":
+        return this.runVaultBcChooser();
+      case "vault-cancel":
+        this.finishVaultRequest(null);
+        return;
+      case "goto-vault-manage":
+        return this.loadVaultManage();
+      case "vault-unbind":
+        return this.vaultUnbind(target.dataset.id!);
+      case "vault-delete":
+        return this.vaultDeleteConnection(target.dataset.id!);
       case "goto-create":
         this.loginName = "";
         this.importKey = "";
@@ -462,6 +685,8 @@ export class BitLoginAuthElement extends HTMLElement {
           return await this.handleRecoverNewCredentialsSubmit();
         case "change-password":
           return await this.handleChangePasswordSubmit();
+        case "vault-import":
+          return await this.handleVaultImportSubmit();
         default:
           return;
       }
@@ -1128,10 +1353,96 @@ export class BitLoginAuthElement extends HTMLElement {
               : ""
           }
           <div class="divider"></div>
+          <button class="secondary" type="button" data-action="goto-vault-manage">Wallet connections</button>
           <button class="secondary" type="button" data-action="goto-change-password">Rotate password</button>
           <button class="secondary" type="button" data-action="goto-export">Export identity</button>
           <button class="secondary" type="button" data-action="logout">Log out</button>
         `;
+
+      case "vault-consent": {
+        const request = this.vaultRequest;
+        const candidate = this.vaultCandidate;
+        if (!request || !candidate) return `<div class="notice error">No wallet request is in progress.</div>`;
+        const connectedOn = new Date(candidate.createdAt * 1000).toLocaleDateString();
+        return `
+          <h2>Share a wallet with ${escapeHtml(request.appName)}?</h2>
+          ${request.reason ? `<p class="sub">Reason given: ${escapeHtml(request.reason)}</p>` : ""}
+          ${this.renderError()}
+          <div class="credential-box">
+            <strong>${escapeHtml(candidate.label)}</strong><br />
+            Connected ${escapeHtml(connectedOn)} · wallet ${escapeHtml((candidate.walletPubkey ?? "").slice(0, 10))}…
+          </div>
+          <div class="notice info">${escapeHtml(request.appName)} will receive this connection and can spend within the budget your wallet enforces, until you revoke it from Wallet connections.</div>
+          <button class="primary" type="button" data-action="vault-approve" ${this.busy ? "disabled" : ""}>
+            ${this.busy ? '<span class="spinner"></span>Sharing…' : "Use this wallet"}
+          </button>
+          <button class="secondary" type="button" data-action="vault-different">Use a different wallet</button>
+          <button class="link" type="button" data-action="vault-cancel">Cancel</button>
+        `;
+      }
+
+      case "vault-import": {
+        const request = this.vaultRequest;
+        if (!request) return `<div class="notice error">No wallet request is in progress.</div>`;
+        const unsavedNotice = this.vaultUnsaved
+          ? `<div class="notice warn">${
+              this.vaultUnsavedReason === "no-vault"
+                ? "This account predates the Connection Vault, so the connection will be handed to the app but not saved to your account. Enable the vault from your account manager (recovery phrase required) to make wallets portable."
+                : "Sign in again to save connections to your account — until then the connection will be handed to the app but not saved."
+            }</div>`
+          : "";
+        return `
+          <h2>Connect a wallet for ${escapeHtml(request.appName)}</h2>
+          ${request.reason ? `<p class="sub">Reason given: ${escapeHtml(request.reason)}</p>` : ""}
+          ${unsavedNotice}
+          ${this.renderError()}
+          <button class="primary" type="button" data-action="vault-bc" ${this.busy ? "disabled" : ""}>
+            ${this.busy ? '<span class="spinner"></span>Waiting for your wallet…' : "Connect a wallet"}
+          </button>
+          <div class="divider"></div>
+          <form data-form="vault-import">
+            <label for="vaultUri">Or paste an NWC connection</label>
+            <input type="password" name="vaultUri" id="vaultUri" autocomplete="off" placeholder="nostr+walletconnect://…" />
+            <label for="vaultLabel">Name this connection</label>
+            <input type="text" name="vaultLabel" id="vaultLabel" autocomplete="off" maxlength="120" value="${escapeHtml(`${request.appName} wallet`)}" />
+            <button class="secondary" type="submit" ${this.busy ? "disabled" : ""}>
+              ${this.vaultUnsaved ? "Share without saving" : "Save and share"}
+            </button>
+          </form>
+          <div class="notice info">Set a spending budget on the wallet's own authorization page — the wallet is the only place a budget is actually enforced.</div>
+          <button class="link" type="button" data-action="vault-cancel">Cancel</button>
+        `;
+      }
+
+      case "vault-manage": {
+        const list = this.vaultConnections;
+        const rows =
+          list === null
+            ? `<p class="sub">Loading…</p>`
+            : list.length === 0
+              ? `<p class="sub">No connections stored yet. They're added when you connect a wallet inside an app.</p>`
+              : list
+                  .map(
+                    (c) => `
+          <div class="credential-box">
+            <strong>${escapeHtml(c.label)}</strong> <span class="sub">(${escapeHtml(c.connectionType)})</span><br />
+            ${c.origin ? `Linked to ${escapeHtml(c.origin)}` : "Not linked to an app"}
+            <div>
+              ${c.origin ? `<button class="link" type="button" data-action="vault-unbind" data-id="${escapeHtml(c.connectionId)}" ${this.busy ? "disabled" : ""}>Revoke app access</button>` : ""}
+              <button class="link" type="button" data-action="vault-delete" data-id="${escapeHtml(c.connectionId)}" ${this.busy ? "disabled" : ""}>Remove from BitLogin</button>
+            </div>
+          </div>`
+                  )
+                  .join("");
+        return `
+          <h2>Wallet connections</h2>
+          <p class="sub">Connections your apps use, stored encrypted on your account and restored on any device you sign in to.</p>
+          ${this.renderError()}
+          ${rows}
+          <div class="notice info">"Remove from BitLogin" deletes the stored copy only — the connection itself keeps working for any app that already has it. To revoke spending authority, delete the connection inside your wallet app.</div>
+          <button class="link" data-action="goto-dashboard">Back</button>
+        `;
+      }
 
       case "rollback-confirm":
         return `
