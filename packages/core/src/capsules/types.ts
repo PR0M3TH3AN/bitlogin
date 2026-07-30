@@ -14,8 +14,31 @@ export interface EncryptedEnvelope {
   ciphertext: string; // base64url
 }
 
+/**
+ * Connection Vault key material carried by BOTH capsules (connection-vault.md
+ * §5.2). Two independent 32-byte random roots, base64url:
+ *
+ * - `connection_vault_root` locates, signs, and encrypts connectable-tier
+ *   connection records (NWC, scoped S3). Cacheable for the session, so daily
+ *   wallet use never re-prompts.
+ * - `vault_sudo_key` is REQUIRED additional key material for personal-tier
+ *   records (stored passwords, secure notes). The honest-client contract: it
+ *   is never persisted outside the capsules and is held in memory only for
+ *   the duration of a sudo window — re-obtaining it costs a fresh capsule
+ *   decryption (an Argon2id run on the password, or the phrase), which is
+ *   what makes "re-enter your password to reveal" a real key ceremony rather
+ *   than a skippable UI gate (§SF2).
+ *
+ * Both fields appear together or not at all; absent means the account
+ * predates the vault (see enableConnectionVault).
+ */
+export interface VaultCapsuleFields {
+  connection_vault_root?: string; // base64url, 32 bytes
+  vault_sudo_key?: string; // base64url, 32 bytes
+}
+
 /** §12.1 — the credential capsule: infrequently changed access material only. */
-export interface CredentialPayload {
+export interface CredentialPayload extends VaultCapsuleFields {
   schema: typeof SCHEMA_CREDENTIAL_V1;
   account_id: string; // base64url, 128-bit random
   generation: number;
@@ -33,7 +56,7 @@ export interface CredentialPayload {
 }
 
 /** §12.3 — the recovery capsule: minimal and immutable outside the write moments of §14.1. */
-export interface RecoveryPayload {
+export interface RecoveryPayload extends VaultCapsuleFields {
   schema: typeof SCHEMA_RECOVERY_V1;
   account_id: string;
   recovery_generation: number;

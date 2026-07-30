@@ -6,6 +6,24 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-07-30
+
+- **Connection Vault protocol layer in `@bitlogin/core`** (`src/vault/`):
+  encrypted per-connection records signed by a derived vault identity, the
+  finalized §CV6 key hierarchy with pinned test vectors, the NWC credential
+  profile (lossless URI parse/export), relay sync with quorum readback and
+  per-record rollback detection, and the two-tier model — connectable
+  records vs sudo-gated personal records (`connection-vault.md` §18).
+- **Capsules gained paired optional fields** `connection_vault_root` and
+  `vault_sudo_key` (both or neither; validated). Registration mints them for
+  new accounts; `enableConnectionVault` is the phrase-gated, fail-closed,
+  idempotent migration for existing accounts. Login, password change, and
+  phrase recovery all carry them forward.
+  **Integration caveat:** a site on an OLDER vendored widget that performs a
+  password change will rebuild the credential capsule WITHOUT these fields,
+  stranding connectable records until a phrase ceremony repairs them —
+  update vendored copies before enabling the vault for users.
+
 ## 2026-07-21
 
 - **Fix: registration/login could fail quorum if a single built-in relay was

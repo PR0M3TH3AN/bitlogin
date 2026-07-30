@@ -35,6 +35,10 @@ export interface LoginResult {
   credentialEvent: NostrEvent;
   /** The signed recovery capsule event embedded in the credential capsule (§12.1, §24.4) — needed to build a recovery export or rebroadcast replicas without re-deriving anything from the phrase. */
   recoveryCapsuleEvent: NostrEvent;
+  /** Connection Vault root (§CV5.2) — undefined on accounts that have not run enableConnectionVault. Cacheable for the session. */
+  connectionVaultRoot?: Uint8Array;
+  /** Sudo key (§CV5.2). The caller must NOT cache this beyond a sudo window — obtaining it again is the ceremony. */
+  vaultSudoKey?: Uint8Array;
   /** Set when the accepted generation is lower than one this device has previously seen (§16.2 step 6). */
   rollbackWarning?: string;
   /** Set when responsive relays disagree about which capsule is newest (§16.2 step 8). */
@@ -86,6 +90,10 @@ export async function loginWithPassword(params: LoginParams): Promise<LoginResul
       generation: payload.generation,
       credentialEvent: result.best.event,
       recoveryCapsuleEvent: payload.recovery_capsule_event,
+      connectionVaultRoot: payload.connection_vault_root
+        ? base64urlToBytes(payload.connection_vault_root)
+        : undefined,
+      vaultSudoKey: payload.vault_sudo_key ? base64urlToBytes(payload.vault_sudo_key) : undefined,
       rollbackWarning,
       relayDisagreementWarning
     };

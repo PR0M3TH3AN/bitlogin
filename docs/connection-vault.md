@@ -1,9 +1,18 @@
 # BitLogin Connection Vault
 
-**Status:** Experimental design
-**Document version:** 0.1
-**Date:** July 22, 2026
-**Implementation status:** Not implemented
+**Status:** Design with core implementation
+**Document version:** 0.2
+**Date:** July 30, 2026
+**Implementation status:** §5–§11 and §13 are **implemented in `@bitlogin/core`**
+(`src/vault/`, plus the capsule fields in `src/capsules/` and the migration in
+`src/account/enableVault.ts`), with test vectors pinned in
+`src/vault/vault.test.ts` and protocol round trips in `vault.e2e.test.ts`.
+The application-authorization layer (§12: consent UI, grants, Connected-apps
+management) is **not yet implemented** — it is the widget generation's work.
+See §18 for the decisions finalized at implementation time, including the
+**sensitivity-tier model and the sudo key**, which supersede this document
+where they differ. The companion `vault-ux.md` holds the user-experience
+walkthroughs that act as Phase D's acceptance criteria.
 
 ## 1. Summary
 
@@ -525,3 +534,83 @@ At minimum:
 - Clearly distinguish BitLogin record deletion from provider-side revocation.
 - Assume a malicious or compromised client can steal all secrets available in
   that session.
+
+## 18. Implementation-time decisions (2026-07-30, v0.2)
+
+These were finalized when §5–§13 shipped in `@bitlogin/core`. Where this
+section and the earlier prose disagree, this section wins.
+
+### 18.1 Two capsule fields, not one
+
+The capsules gained **two** paired 32-byte roots, not just the vault root of
+§5.2:
+
+```json
+{
+  "connection_vault_root": "base64url-32-bytes",
+  "vault_sudo_key": "base64url-32-bytes"
+}
+```
+
+Validation enforces that they appear together or not at all (a capsule with
+one but not the other is corrupt and must not grant a session). Registration
+mints both for every new account; `enableConnectionVault` is the §5.3
+ceremony for accounts that predate them, requires the recovery phrase,
+writes the recovery capsule first, fails closed, and is idempotent — a retry
+after a partial failure REUSES roots found in either capsule rather than
+minting twice, because minting twice would strand existing records.
+
+### 18.2 The sensitivity-tier model and why the sudo key exists
+
+Records carry a `tier` field:
+
+- **`connectable`** (NWC, scoped S3): record keys derive from
+  `connection_vault_root` alone. The root is cacheable for the session, so
+  daily wallet use is silent. These are the records the §12 grant flow may
+  expose to application origins. The real security boundary is provider-side
+  policy — wallet budgets, scoped IAM keys — and import UIs must push users
+  toward it.
+- **`personal`** (stored passwords, secure notes): record keys additionally
+  require `vault_sudo_key` as HKDF input
+  (`personal_prk = HKDF-Extract(SHA256("bitlogin/connection-vault-personal/v1"), root || sudo_key)`).
+  The honest-client contract: the sudo key is never persisted outside the
+  capsules and is held in memory only during a sudo window
+  (`VaultSession.enableSudo`/`endSudo`, which wipe it). Re-opening a window
+  requires re-decrypting a capsule — a fresh Argon2id run on the password, or
+  the phrase — which is what makes "re-enter your password to reveal" a real
+  key ceremony rather than the cosmetic gate §SF2 forbids.
+  **The app-facing API must be structurally blind to this tier**: an embedded
+  widget cannot do exact-origin matching, and revealing one site's password
+  to another site's page is a phishing machine with a consent screen.
+  Password-manager UX (autofill, origin matching) waits for the extension
+  generation. Crypto seed phrases remain banned from the vault entirely.
+
+Tiers are invisible on the wire: identical envelopes, buckets, and d-tag
+shapes, decryption is trial-based. A distinguishable ciphertext would tell
+every relay which records are "the sensitive ones".
+
+### 18.3 Resolved open decisions (§16)
+
+1. **Capsule schema:** additive optional fields on the v1 schemas (§18.1) —
+   a new schema id would lock old clients out of login entirely.
+   **Mixed-version caveat:** an OLD client's password change rebuilds the
+   credential capsule without the vault fields and strands connectable
+   records until the next phrase ceremony repairs them. Deployments must
+   update vendored widgets before enabling the vault for users.
+2. **Padding buckets:** the capsule buckets (1024/2048/4096) are reused.
+   Every current profile fixture fits 1024 with room, and a shared bucket
+   set keeps NWC and S3 records indistinguishable by size.
+3. **Relay policy:** vault records publish to the account's configured vault
+   relays with the same publish-and-verify quorum bar as capsules
+   (`publishConnectionRecord` / `fetchConnectionRecordEvents`).
+4. **App binding:** `application_binding.origin` is implemented;
+   `app_pubkey` remains reserved.
+5. **Encrypted index:** not built; discovery lists the derived identity's
+   kind-30078 events and filters the `bitlogin:connection:` prefix locally.
+6. **Grants:** deferred to the widget authorization layer (Phase D).
+7. **S3C repository split:** deferred until a second implementation exists.
+
+Rollback resistance (§9) is per record: a local high-water mark stores the
+newest accepted `created_at` per connection id, and `fetchConnectionRecordEvents`
+withholds and reports anything older instead of serving it — a stale replica
+must never silently resurrect a revoked credential.

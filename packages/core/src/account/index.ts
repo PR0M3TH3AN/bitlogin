@@ -13,5 +13,6 @@ export * from "./create.js";
 export * from "./login.js";
 export * from "./recover.js";
 export * from "./changePassword.js";
+export * from "./enableVault.js";
 export * from "./exportImport.js";
 export * from "./signer.js";

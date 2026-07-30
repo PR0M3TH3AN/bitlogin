@@ -112,6 +112,12 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
     operational_public_key: oldPayload.operational_public_key,
     recovery_public_key: oldPayload.recovery_public_key,
     recovery_capsule_event: oldPayload.recovery_capsule_event,
+    // Carried forward like every other long-lived field (§CV5.2): dropping
+    // the vault roots on a password change would strand every connection
+    // record until the next phrase ceremony.
+    ...(oldPayload.connection_vault_root !== undefined
+      ? { connection_vault_root: oldPayload.connection_vault_root, vault_sudo_key: oldPayload.vault_sudo_key }
+      : {}),
     created_at: now,
     vault_relay_hints: params.vaultRelayUrls,
     protocol: {

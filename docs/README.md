@@ -33,14 +33,19 @@ identity and recovery model.
 
 ## Connection Vault
 
-The Connection Vault is an experimental design for portable application
-credentials. It deliberately stores mutable credentials outside the core
-identity capsules as independently encrypted records.
+The Connection Vault stores portable application credentials outside the core
+identity capsules as independently encrypted records. Its protocol layer
+(records, key hierarchy, relay sync, migration, tiers) is **implemented in
+`@bitlogin/core`'s `src/vault/`**; the widget authorization layer (consent
+UI, grants, Connected apps) is still to come.
 
 - [`connection-vault.md`](./connection-vault.md) — overall vault architecture,
-  key hierarchy, relay storage, authorization, recovery, and deletion
+  key hierarchy, relay storage, authorization, recovery, and deletion; §18
+  records the implementation-time decisions (tier model, sudo key)
+- [`vault-ux.md`](./vault-ux.md) — the agreed user-experience walkthroughs,
+  serving as the authorization layer's acceptance criteria
 - [`nwc-connections.md`](./nwc-connections.md) — Nostr Wallet Connect credential
-  profile
+  profile (parser/exporter implemented in `src/vault/nwc.ts`)
 - [`s3c-format.md`](./s3c-format.md) — portable `s3c1:` format for S3-compatible
   storage connections
 

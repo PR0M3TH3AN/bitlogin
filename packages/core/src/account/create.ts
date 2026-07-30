@@ -1,5 +1,5 @@
 /** Registration flow (§15). Recovery capsule is built and published before the credential capsule. */
-import { randomEntropy128, randomAccountId } from "../crypto/random.js";
+import { randomEntropy128, randomAccountId, randomBytes } from "../crypto/random.js";
 import { bytesToBase64url, hexToBytes } from "../crypto/encoding.js";
 import { generatePrivateKey, getPublicKeyHex, isValidScalar } from "../crypto/secp256k1.js";
 import { decodeNsec } from "../nostr/nip19.js";
@@ -44,6 +44,10 @@ export interface RegisterAccountResult {
   accountId: string;
   /** True when the everyday identity was imported (§SF10) rather than freshly generated. */
   imported: boolean;
+  /** Connection Vault root (§CV5.2, §CV6): derives the vault identity and connectable-tier record keys. */
+  connectionVaultRoot: Uint8Array;
+  /** Sudo key (§CV5.2): additional IKM for personal-tier records. Hold only inside a sudo window. */
+  vaultSudoKey: Uint8Array;
   credentialEvent: NostrEvent;
   recoveryEvent: NostrEvent;
   credentialPublish: PublishVerificationResult;
@@ -96,6 +100,12 @@ export async function registerAccount(params: RegisterAccountParams): Promise<Re
   const everydayPublicKey = getPublicKeyHex(everydayPrivateKey);
   const accountId = bytesToBase64url(randomAccountId());
 
+  // Connection Vault roots (§CV5.2): minted at registration so every new
+  // account gets the vault for free — the phrase-gated migration ceremony
+  // exists only for accounts that predate this field.
+  const connectionVaultRoot = randomBytes(32);
+  const vaultSudoKey = randomBytes(32);
+
   // §15.4 — recovery capsule first, previous_recovery_event_id null (registration is generation 0)
   const recoveryPayload: RecoveryPayload = {
     schema: SCHEMA_RECOVERY_V1,
@@ -105,6 +115,8 @@ export async function registerAccount(params: RegisterAccountParams): Promise<Re
     operational_private_key: bytesToBase64url(everydayPrivateKey),
     operational_public_key: everydayPublicKey,
     recovery_public_key: recoveryPublicKey,
+    connection_vault_root: bytesToBase64url(connectionVaultRoot),
+    vault_sudo_key: bytesToBase64url(vaultSudoKey),
     created_at: now,
     vault_relay_hints: params.vaultRelayUrls,
     protocol: { capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION, recovery_derivation: PROTOCOL_RECOVERY_DERIVATION }
@@ -126,6 +138,8 @@ export async function registerAccount(params: RegisterAccountParams): Promise<Re
     operational_public_key: everydayPublicKey,
     recovery_public_key: recoveryPublicKey,
     recovery_capsule_event: recoveryEvent,
+    connection_vault_root: bytesToBase64url(connectionVaultRoot),
+    vault_sudo_key: bytesToBase64url(vaultSudoKey),
     created_at: now,
     vault_relay_hints: params.vaultRelayUrls,
     protocol: {
@@ -172,6 +186,8 @@ export async function registerAccount(params: RegisterAccountParams): Promise<Re
     locatorPublicKey,
     accountId,
     imported,
+    connectionVaultRoot,
+    vaultSudoKey,
     credentialEvent,
     recoveryEvent,
     credentialPublish,

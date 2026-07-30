@@ -177,6 +177,15 @@ export async function completeRecoveryWithNewCredentials(params: CompleteRecover
   const normalizedLoginName = normalizeLoginName(params.newLoginName);
   const { recovered } = params;
 
+  // §CV13.2 — the vault roots ride the refresh so a phrase-only recovery
+  // restores connections, not just identity.
+  const vaultFields =
+    recovered.currentRecoveryPayload.connection_vault_root !== undefined
+      ? {
+          connection_vault_root: recovered.currentRecoveryPayload.connection_vault_root,
+          vault_sudo_key: recovered.currentRecoveryPayload.vault_sudo_key
+        }
+      : {};
   const refreshedPayload: RecoveryPayload = {
     schema: SCHEMA_RECOVERY_V1,
     account_id: recovered.accountId,
@@ -185,6 +194,7 @@ export async function completeRecoveryWithNewCredentials(params: CompleteRecover
     operational_private_key: bytesToBase64url(recovered.everydayPrivateKey),
     operational_public_key: recovered.everydayPublicKey,
     recovery_public_key: recovered.recoveryPublicKey,
+    ...vaultFields,
     created_at: nextCreatedAt(recovered.currentRecoveryEvent.created_at, now),
     vault_relay_hints: params.vaultRelayUrls,
     protocol: { capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION, recovery_derivation: PROTOCOL_RECOVERY_DERIVATION }
@@ -213,6 +223,7 @@ export async function completeRecoveryWithNewCredentials(params: CompleteRecover
     operational_public_key: recovered.everydayPublicKey,
     recovery_public_key: recovered.recoveryPublicKey,
     recovery_capsule_event: refreshedRecoveryEvent,
+    ...vaultFields,
     created_at: now,
     vault_relay_hints: params.vaultRelayUrls,
     protocol: {
