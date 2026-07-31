@@ -20,8 +20,8 @@
     "security:ci": "npm run build:demo && npm run typecheck && npm test && npm run security:audit"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
-    "vite": "^6.1.0",
-    "vitest": "^3.0.5"
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   }
 }
