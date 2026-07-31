@@ -130,8 +130,8 @@ export class WorkerClient {
   vaultSaveNwc(payload: VaultSaveNwcPayload) {
     return this.call("vaultSaveNwc", payload);
   }
-  vaultFindForOrigin(payload: VaultFindForOriginPayload) {
-    return this.call("vaultFindForOrigin", payload);
+  vaultFindForOrigin() {
+    return this.call("vaultFindForOrigin", {});
   }
   vaultRevealNwc(payload: VaultRevealNwcPayload) {
     return this.call("vaultRevealNwc", payload);

@@ -149,6 +149,24 @@ async function persistSession(): Promise<void> {
   });
 }
 
+/**
+ * The origin this worker actually runs in, derived rather than accepted.
+ *
+ * Every vault call used to take `origin` from the message payload, which made
+ * the per-origin binding -- the vault's ENTIRE authorization model -- advisory:
+ * a caller could claim any origin, bind another site's wallet to itself, or
+ * plant a wallet under a victim origin. The worker is same-origin with its
+ * page and can simply look. A dedicated worker's self.location.origin is the
+ * origin of the script's URL, which is the embedding page's origin.
+ */
+function selfOrigin(): string {
+  try {
+    return new URL(self.location.href).origin;
+  } catch {
+    return "";
+  }
+}
+
 function requireVault(): VaultSession {
   if (!session.signer) throw new Error("No identity is unlocked in this session.");
   if (!session.connectionVaultRoot) {
@@ -482,7 +500,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultSaveNwc": {
-      const p = payload as { uri: string; label: string; origin: string | null };
+      const p = payload as { uri: string; label: string };
+      const origin = selfOrigin();
       const vault = requireVault();
       const credential = parseNwcUri(p.uri);
       const label = p.label.trim().slice(0, 120) || "Wallet connection";
@@ -491,7 +510,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         tier: "connectable",
         label,
         credential: credential as unknown as { schema: string } & Record<string, unknown>,
-        application_binding: { origin: p.origin, app_pubkey: null }
+        application_binding: { origin, app_pubkey: null }
       });
       const publish = await vault.publish({
         event,
@@ -509,13 +528,13 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultFindForOrigin": {
-      const p = payload as { origin: string };
+      const origin = selfOrigin();
       const { connections } = await listLiveConnections();
       const match = connections.find(
         (c) =>
           c.record.connection_type === "nwc" &&
           c.record.state === "active" &&
-          c.record.application_binding.origin === p.origin
+          c.record.application_binding.origin === origin
       );
       return { connection: match ? summarize(match) : null };
     }
@@ -526,6 +545,16 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (connection.record.connection_type !== "nwc" || connection.record.state !== "active") {
         throw new Error("That connection is not an active wallet connection.");
       }
+      // THE authorization check. Reveal mode concedes that the requesting
+      // origin receives the credential IT was granted (connection-vault.md
+      // §12.3) -- it concedes nothing about OTHER origins' grants. Without
+      // this, any caller that can name a connection id (they appear in the
+      // management UI's markup) could pull a wallet the user connected to a
+      // different site entirely.
+      const boundOrigin = connection.record.application_binding.origin;
+      if (boundOrigin !== null && boundOrigin !== selfOrigin()) {
+        throw new Error("That connection belongs to a different site.");
+      }
       const credential = connection.record.credential as unknown as NwcCredential;
       validateNwcCredential(credential);
       return { uri: toNwcUri(credential) };
@@ -535,7 +564,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const p = payload as { connectionId: string; origin: string | null };
       const { vault, connection } = await findConnection(p.connectionId);
       const { record, event } = await vault.updateConnection(connection, {
-        application_binding: { origin: p.origin, app_pubkey: null }
+        application_binding: { origin, app_pubkey: null }
       });
       const publish = await vault.publish({
         event,
@@ -577,7 +606,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       // is warranted. The origin binding is refreshed silently — the offering
       // origin already HOLDS the credential (it supplied it), so binding is
       // bookkeeping for later one-tap approvals, not a new grant.
-      const p = payload as { uri: string; origin: string | null };
+      const p = payload as { uri: string };
+      const origin = selfOrigin();
       const credential = parseNwcUri(p.uri);
       const { vault, connections } = await listLiveConnections();
       const existing = connections.find(
@@ -586,9 +616,9 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
           sameNwcCredential(c.record.credential as unknown as NwcCredential, credential)
       );
       if (!existing) return { duplicate: false };
-      if (p.origin !== null && existing.record.application_binding.origin !== p.origin) {
+      if (existing.record.application_binding.origin !== origin) {
         const { record, event } = await vault.updateConnection(existing, {
-          application_binding: { origin: p.origin, app_pubkey: null }
+          application_binding: { origin, app_pubkey: null }
         });
         const publish = await vault.publish({
           event,

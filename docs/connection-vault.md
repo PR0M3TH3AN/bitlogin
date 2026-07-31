@@ -618,3 +618,41 @@ Rollback resistance (§9) is per record: a local high-water mark stores the
 newest accepted `created_at` per connection id, and `fetchConnectionRecordEvents`
 withholds and reports anything older instead of serving it — a stale replica
 must never silently resurrect a revoked credential.
+
+
+## 19. Known limitations (audit, 2026-07-31)
+
+An adversarial audit of the implementation produced fixes for the worst
+findings (origin binding now enforced worker-side; `destroy()` wipes the root
+and poisons the session; equal-timestamp rollback tie-break; per-record
+listing isolation; quorum enforced before the migration's mint decision).
+These remain OPEN and are the honest limits of the current build:
+
+1. **No compare-and-swap on capsule writes.** Two devices enabling the vault
+   concurrently can each mint a root and write it, leaving the credential and
+   recovery capsules disagreeing. Mitigation today: enable the vault once,
+   from one device. A `previous_recovery_event_id` precondition check on
+   write is the fix.
+2. **Rollback protection is per-device local state.** A fresh install has no
+   high-water marks, so the oldest record a hostile relay serves is accepted
+   and becomes the mark. A record-level generation counter inside the
+   encrypted payload would close this; the local mark cannot.
+3. **A tombstone does not destroy the prior ciphertext.** Record keys are
+   derived from the immutable `connection_id`, so the superseded event — which
+   still contains the credential — remains decryptable by anyone who later
+   obtains the vault root, and relays may retain it regardless of NIP-09.
+   Deleting a connection in BitLogin is therefore NOT revocation: revoke at
+   the wallet or provider, which §11 already says and which this makes
+   cryptographically concrete.
+4. **The sudo key ships with the vault root at every login**, because both
+   live in the same capsule under the same password-derived key. The
+   personal tier's separation is real against a stolen *record*, but the
+   "fresh Argon2id run to reveal" ceremony is a host-side convention, not a
+   cryptographic gate. Personal-tier UI should not ship until this is either
+   fixed (separate capsule) or the claim is weakened.
+5. **Fetches do not fail closed on quorum failure**, and `limit: 500`
+   truncates silently — a single relay can shape a new device's view of the
+   vault.
+6. **The high-water-mark store is plaintext and unauthenticated**, leaking the
+   derived vault pubkey and the connection inventory to same-origin storage
+   access, and is tamperable to disable rollback detection.

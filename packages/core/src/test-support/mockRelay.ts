@@ -29,6 +29,10 @@ export class MockRelay {
   private events = new Map<string, NostrEvent>();
   private plainEvents: NostrEvent[] = [];
   public requireAuthForKinds: Set<number> = new Set();
+  /** Pubkeys whose publishes are refused. Models the partially-hostile relay
+   *  that accepts some writes and drops others -- the case that makes write
+   *  ORDERING a safety property rather than a style choice. */
+  public refusePublishFrom: Set<string> = new Set();
 
   private constructor(wss: WebSocketServer, port: number) {
     this.wss = wss;
@@ -67,6 +71,10 @@ export class MockRelay {
         }
         if (this.requireAuthForKinds.has(event.kind)) {
           socket.send(JSON.stringify(["OK", event.id, false, "auth-required: publish requires NIP-42 AUTH"]));
+          return;
+        }
+        if (this.refusePublishFrom.has(event.pubkey)) {
+          socket.send(JSON.stringify(["OK", event.id, false, "blocked: refused by test relay"]));
           return;
         }
         this.store(event);

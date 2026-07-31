@@ -1,5 +1,6 @@
 /** Phrase recovery flow (§17), including the mandatory recovery-capsule refresh (§17.5). */
 import { getPublicKeyHex } from "../crypto/secp256k1.js";
+import { wipe } from "../crypto/memory.js";
 import { base64urlToBytes, bytesToBase64url } from "../crypto/encoding.js";
 import { isValidRecoveryPhrase, recoveryPhraseToSeed } from "../crypto/bip39.js";
 import { deriveRecoveryKeys, derivePasswordKeys, normalizeLoginName } from "./normalize.js";
@@ -14,7 +15,12 @@ import {
   SCHEMA_CREDENTIAL_V1,
   SCHEMA_RECOVERY_V1
 } from "../nostr/kinds.js";
-import { readRecoveryCapsule, checkRecoveryChainAcrossCandidates, type Candidate } from "./capsuleReader.js";
+import {
+  readCredentialCapsule,
+  readRecoveryCapsule,
+  checkRecoveryChainAcrossCandidates,
+  type Candidate
+} from "./capsuleReader.js";
 import { buildRecoveryCapsuleEvent, decryptRecoveryCapsuleEvent } from "../capsules/recoveryCapsule.js";
 import { buildCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
 import { PROTOCOL_CAPSULE_ENCRYPTION, PROTOCOL_PASSWORD_KDF, PROTOCOL_RECOVERY_DERIVATION } from "../capsules/types.js";
@@ -66,6 +72,10 @@ export async function recoverWithPhrase(params: RecoverWithPhraseParams): Promis
   }
   const bip39Seed = await recoveryPhraseToSeed(params.phrase);
   const { recoveryPrivateKey, capsuleKey } = deriveRecoveryKeys(bip39Seed);
+  // §11.10 -- the 64-byte master seed re-derives every recovery key; it must
+  // not outlive this line. The phrase STRING itself is unwipeable (JS strings
+  // are immutable), which is exactly why the caller is told to hold it briefly.
+  wipe(bip39Seed);
   const recoveryPublicKey = getPublicKeyHex(recoveryPrivateKey);
 
   const vaultPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: recoveryPrivateKey });
@@ -215,6 +225,36 @@ export async function completeRecoveryWithNewCredentials(params: CompleteRecover
 
   const { locatorPrivateKey, capsuleKey } = await derivePasswordKeys(params.newPassword, normalizedLoginName);
   const locatorPublicKey = getPublicKeyHex(locatorPrivateKey);
+
+  // §15.6 -- the SAME guard registration and rotation already carry, and it
+  // was missing only here. The new locator address is fully determined by
+  // (login name, new password); if a DIFFERENT account already lives there,
+  // publishing would replace and destroy it. Recovery is the one flow where
+  // the user is picking fresh credentials under stress, so it is exactly
+  // where a collision is most likely to be shrugged past.
+  const collisionPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: locatorPrivateKey });
+  let existingAtLocator;
+  try {
+    existingAtLocator = await readCredentialCapsule(
+      collisionPool,
+      locatorPublicKey,
+      capsuleKey,
+      params.timeoutMs
+    );
+  } finally {
+    collisionPool.closeAll();
+  }
+  if (!existingAtLocator.quorumMet) {
+    throw new RecoveryFailedError(
+      "Couldn't verify the new login name and password aren't already registered. Please retry, or add more vault relays."
+    );
+  }
+  if (existingAtLocator.candidates.length > 0) {
+    throw new RecoveryFailedError(
+      "Another account is already registered with that login name and password. Pick a different one."
+    );
+  }
+
   const credentialPayload: CredentialPayload = {
     schema: SCHEMA_CREDENTIAL_V1,
     account_id: recovered.accountId,

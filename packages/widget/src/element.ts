@@ -278,7 +278,7 @@ export class BitLoginAuthElement extends HTMLElement {
     const vaultStatus = await this.worker.vaultStatus();
     if (!vaultStatus.enabled) return "unavailable";
     const origin = window.location.origin;
-    const check = await this.worker.vaultOfferCheck({ uri, origin });
+    const check = await this.worker.vaultOfferCheck({ uri });
     if (check.duplicate) return "already-saved";
 
     const appName = options.appName?.trim() || window.location.hostname || "This app";
@@ -311,7 +311,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.setBusy(true);
     try {
       const label = this.field("vaultOfferLabel").trim() || offer.label;
-      await this.worker.vaultSaveNwc({ uri: offer.uri, label, origin: window.location.origin });
+      await this.worker.vaultSaveNwc({ uri: offer.uri, label });
       this.setBusy(false);
       this.finishVaultOffer("saved");
       this.flashSuccess(this.screen, "Wallet saved");
@@ -353,7 +353,7 @@ export class BitLoginAuthElement extends HTMLElement {
       return;
     }
     this.vaultUnsaved = false;
-    const found = await this.worker.vaultFindForOrigin({ origin: request.origin });
+    const found = await this.worker.vaultFindForOrigin();
     if (found.connection) {
       this.vaultCandidate = found.connection;
       this.goto("vault-consent");
@@ -416,7 +416,7 @@ export class BitLoginAuthElement extends HTMLElement {
       return;
     }
     const label = labelDraft.trim() || `${request.appName} wallet`;
-    await this.worker.vaultSaveNwc({ uri, label, origin: request.origin });
+    await this.worker.vaultSaveNwc({ uri, label });
     this.setBusy(false);
     this.finishVaultRequest(uri);
     this.flashSuccess(this.screen, "Wallet connected");
@@ -623,6 +623,14 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   private async onClick(e: Event): Promise<void> {
+    // A synthetic click is not consent. The shadow root is open (by design,
+    // for host theming), so a host page can find and .click() any button in
+    // here -- including "approve this wallet" and "reveal my nsec". isTrusted
+    // is false for anything script-dispatched. This does NOT make the widget
+    // a security boundary against its host (see connection-vault.md §12.3;
+    // the host can still style the real button under its own), but it closes
+    // the zero-effort version where no human ever sees a screen.
+    if (!e.isTrusted) return;
     const target = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
     if (!target) return;
     const action = target.dataset.action!;
@@ -752,6 +760,8 @@ export class BitLoginAuthElement extends HTMLElement {
 
   private async onSubmit(e: Event): Promise<void> {
     e.preventDefault();
+    if (!e.isTrusted) return; // see onClick: synthetic submits are not consent
+
     const form = e.target as HTMLFormElement;
     const formName = form.dataset.form;
     try {
@@ -1431,7 +1441,7 @@ export class BitLoginAuthElement extends HTMLElement {
         return `
           <h2>Signed in</h2>
           ${this.renderWarnings()}
-          <p class="pubkey">${this.session?.npub ?? ""}</p>
+          <p class="pubkey">${escapeHtml(this.session?.npub ?? "")}</p>
           ${this.renderError()}
           <button class="secondary" type="button" data-action="sign-test-event">Sign a test event</button>
           ${

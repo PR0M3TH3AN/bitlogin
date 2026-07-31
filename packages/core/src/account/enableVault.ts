@@ -98,6 +98,12 @@ export async function enableConnectionVault(
   } finally {
     recoveryPool.closeAll();
   }
+  // QUORUM IS LOAD-BEARING HERE, not decoration. The mint decision below is
+  // "did I see a root?", so a single stale or hostile relay answering with a
+  // pre-vault generation makes this flow mint a SECOND root and permanently
+  // orphan every existing connectable record -- the spendable NWC strings.
+  // The credential read above already enforces quorum; this one must too.
+  if (!recoveryRead.quorumMet) throw new AccountNotFoundError("quorum-not-met");
   if (!recoveryRead.best) throw new AccountNotFoundError("no-valid-candidate");
   const recoveryPayload = recoveryRead.best.payload!;
   if (recoveryPayload.account_id !== credentialPayload.account_id) {

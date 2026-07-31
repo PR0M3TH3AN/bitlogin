@@ -395,6 +395,35 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
   );
 
   it(
+    "a rotation that cannot publish the new capsule leaves the OLD password working (§18.1 ordering)",
+    async () => {
+      // The tombstone DESTROYS the old capsule. Publishing it before the new
+      // capsule is known durable can leave an account with neither password --
+      // recoverable only by phrase. Failing closed keeps the old one alive.
+      const loginName = "ordering";
+      const oldPassword = "old ordering password 41";
+      const newPassword = "new ordering password 42";
+      await registerAccount({ loginName, password: oldPassword, vaultRelayUrls });
+
+      // Every relay refuses the NEW locator's writes while still accepting
+      // reads and the tombstone -- the partially-hostile quorum case.
+      const newLocator = getPublicKeyHex(
+        (await derivePasswordKeys(newPassword, normalizeLoginName(loginName))).locatorPrivateKey
+      );
+      for (const relay of relays) relay.refusePublishFrom.add(newLocator);
+      await expect(
+        changePassword({ loginName, oldPassword, newPassword, vaultRelayUrls })
+      ).rejects.toThrow(/still works|quorum/i);
+      for (const relay of relays) relay.refusePublishFrom.clear();
+
+      // The old password must still sign in, and the new one must not exist.
+      const login = await loginWithPassword({ loginName, password: oldPassword, vaultRelayUrls });
+      expect(login.everydayPublicKey).toMatch(/^[0-9a-f]{64}$/);
+    },
+    45_000
+  );
+
+  it(
     "rotating to a new password that collides with another account under the same login name is refused (§18.1)",
     async () => {
       const loginName = "sharedname";

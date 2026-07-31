@@ -139,20 +139,49 @@ export function validateRecoveryPayload(payload: RecoveryPayload): void {
 export function checkRecoveryChainConsistency(
   generations: Array<{ eventId: string; recoveryGeneration: number; previousRecoveryEventId: string | null }>
 ): { consistent: boolean; warning?: string } {
-  const byGeneration = new Map(generations.map((g) => [g.recoveryGeneration, g]));
+  // §12.3 claims this detects gaps AND replays; the first version detected
+  // neither. A Map keyed by generation SILENTLY COLLAPSED two capsules
+  // claiming the same generation -- a fork, i.e. the exact replay signal --
+  // and a missing generation made the link check `if (prior && ...)` skip
+  // entirely, so {1, 3} with 2 absent reported "consistent".
+  const byGeneration = new Map<number, { eventId: string }>();
+  for (const entry of generations) {
+    const existing = byGeneration.get(entry.recoveryGeneration);
+    if (existing && existing.eventId !== entry.eventId) {
+      return {
+        consistent: false,
+        warning: `Two different recovery capsules both claim generation ${entry.recoveryGeneration}: possible fork, replay, or relay misbehavior.`
+      };
+    }
+    byGeneration.set(entry.recoveryGeneration, entry);
+  }
+
   const sorted = [...generations].sort((a, b) => a.recoveryGeneration - b.recoveryGeneration);
   for (let i = 1; i < sorted.length; i++) {
     const current = sorted[i]!;
-    const prior = byGeneration.get(current.recoveryGeneration - 1);
     if (current.previousRecoveryEventId === null) {
-      return { consistent: false, warning: `Generation ${current.recoveryGeneration} has a null previous-event link but is not the first generation.` };
-    }
-    if (prior && current.previousRecoveryEventId !== prior.eventId) {
       return {
         consistent: false,
-        warning: `Recovery generation chain is broken between generation ${prior.recoveryGeneration} and ${current.recoveryGeneration}: possible replay or relay misbehavior.`
+        warning: `Generation ${current.recoveryGeneration} has a null previous-event link but is not the first generation.`
+      };
+    }
+    const prior = byGeneration.get(current.recoveryGeneration - 1);
+    if (!prior) {
+      // A gap is not proof of misbehavior -- relays legitimately drop old
+      // generations -- but it means the chain CANNOT be verified across it,
+      // and reporting that as "consistent" was the lie worth fixing.
+      return {
+        consistent: false,
+        warning: `Recovery generation ${current.recoveryGeneration - 1} is missing, so the chain up to generation ${current.recoveryGeneration} cannot be verified.`
+      };
+    }
+    if (current.previousRecoveryEventId !== prior.eventId) {
+      return {
+        consistent: false,
+        warning: `Recovery generation chain is broken between generation ${current.recoveryGeneration - 1} and ${current.recoveryGeneration}: possible replay or relay misbehavior.`
       };
     }
   }
   return { consistent: true };
 }
+

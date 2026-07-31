@@ -1,6 +1,7 @@
 /** Login name normalization (§8.2) and password-derived key hierarchy (§7.3, §11.3, §11.4). */
 import { sha256 } from "@noble/hashes/sha2";
 import { hkdfExtract, hkdfExpand, labelSalt } from "../crypto/hkdf.js";
+import { wipe } from "../crypto/memory.js";
 import { scalarExpand } from "../crypto/scalarExpand.js";
 import { deriveArgon2id, normalizePasswordToBytes } from "../crypto/argon2id.js";
 import { concatBytes, utf8ToBytes } from "../crypto/encoding.js";
@@ -82,6 +83,12 @@ export async function derivePasswordKeys(password: string, normalizedLoginName: 
   const passwordPrk = hkdfExtract(labelSalt("bitlogin/password-root/v1"), passwordRoot);
   const locator = scalarExpand(passwordPrk, "bitlogin/password-locator-signing/v1");
   const capsuleKey = hkdfExpand(passwordPrk, "bitlogin/password-capsule-encryption/v1", 32);
+  // §11.10 -- the INTERMEDIATES die here, not at GC's convenience. passwordPrk
+  // alone re-derives both returned keys, and passwordRoot re-derives it, so a
+  // heap snapshot taken after this call must not contain either. (The returned
+  // keys are the caller's to wipe; the password string itself is immutable and
+  // unwipeable by construction, which is why it is converted to bytes once.)
+  wipe(passwordBytes, passwordRoot, passwordPrk);
   return { locatorPrivateKey: locator.scalar, capsuleKey };
 }
 
@@ -100,5 +107,8 @@ export function deriveRecoveryKeys(bip39Seed: Uint8Array): RecoveryDerivedKeys {
   const recoveryPrk = hkdfExtract(labelSalt("bitlogin/recovery-root/v1"), bip39Seed);
   const signing = scalarExpand(recoveryPrk, "bitlogin/recovery-signing/v1");
   const capsuleKey = hkdfExpand(recoveryPrk, "bitlogin/recovery-capsule-encryption/v1", 32);
+  // §11.10, as above: recoveryPrk re-derives both returned keys. The caller
+  // owns the bip39Seed it passed in (recover.ts wipes it after this returns).
+  wipe(recoveryPrk);
   return { recoveryPrivateKey: signing.scalar, capsuleKey };
 }

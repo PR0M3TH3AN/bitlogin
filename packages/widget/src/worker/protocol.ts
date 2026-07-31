@@ -197,12 +197,10 @@ export interface VaultListResult {
 export interface VaultSaveNwcPayload {
   uri: string;
   label: string;
-  origin: string | null;
 }
 
-export interface VaultFindForOriginPayload {
-  origin: string;
-}
+/** No origin field: the worker derives its own (see selfOrigin). */
+export type VaultFindForOriginPayload = Record<string, never>;
 
 export interface VaultRevealNwcPayload {
   connectionId: string;
@@ -222,7 +220,6 @@ export interface VaultDeletePayload {
 
 export interface VaultOfferCheckPayload {
   uri: string;
-  origin: string | null;
 }
 /** duplicate=true means the same wallet+secret is already stored; the worker
  *  has silently refreshed its origin binding, and no consent UI is needed —

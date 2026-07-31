@@ -47,10 +47,16 @@ export interface CreateConnectionParams {
 export class VaultSession {
   private vaultPrk: Uint8Array;
   private personalPrk: Uint8Array | null = null;
+  private destroyed = false;
+  private readonly connectionVaultRoot: Uint8Array;
   readonly vaultPublicKey: string;
 
-  constructor(private readonly connectionVaultRoot: Uint8Array) {
-    this.vaultPrk = deriveVaultPrk(connectionVaultRoot);
+  constructor(connectionVaultRoot: Uint8Array) {
+    // A private COPY: the caller's buffer is theirs to wipe on their own
+    // schedule, and destroy() must be able to erase this session's copy
+    // without reaching into memory it does not own.
+    this.connectionVaultRoot = connectionVaultRoot.slice();
+    this.vaultPrk = deriveVaultPrk(this.connectionVaultRoot);
     this.vaultPublicKey = deriveVaultPublicKey(this.vaultPrk);
   }
 
@@ -71,13 +77,29 @@ export class VaultSession {
     this.personalPrk = null;
   }
 
-  /** Wipes everything this session holds. The session is unusable after. */
+  /**
+   * Wipes everything this session holds, permanently.
+   *
+   * The ROOT is wiped too, not just the derived prk: the root regenerates the
+   * prk and (with a sudo key) the personal prk, so leaving it live made
+   * "wipes everything" false. And the session is marked destroyed rather than
+   * merely zeroed, because a zeroed prk is not inert -- deriveRecordKey and
+   * deriveVaultSigningKey over 32 zero bytes are deterministic, WORLD-
+   * COMPUTABLE values. A stale reference calling createConnection() after
+   * teardown would otherwise seal a wallet secret under a key any observer
+   * can derive, sign it with a publicly known identity, and report success.
+   * Failing loudly is the only safe behaviour.
+   */
   destroy(): void {
     this.endSudo();
-    wipe(this.vaultPrk);
+    wipe(this.vaultPrk, this.connectionVaultRoot);
+    this.destroyed = true;
   }
 
   private prkForTier(tier: ConnectionTier): Uint8Array {
+    if (this.destroyed) {
+      throw new Error("This vault session was destroyed; create a new one from the account's root.");
+    }
     if (tier === "connectable") return this.vaultPrk;
     if (!this.personalPrk) {
       throw new Error("Personal-tier records require an open sudo window (enableSudo).");
@@ -155,6 +177,9 @@ export class VaultSession {
 
   /** Trial-decrypts one event; personal-tier records resolve only inside a sudo window. */
   decryptEvent(event: NostrEvent): Promise<DecryptedConnectionRecord | null> {
+    if (this.destroyed) {
+      return Promise.reject(new Error("This vault session was destroyed; create a new one from the account's root."));
+    }
     return decryptConnectionRecordEvent(event, this.vaultPrk, this.personalPrk ?? undefined);
   }
 
@@ -162,6 +187,9 @@ export class VaultSession {
    *  signed by the vault identity. Best-effort by contract — the encrypted
    *  tombstone is the durable part of a deletion, this is the courtesy ask. */
   buildDeletionRequest(eventIdToDelete: string, now?: number): NostrEvent {
+    if (this.destroyed) {
+      throw new Error("This vault session was destroyed; create a new one from the account's root.");
+    }
     return buildDeletionRequest({
       privateKey: deriveVaultSigningKey(this.vaultPrk),
       eventIdToDelete,
@@ -198,14 +226,35 @@ export class VaultSession {
     relayUrls: string[];
     store: KeyValueStore;
     timeoutMs?: number;
-  }): Promise<{ connections: DecryptedConnectionRecord[]; rollbackWarnings: string[]; quorumMet: boolean }> {
+  }): Promise<{
+    connections: DecryptedConnectionRecord[];
+    rollbackWarnings: string[];
+    /** Event ids that failed to decrypt or validate. Surfaced, never silent. */
+    unreadable: string[];
+    quorumMet: boolean;
+  }> {
     const fetched = await this.fetchEvents(params);
     const connections: DecryptedConnectionRecord[] = [];
+    const unreadable: string[] = [];
     for (const event of fetched.events.values()) {
-      const decrypted = await this.decryptEvent(event);
-      if (decrypted) connections.push(decrypted);
+      // Per-record isolation. decryptConnectionRecordEvent THROWS on a bad
+      // signature, wrong author, malformed d-tag, id mismatch, or tier
+      // mismatch -- all correct strictness -- but without this catch a single
+      // malformed or future-version record made every OTHER connection,
+      // including working wallet credentials, unlistable on every device.
+      try {
+        const decrypted = await this.decryptEvent(event);
+        if (decrypted) connections.push(decrypted);
+      } catch {
+        unreadable.push(event.id);
+      }
     }
     connections.sort((a, b) => b.record.updated_at - a.record.updated_at);
-    return { connections, rollbackWarnings: fetched.rollbackWarnings, quorumMet: fetched.quorumMet };
+    return {
+      connections,
+      rollbackWarnings: fetched.rollbackWarnings,
+      unreadable,
+      quorumMet: fetched.quorumMet
+    };
   }
 }

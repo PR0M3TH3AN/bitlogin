@@ -140,6 +140,21 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
   });
   newPool.closeAll();
 
+  // ORDERING IS A SAFETY PROPERTY, not a style choice. The tombstone below
+  // DESTROYS the old capsule; publishing it before confirming the new one is
+  // durable can leave an account with NEITHER password working -- the new
+  // capsule missing quorum while the tombstone lands, recoverable only by
+  // phrase. A partially hostile relay set can induce that deliberately
+  // (accept the tombstone, drop the new capsule). Failing here instead leaves
+  // the OLD password working and the rotation simply retryable, which is the
+  // strictly safer end state.
+  if (!newCredentialPublish.success) {
+    throw new RegistrationFailedError(
+      "The new credential capsule did not reach the required relay acknowledgement and readback quorum. " +
+        "Your existing password still works; nothing was changed. Please retry."
+    );
+  }
+
   // §18.1 steps 4-5: mandatory tombstone + NIP-09 deletion at the OLD locator address.
   const tombstoneEvent = buildCredentialTombstoneEvent({
     oldLocatorPrivateKey: oldKeys.locatorPrivateKey,
@@ -158,12 +173,6 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
     oldPool.publishAll(deletionRequestEvent, params.timeoutMs)
   ]);
   oldPool.closeAll();
-
-  if (!newCredentialPublish.success) {
-    throw new RegistrationFailedError(
-      "The new credential capsule did not reach the required relay acknowledgement and readback quorum. Please retry."
-    );
-  }
 
   await raiseHighWaterMark(store, oldPayload.operational_public_key, { generation: newGeneration });
 

@@ -46,7 +46,13 @@ export async function raiseRecordHighWaterMark(
   observed: RecordHighWaterMark
 ): Promise<void> {
   const current = await getRecordHighWaterMark(store, vaultPubkey, connectionId);
-  if (current && current.createdAt >= observed.createdAt) return;
+  if (current && current.createdAt > observed.createdAt) return;
+  // Equal timestamps are NOT a no-op: two devices editing the same record in
+  // the same second both compute nextCreatedAt(T) = T+1, so a benign edit can
+  // land at the exact timestamp of a REVOCATION. Ties break on event id (the
+  // addressable-event convention) so the mark advances deterministically
+  // rather than depending on which write arrived first.
+  if (current && current.createdAt === observed.createdAt && current.eventId <= observed.eventId) return;
   await store.set(hwmKey(vaultPubkey, connectionId), JSON.stringify(observed));
 }
 
@@ -128,7 +134,15 @@ export async function fetchConnectionRecordEvents(params: {
   const rollbackWarnings: string[] = [];
   for (const [connectionId, event] of newestById) {
     const hwm = await getRecordHighWaterMark(params.store, vaultPubkey, connectionId);
-    if (hwm && event.created_at < hwm.createdAt) {
+    // Strict `<` alone let a same-second sibling of a revocation through
+    // forever (the relay may keep both events at one address). An equal
+    // timestamp is only acceptable from the SAME event, or a later-sorting
+    // id under the same tie-break the mark itself uses.
+    const stale =
+      hwm !== null &&
+      (event.created_at < hwm.createdAt ||
+        (event.created_at === hwm.createdAt && event.id < hwm.eventId));
+    if (stale) {
       rollbackWarnings.push(connectionId);
       continue;
     }

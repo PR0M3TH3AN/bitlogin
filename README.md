@@ -58,9 +58,23 @@ the site root.
 
 Once a user signs in, `window.nostr` is installed with the de facto NIP-07
 shape (`getPublicKey`, `signEvent`, `getRelays`, `nip44.encrypt/decrypt`), so
-existing Nostr web apps work against it unmodified. Private keys never leave
-the worker; the main thread only ever sees public keys, signed events, and
-ciphertext. See `packages/demo/public/docs.html` for the full integration
+existing Nostr web apps work against it unmodified. Private keys are held in
+the worker and are not handed to the main thread by the signing APIs — those
+return public keys, signed events, and ciphertext only.
+
+**Be precise about what that does and does not buy you.** The worker protects
+keys from *accidental* exposure through the normal API surface; it is not a
+boundary against the host page itself. A page that embeds `<bitlogin-auth>`
+runs same-origin with it and can reach the element's worker client directly,
+so a malicious or XSS-compromised host can call `exportIdentity` and obtain
+the `nsec`, and can synthesize UI events (the widget rejects untrusted ones,
+and can still be visually overlaid by host CSS). This is inherent to an
+embedded same-origin component — the same reason `docs/connection-vault.md`
+§12.3 says wallet credentials are *revealed*, not brokered. Treat the host
+page as trusted; embed BitLogin only in sites you control, and prefer the
+recovery phrase (never the exported nsec) as the durable backup. A
+cross-origin or extension build is what would change this, and is not
+shipped. See `packages/demo/public/docs.html` for the full integration
 guide, and `packages/demo/public/account.html` for a working example
 (create → confirm recovery phrase → sign an event → rotate password →
 export identity).
