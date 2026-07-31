@@ -121,8 +121,26 @@ function calcMac(hmacKey: Uint8Array, nonce: Uint8Array, ciphertext: Uint8Array)
   return hmac(sha256, hmacKey, concatBytes(nonce, ciphertext));
 }
 
-export function nip44Encrypt(conversationKey: Uint8Array, plaintext: string, nonceOverride?: Uint8Array): string {
-  const nonce = nonceOverride ?? randomBytes(32);
+/**
+ * Encrypts with a fresh 32-byte nonce from the CSPRNG.
+ *
+ * There is deliberately no caller-supplied-nonce parameter on this function
+ * (§11.1). NIP-44 is ChaCha20: reusing a nonce under one conversation key
+ * recovers plaintext outright, so "pass your own nonce" is not a knob that
+ * belongs on the public surface. Tests that must pin a nonce use
+ * `__unsafeNip44EncryptWithNonce` from ./testing.js, which is not exported from
+ * the package.
+ */
+export function nip44Encrypt(conversationKey: Uint8Array, plaintext: string): string {
+  return encryptWithNonce(conversationKey, plaintext, randomBytes(32));
+}
+
+/** @internal Shared by nip44Encrypt and the test-only entry point. */
+export function encryptWithNonce(
+  conversationKey: Uint8Array,
+  plaintext: string,
+  nonce: Uint8Array,
+): string {
   if (nonce.length !== 32) throw new Error("NIP-44 nonce must be exactly 32 bytes.");
   const { chachaKey, chachaNonce, hmacKey } = deriveMessageKeys(conversationKey, nonce);
   const padded = pad(utf8ToBytes(plaintext));

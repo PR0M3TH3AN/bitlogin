@@ -14,10 +14,16 @@ avoid modulo bias. Three hardening items, in order:
   a zero-filling stub in place of the throw turns five of them red, and
   swapping rejection sampling for bare modulo gives chi-square 5614 against a
   threshold of 147.
-- **M1** — `nonceOverride` / `ivOverride` are reachable from the public
-  `@bitlogin/core/crypto` surface. Move behind a non-exported test module.
+- **M1 — done.** `nip44Encrypt` / `nip04Encrypt` no longer take a nonce or IV;
+  the capability lives in the non-exported `crypto/testing.ts`, and
+  `crypto/index.ts` re-exports explicitly instead of `export *`. Only one test
+  ever used an override and `ivOverride` had no callers, so nothing was lost.
+  Verified from a real consumer against the built package: all three deep-import
+  routes fail with `ERR_PACKAGE_PATH_NOT_EXPORTED`. `knownAnswer.test.ts` green
+  throughout — the derivation chain is untouched.
 - **L1** — `Math.random` in the backup-quiz word picker (`element.ts:1471`).
   Not a secret, but it forces a standing exception in any `Math.random` ban rule.
+  Last remaining item from the entropy audit in this repo.
 
 ## Owner action items
 

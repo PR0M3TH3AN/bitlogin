@@ -17,14 +17,33 @@ export function getSharedSecret(privateKey: Uint8Array, peerPublicKeyHex: string
   return shared.slice(1, 33); // drop the compressed-point prefix byte, keep the X coordinate
 }
 
+/**
+ * Encrypts with a fresh 16-byte IV from the CSPRNG.
+ *
+ * As with nip44Encrypt, there is deliberately no caller-supplied-IV parameter
+ * here (§11.1). NIP-04 is AES-CBC: a repeated IV under the same shared secret
+ * leaks whether two messages share a leading block, and CBC gives an attacker
+ * far more leverage than that once IVs are predictable. Tests use
+ * `__unsafeNip04EncryptWithIv` from ./testing.js, which the package does not
+ * export.
+ */
 export function nip04Encrypt(
   privateKey: Uint8Array,
   peerPublicKeyHex: string,
   plaintext: string,
-  ivOverride?: Uint8Array
 ): string {
+  return encryptWithIv(privateKey, peerPublicKeyHex, plaintext, randomBytes(16));
+}
+
+/** @internal Shared by nip04Encrypt and the test-only entry point. */
+export function encryptWithIv(
+  privateKey: Uint8Array,
+  peerPublicKeyHex: string,
+  plaintext: string,
+  iv: Uint8Array,
+): string {
+  if (iv.length !== 16) throw new Error("NIP-04 iv must be exactly 16 bytes.");
   const key = getSharedSecret(privateKey, peerPublicKeyHex);
-  const iv = ivOverride ?? randomBytes(16);
   const ciphertext = cbc(key, iv).encrypt(utf8ToBytes(plaintext));
   return `${base64.encode(ciphertext)}?iv=${base64.encode(iv)}`;
 }

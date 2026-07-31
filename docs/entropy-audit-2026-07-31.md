@@ -33,7 +33,37 @@ The work below is hardening, not repair.
 
 ## Open items
 
-### M1 — Nonce-injection hooks are reachable from the shipped public API
+### M1 — Nonce-injection hooks are reachable from the shipped public API — **DONE 2026-07-31**
+
+`nip44Encrypt` and `nip04Encrypt` no longer take a nonce or IV at all. The
+capability moved to `packages/core/src/crypto/testing.ts` as
+`__unsafeNip44EncryptWithNonce` / `__unsafeNip04EncryptWithIv`, and
+`crypto/index.ts` now re-exports explicitly instead of `export *`, so the
+underlying `encryptWithNonce` / `encryptWithIv` stay off the package surface.
+
+It turned out only **one** test ever used an override — a nonce-length
+validation check — and `ivOverride` had no callers at all. The official NIP-44
+vectors do not need it. So nothing was lost by closing this.
+
+Verified from a real consumer package linking the built `@bitlogin/core`, not
+from source:
+
+| Attempt | Result |
+| --- | --- |
+| `import "@bitlogin/core/crypto/testing.js"` | `ERR_PACKAGE_PATH_NOT_EXPORTED` |
+| `import "@bitlogin/core/dist/crypto/testing.js"` | `ERR_PACKAGE_PATH_NOT_EXPORTED` |
+| `import "@bitlogin/core/crypto/nip44.js"` | `ERR_PACKAGE_PATH_NOT_EXPORTED` |
+| `"encryptWithNonce" in cryptoSurface` | `false` |
+| `nip44Encrypt.length` / `nip04Encrypt.length` | `2` / `3` — no nonce or IV parameter |
+
+Four regression tests pin the closed surface, including a fresh-nonce check
+across 64 calls. `knownAnswer.test.ts` stayed green throughout, which is the
+signal that matters: the derivation chain is untouched and no account is
+affected.
+
+The original problem statement follows.
+
+### M1 (original) — Nonce-injection hooks are reachable from the shipped public API
 
 `nip44Encrypt` and `nip04Encrypt` accept caller-supplied nonces:
 

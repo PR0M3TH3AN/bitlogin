@@ -11,6 +11,8 @@ import { bytesToHex, hexToBytes, bytesToBase64url, base64urlToBytes, utf8ToBytes
 import { getConversationKey, MAX_NIP44_BROWSER_PLAINTEXT_LEN, MAX_NIP44_ENCODED_PAYLOAD_LEN, nip44Encrypt, nip44Decrypt } from "./nip44.js";
 import { nip04Encrypt, nip04Decrypt } from "./nip04.js";
 import { randomBytes, randomEntropy128, randomUniformInt } from "./random.js";
+import { __unsafeNip44EncryptWithNonce, __unsafeNip04EncryptWithIv } from "./testing.js";
+import * as cryptoIndex from "./index.js";
 
 describe("ScalarExpand (§11.4 test vector)", () => {
   it("derives a stable, valid scalar for fixed input on counter 0", () => {
@@ -208,7 +210,9 @@ describe("NIP-44 v2 (window.nostr.nip44 provider surface)", () => {
   it("validates conversation-key and nonce lengths before cryptographic use", () => {
     const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
     expect(() => nip44Encrypt(new Uint8Array(31), "hello")).toThrow(/conversation key/u);
-    expect(() => nip44Encrypt(key, "hello", new Uint8Array(31))).toThrow(/nonce/u);
+    // The nonce check is only reachable through the test-only entry point --
+    // nip44Encrypt always supplies its own 32 bytes from the CSPRNG.
+    expect(() => __unsafeNip44EncryptWithNonce(key, "hello", new Uint8Array(31))).toThrow(/nonce/u);
   });
 
   it("rejects unsupported encodings and undersized payloads before parsing fields", () => {
@@ -295,6 +299,59 @@ function base64urlToBytesForTest(value: string): Uint8Array {
 function bytesToBase64urlForTest(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
+
+describe("Nonce/IV control stays off the package surface (§11.1)", () => {
+  /**
+   * nip44Encrypt and nip04Encrypt once took optional nonceOverride/ivOverride
+   * parameters. No production caller passed one, but they were exported, so
+   * "encrypt with a nonce I chose" was a discoverable feature of the package.
+   * These tests pin the closed surface so it cannot quietly reopen.
+   */
+  it("does not re-export the nonce/IV-taking helpers from crypto/index", () => {
+    const surface = Object.keys(cryptoIndex);
+    expect(surface).toContain("nip44Encrypt");
+    expect(surface).toContain("nip04Encrypt");
+    expect(surface).not.toContain("encryptWithNonce");
+    expect(surface).not.toContain("encryptWithIv");
+    expect(surface).not.toContain("__unsafeNip44EncryptWithNonce");
+    expect(surface).not.toContain("__unsafeNip04EncryptWithIv");
+  });
+
+  it("public encrypt functions take no nonce/IV argument", () => {
+    // Arity is the machine-checkable form of "there is no third parameter".
+    expect(nip44Encrypt).toHaveLength(2);
+    expect(nip04Encrypt).toHaveLength(3);
+  });
+
+  it("public encrypt functions produce a fresh nonce every call", () => {
+    const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    const payloads = new Set(Array.from({ length: 64 }, () => nip44Encrypt(key, "identical")));
+    expect(payloads.size).toBe(64);
+
+    const sk = generatePrivateKey();
+    const peer = getPublicKeyHex(generatePrivateKey());
+    const ivs = new Set(
+      Array.from({ length: 64 }, () => nip04Encrypt(sk, peer, "identical").split("?iv=")[1]),
+    );
+    expect(ivs.size).toBe(64);
+  });
+
+  it("the test-only entry points still round-trip and pin their length checks", () => {
+    const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    const nonce = new Uint8Array(32).fill(7);
+    const encrypted = __unsafeNip44EncryptWithNonce(key, "pinned", nonce);
+    expect(nip44Decrypt(key, encrypted)).toBe("pinned");
+    // Deterministic given a fixed nonce -- which is exactly why it is not public.
+    expect(__unsafeNip44EncryptWithNonce(key, "pinned", nonce)).toBe(encrypted);
+
+    const sk = generatePrivateKey();
+    const peer = getPublicKeyHex(generatePrivateKey());
+    const iv = new Uint8Array(16).fill(9);
+    const nip04 = __unsafeNip04EncryptWithIv(sk, peer, "pinned", iv);
+    expect(nip04Decrypt(sk, peer, nip04)).toBe("pinned");
+    expect(() => __unsafeNip04EncryptWithIv(sk, peer, "x", new Uint8Array(15))).toThrow(/iv/u);
+  });
+});
 
 describe("RNG fails closed (§11.1, §11.6)", () => {
   /**
