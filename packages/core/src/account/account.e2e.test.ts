@@ -1,23 +1,42 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { MockRelay } from "../test-support/mockRelay.js";
 import { generatePassphrase } from "./passphrase.js";
-import { registerAccount, importAccount, decodeEverydayPrivateKey } from "./create.js";
+import {
+  registerAccount,
+  importAccount,
+  decodeEverydayPrivateKey,
+} from "./create.js";
 import { generatePrivateKey, getPublicKeyHex } from "../crypto/secp256k1.js";
 import { encodeNsec, encodeNpub } from "../nostr/nip19.js";
 import { bytesToHex } from "../crypto/encoding.js";
 import { loginWithPassword } from "./login.js";
-import { recoverWithPhrase, completeRecoveryWithNewCredentials } from "./recover.js";
+import {
+  recoverWithPhrase,
+  completeRecoveryWithNewCredentials,
+} from "./recover.js";
 import { changePassword } from "./changePassword.js";
 import { repairReplicas } from "./repair.js";
 import { InMemoryKeyValueStore } from "../storage/interface.js";
 import { raiseHighWaterMark } from "./highWaterMark.js";
 import { RelayPool } from "../nostr/pool.js";
-import { AccountAlreadyExistsError, AccountNotFoundError, RollbackDetectedError } from "./errors.js";
+import {
+  AccountAlreadyExistsError,
+  AccountNotFoundError,
+  RecoveryFailedError,
+  RollbackDetectedError,
+} from "./errors.js";
 import { derivePasswordKeys, normalizeLoginName } from "./normalize.js";
-import { buildCredentialCapsuleEvent, decryptCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
+import {
+  buildCredentialCapsuleEvent,
+  decryptCredentialCapsuleEvent,
+} from "../capsules/credentialCapsule.js";
 import { RelayConnection } from "../nostr/relay.js";
 import { readCredentialCapsule } from "./capsuleReader.js";
 import { buildRecoveryExport, parseRecoveryExport } from "./exportImport.js";
+import {
+  D_TAG_PASSWORD_CAPSULE,
+  D_TAG_RECOVERY_CAPSULE,
+} from "../nostr/kinds.js";
 
 const ARGON2_TIMEOUT = 20000;
 
@@ -26,7 +45,11 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
   let vaultRelayUrls: string[] = [];
 
   beforeEach(async () => {
-    relays = await Promise.all([MockRelay.start(), MockRelay.start(), MockRelay.start()]);
+    relays = await Promise.all([
+      MockRelay.start(),
+      MockRelay.start(),
+      MockRelay.start(),
+    ]);
     vaultRelayUrls = relays.map((r) => r.url);
   });
 
@@ -40,18 +63,26 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       const loginName = "adam";
       const password = generatePassphrase().secret;
 
-      const registration = await registerAccount({ loginName, password, vaultRelayUrls });
+      const registration = await registerAccount({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
       expect(registration.credentialPublish.success).toBe(true);
       expect(registration.recoveryPublish.success).toBe(true);
 
       // Simulate a brand-new device/browser: no local state at all besides login name + password.
-      const login = await loginWithPassword({ loginName, password, vaultRelayUrls });
+      const login = await loginWithPassword({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
       expect(login.everydayPublicKey).toBe(registration.everydayPublicKey);
       expect(login.accountId).toBe(registration.accountId);
       expect(login.generation).toBe(0);
       expect(login.rollbackWarning).toBeUndefined();
     },
-    ARGON2_TIMEOUT
+    ARGON2_TIMEOUT,
   );
 
   it(
@@ -68,15 +99,28 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
 
       // decodeEverydayPrivateKey accepts both nsec and 64-char hex forms.
       const existingKeyHex = bytesToHex(existingKey);
-      expect(getPublicKeyHex(decodeEverydayPrivateKey(nsec))).toBe(existingPubkey);
-      expect(getPublicKeyHex(decodeEverydayPrivateKey(existingKeyHex))).toBe(existingPubkey);
+      expect(getPublicKeyHex(decodeEverydayPrivateKey(nsec))).toBe(
+        existingPubkey,
+      );
+      expect(getPublicKeyHex(decodeEverydayPrivateKey(existingKeyHex))).toBe(
+        existingPubkey,
+      );
 
-      const registration = await importAccount({ nsecOrHex: nsec, loginName, password, vaultRelayUrls });
+      const registration = await importAccount({
+        nsecOrHex: nsec,
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
       expect(registration.imported).toBe(true);
       expect(registration.everydayPublicKey).toBe(existingPubkey);
 
       // Clean-device password login yields the imported identity, unchanged.
-      const login = await loginWithPassword({ loginName, password, vaultRelayUrls });
+      const login = await loginWithPassword({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
       expect(login.everydayPublicKey).toBe(existingPubkey);
       expect(encodeNpub(login.everydayPublicKey)).toBe(npub);
 
@@ -84,11 +128,11 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       const recovered = await recoverWithPhrase({
         phrase: registration.recoveryPhrase,
         vaultRelayUrls,
-        discoveryRelayUrls: vaultRelayUrls
+        discoveryRelayUrls: vaultRelayUrls,
       });
       expect(recovered.everydayPublicKey).toBe(existingPubkey);
     },
-    ARGON2_TIMEOUT
+    ARGON2_TIMEOUT,
   );
 
   it(
@@ -97,24 +141,45 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       const loginName = "exportbug";
       const oldPassword = generatePassphrase().secret;
       const newPassword = generatePassphrase().secret;
-      const registration = await registerAccount({ loginName, password: oldPassword, vaultRelayUrls });
+      const registration = await registerAccount({
+        loginName,
+        password: oldPassword,
+        vaultRelayUrls,
+      });
 
       // A clean-device login (no prior registration/recovery in this "session") must still
       // return the embedded recovery event -- this is what a recovery-export button needs.
-      const login = await loginWithPassword({ loginName, password: oldPassword, vaultRelayUrls });
+      const login = await loginWithPassword({
+        loginName,
+        password: oldPassword,
+        vaultRelayUrls,
+      });
       expect(login.recoveryCapsuleEvent.id).toBe(registration.recoveryEvent.id);
 
       // After a password rotation, the (unchanged) recovery capsule event must still be
       // surfaced -- previously this was silently dropped, breaking "download export" after
       // a rotation even across a logout/login.
-      const changed = await changePassword({ loginName, oldPassword, newPassword, vaultRelayUrls });
-      expect(changed.recoveryCapsuleEvent.id).toBe(registration.recoveryEvent.id);
+      const changed = await changePassword({
+        loginName,
+        oldPassword,
+        newPassword,
+        vaultRelayUrls,
+      });
+      expect(changed.recoveryCapsuleEvent.id).toBe(
+        registration.recoveryEvent.id,
+      );
       expect(changed.recoveryPublicKey).toBe(registration.recoveryPublicKey);
 
-      const loginAfterRotation = await loginWithPassword({ loginName, password: newPassword, vaultRelayUrls });
-      expect(loginAfterRotation.recoveryCapsuleEvent.id).toBe(registration.recoveryEvent.id);
+      const loginAfterRotation = await loginWithPassword({
+        loginName,
+        password: newPassword,
+        vaultRelayUrls,
+      });
+      expect(loginAfterRotation.recoveryCapsuleEvent.id).toBe(
+        registration.recoveryEvent.id,
+      );
     },
-    ARGON2_TIMEOUT * 2
+    ARGON2_TIMEOUT * 2,
   );
 
   it("rejects malformed keys on import (§SF10)", () => {
@@ -131,14 +196,22 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       const password = generatePassphrase().secret;
       await registerAccount({ loginName, password, vaultRelayUrls });
 
-      await expect(loginWithPassword({ loginName, password: generatePassphrase().secret, vaultRelayUrls })).rejects.toThrow(
-        "Account not found or credentials incorrect."
-      );
-      await expect(loginWithPassword({ loginName: "nobody-has-this-name", password, vaultRelayUrls })).rejects.toThrow(
-        "Account not found or credentials incorrect."
-      );
+      await expect(
+        loginWithPassword({
+          loginName,
+          password: generatePassphrase().secret,
+          vaultRelayUrls,
+        }),
+      ).rejects.toThrow("Account not found or credentials incorrect.");
+      await expect(
+        loginWithPassword({
+          loginName: "nobody-has-this-name",
+          password,
+          vaultRelayUrls,
+        }),
+      ).rejects.toThrow("Account not found or credentials incorrect.");
     },
-    ARGON2_TIMEOUT
+    ARGON2_TIMEOUT,
   );
 
   it(
@@ -146,12 +219,16 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
     async () => {
       const loginName = "recoverme";
       const password = generatePassphrase().secret;
-      const registration = await registerAccount({ loginName, password, vaultRelayUrls });
+      const registration = await registerAccount({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
 
       const recovered = await recoverWithPhrase({
         phrase: registration.recoveryPhrase,
         vaultRelayUrls,
-        discoveryRelayUrls: vaultRelayUrls
+        discoveryRelayUrls: vaultRelayUrls,
       });
       expect(recovered.everydayPublicKey).toBe(registration.everydayPublicKey);
       expect(recovered.accountId).toBe(registration.accountId);
@@ -163,15 +240,21 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
         recovered,
         newLoginName,
         newPassword,
-        vaultRelayUrls
+        vaultRelayUrls,
       });
       expect(completion.credentialPublish.success).toBe(true);
       expect(completion.recoveryPublish.success).toBe(true);
 
       // Old credentials must no longer resolve to a fresh login path in the same way (new locator address);
       // the important invariant is that the NEW credentials work from a clean device.
-      const cleanDeviceLogin = await loginWithPassword({ loginName: newLoginName, password: newPassword, vaultRelayUrls });
-      expect(cleanDeviceLogin.everydayPublicKey).toBe(registration.everydayPublicKey);
+      const cleanDeviceLogin = await loginWithPassword({
+        loginName: newLoginName,
+        password: newPassword,
+        vaultRelayUrls,
+      });
+      expect(cleanDeviceLogin.everydayPublicKey).toBe(
+        registration.everydayPublicKey,
+      );
       expect(cleanDeviceLogin.generation).toBe(0);
 
       // The refreshed recovery capsule replaced the original; recovering again with the same phrase
@@ -179,12 +262,176 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       const recoveredAgain = await recoverWithPhrase({
         phrase: registration.recoveryPhrase,
         vaultRelayUrls,
-        discoveryRelayUrls: vaultRelayUrls
+        discoveryRelayUrls: vaultRelayUrls,
       });
       expect(recoveredAgain.currentRecoveryPayload.recovery_generation).toBe(1);
-      expect(recoveredAgain.currentRecoveryPayload.previous_recovery_event_id).toBe(registration.recoveryEvent.id);
+      expect(
+        recoveredAgain.currentRecoveryPayload.previous_recovery_event_id,
+      ).toBe(registration.recoveryEvent.id);
     },
-    ARGON2_TIMEOUT * 2
+    ARGON2_TIMEOUT * 2,
+  );
+
+  it(
+    "recovery collision refusal does not advance the recovery chain or overwrite the occupied credential",
+    async () => {
+      const original = await registerAccount({
+        loginName: "recovery-source",
+        password: generatePassphrase().secret,
+        vaultRelayUrls,
+      });
+      const occupiedLoginName = "recovery-occupied";
+      const occupiedPassword = generatePassphrase().secret;
+      const occupied = await registerAccount({
+        loginName: occupiedLoginName,
+        password: occupiedPassword,
+        vaultRelayUrls,
+      });
+      const recovered = await recoverWithPhrase({
+        phrase: original.recoveryPhrase,
+        vaultRelayUrls,
+        discoveryRelayUrls: vaultRelayUrls,
+      });
+
+      await expect(
+        completeRecoveryWithNewCredentials({
+          recovered,
+          newLoginName: occupiedLoginName,
+          newPassword: occupiedPassword,
+          vaultRelayUrls,
+        }),
+      ).rejects.toThrow(RecoveryFailedError);
+
+      // Collision validation is a read-only precondition: the original recovery
+      // capsule must remain byte-for-byte the current generation after refusal.
+      const recoveredAfterRefusal = await recoverWithPhrase({
+        phrase: original.recoveryPhrase,
+        vaultRelayUrls,
+        discoveryRelayUrls: vaultRelayUrls,
+      });
+      expect(recoveredAfterRefusal.currentRecoveryEvent.id).toBe(
+        original.recoveryEvent.id,
+      );
+      expect(
+        recoveredAfterRefusal.currentRecoveryPayload.recovery_generation,
+      ).toBe(0);
+
+      const occupiedLogin = await loginWithPassword({
+        loginName: occupiedLoginName,
+        password: occupiedPassword,
+        vaultRelayUrls,
+      });
+      expect(occupiedLogin.everydayPublicKey).toBe(occupied.everydayPublicKey);
+    },
+    ARGON2_TIMEOUT * 3,
+  );
+
+  it(
+    "a rejected recovery refresh publishes neither a new credential nor a new recovery generation",
+    async () => {
+      const registration = await registerAccount({
+        loginName: "recovery-order-source",
+        password: generatePassphrase().secret,
+        vaultRelayUrls,
+      });
+      const recovered = await recoverWithPhrase({
+        phrase: registration.recoveryPhrase,
+        vaultRelayUrls,
+        discoveryRelayUrls: vaultRelayUrls,
+      });
+      const newLoginName = "recovery-order-target";
+      const newPassword = generatePassphrase().secret;
+
+      for (const relay of relays)
+        relay.refusePublishDTags.add(D_TAG_RECOVERY_CAPSULE);
+      await expect(
+        completeRecoveryWithNewCredentials({
+          recovered,
+          newLoginName,
+          newPassword,
+          vaultRelayUrls,
+        }),
+      ).rejects.toThrow(/No new credential was published/i);
+      for (const relay of relays) relay.refusePublishDTags.clear();
+
+      await expect(
+        loginWithPassword({
+          loginName: newLoginName,
+          password: newPassword,
+          vaultRelayUrls,
+        }),
+      ).rejects.toThrow(AccountNotFoundError);
+      const recoveredAfterRefusal = await recoverWithPhrase({
+        phrase: registration.recoveryPhrase,
+        vaultRelayUrls,
+        discoveryRelayUrls: vaultRelayUrls,
+      });
+      expect(recoveredAfterRefusal.currentRecoveryEvent.id).toBe(
+        registration.recoveryEvent.id,
+      );
+      expect(
+        recoveredAfterRefusal.currentRecoveryPayload.recovery_generation,
+      ).toBe(0);
+    },
+    ARGON2_TIMEOUT * 2,
+  );
+
+  it(
+    "a credential-write failure advances pending recovery state so retry cannot fork the recovery chain",
+    async () => {
+      const registration = await registerAccount({
+        loginName: "recovery-retry-source",
+        password: generatePassphrase().secret,
+        vaultRelayUrls,
+      });
+      const recovered = await recoverWithPhrase({
+        phrase: registration.recoveryPhrase,
+        vaultRelayUrls,
+        discoveryRelayUrls: vaultRelayUrls,
+      });
+      const newLoginName = "recovery-retry-target";
+      const newPassword = generatePassphrase().secret;
+
+      // One relay accepts the credential while two reject it: publication
+      // fails quorum but leaves a real partial event that the retry must
+      // recognize as its own rather than mistake for another account.
+      for (const relay of relays.slice(0, 2))
+        relay.refusePublishDTags.add(D_TAG_PASSWORD_CAPSULE);
+      await expect(
+        completeRecoveryWithNewCredentials({
+          recovered,
+          newLoginName,
+          newPassword,
+          vaultRelayUrls,
+        }),
+      ).rejects.toThrow(/new credential capsule/i);
+      for (const relay of relays) relay.refusePublishDTags.clear();
+
+      expect(recovered.currentRecoveryPayload.recovery_generation).toBe(1);
+      expect(recovered.currentRecoveryPayload.previous_recovery_event_id).toBe(
+        registration.recoveryEvent.id,
+      );
+      const durableFirstRefreshId = recovered.currentRecoveryEvent.id;
+
+      await completeRecoveryWithNewCredentials({
+        recovered,
+        newLoginName,
+        newPassword,
+        vaultRelayUrls,
+      });
+      expect(recovered.currentRecoveryPayload.recovery_generation).toBe(2);
+      expect(recovered.currentRecoveryPayload.previous_recovery_event_id).toBe(
+        durableFirstRefreshId,
+      );
+
+      const login = await loginWithPassword({
+        loginName: newLoginName,
+        password: newPassword,
+        vaultRelayUrls,
+      });
+      expect(login.everydayPublicKey).toBe(registration.everydayPublicKey);
+    },
+    ARGON2_TIMEOUT * 3,
   );
 
   it(
@@ -192,7 +439,11 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
     async () => {
       const loginName = "offlinerecover";
       const password = generatePassphrase().secret;
-      const registration = await registerAccount({ loginName, password, vaultRelayUrls });
+      const registration = await registerAccount({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
 
       // Build (and round-trip through JSON, as the downloaded file would be) the recovery
       // export exactly as the widget does right after registration.
@@ -200,9 +451,11 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
         recoveryPublicKeyHex: registration.recoveryPublicKey,
         vaultRelayUrls,
         recoveryCapsuleEvents: [registration.recoveryEvent],
-        relayListEvents: []
+        relayListEvents: [],
       });
-      const parsedExportFile = parseRecoveryExport(JSON.parse(JSON.stringify(exportFile)));
+      const parsedExportFile = parseRecoveryExport(
+        JSON.parse(JSON.stringify(exportFile)),
+      );
 
       // Simulate every configured relay being unreachable (not just empty -- an actual closed
       // port, so the quorum read genuinely fails rather than vacuously succeeding on zero relays).
@@ -212,7 +465,7 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
         phrase: registration.recoveryPhrase,
         vaultRelayUrls: unreachableRelayUrls,
         discoveryRelayUrls: unreachableRelayUrls,
-        offlineRecoveryCapsuleEvents: parsedExportFile.recovery_capsule_events
+        offlineRecoveryCapsuleEvents: parsedExportFile.recovery_capsule_events,
       });
       expect(recovered.everydayPublicKey).toBe(registration.everydayPublicKey);
       expect(recovered.accountId).toBe(registration.accountId);
@@ -222,11 +475,11 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
         recoverWithPhrase({
           phrase: registration.recoveryPhrase,
           vaultRelayUrls: unreachableRelayUrls,
-          discoveryRelayUrls: unreachableRelayUrls
-        })
+          discoveryRelayUrls: unreachableRelayUrls,
+        }),
       ).rejects.toThrow(AccountNotFoundError);
     },
-    ARGON2_TIMEOUT
+    ARGON2_TIMEOUT,
   );
 
   it(
@@ -235,23 +488,38 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       const loginName = "changeme";
       const oldPassword = generatePassphrase().secret;
       const newPassword = generatePassphrase().secret;
-      const registration = await registerAccount({ loginName, password: oldPassword, vaultRelayUrls });
+      const registration = await registerAccount({
+        loginName,
+        password: oldPassword,
+        vaultRelayUrls,
+      });
 
-      const changed = await changePassword({ loginName, oldPassword, newPassword, vaultRelayUrls });
+      const changed = await changePassword({
+        loginName,
+        oldPassword,
+        newPassword,
+        vaultRelayUrls,
+      });
       expect(changed.newCredentialPublish.success).toBe(true);
       expect(changed.tombstoneAcknowledgedCount).toBeGreaterThanOrEqual(2);
       expect(changed.deletionAcknowledgedCount).toBeGreaterThanOrEqual(2);
       expect(changed.newGeneration).toBe(1);
 
       // New password logs in to the same everyday identity.
-      const login = await loginWithPassword({ loginName, password: newPassword, vaultRelayUrls });
+      const login = await loginWithPassword({
+        loginName,
+        password: newPassword,
+        vaultRelayUrls,
+      });
       expect(login.everydayPublicKey).toBe(registration.everydayPublicKey);
       expect(login.generation).toBe(1);
 
       // Old password's locator address is now tombstoned (empty content) -- old password no longer logs in.
-      await expect(loginWithPassword({ loginName, password: oldPassword, vaultRelayUrls })).rejects.toThrow(AccountNotFoundError);
+      await expect(
+        loginWithPassword({ loginName, password: oldPassword, vaultRelayUrls }),
+      ).rejects.toThrow(AccountNotFoundError);
     },
-    ARGON2_TIMEOUT * 2
+    ARGON2_TIMEOUT * 2,
   );
 
   it(
@@ -259,22 +527,36 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
     async () => {
       const loginName = "repairme";
       const password = generatePassphrase().secret;
-      const registration = await registerAccount({ loginName, password, vaultRelayUrls });
+      const registration = await registerAccount({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
 
       // Simulate total data loss on one relay (§19.4, §29.3).
       relays[2]!.wipeAllData();
 
       const pool = new RelayPool(vaultRelayUrls);
-      const repair = await repairReplicas(pool, registration.credentialEvent, registration.recoveryEvent);
+      const repair = await repairReplicas(
+        pool,
+        registration.credentialEvent,
+        registration.recoveryEvent,
+      );
       pool.closeAll();
       expect(repair.credentialAcknowledgedCount).toBe(3);
       expect(repair.recoveryAcknowledgedCount).toBe(3);
 
       // The repaired relay can now serve a clean-device login on its own.
-      const soleRelayLogin = await loginWithPassword({ loginName, password, vaultRelayUrls: [relays[2]!.url] });
-      expect(soleRelayLogin.everydayPublicKey).toBe(registration.everydayPublicKey);
+      const soleRelayLogin = await loginWithPassword({
+        loginName,
+        password,
+        vaultRelayUrls: [relays[2]!.url],
+      });
+      expect(soleRelayLogin.everydayPublicKey).toBe(
+        registration.everydayPublicKey,
+      );
     },
-    ARGON2_TIMEOUT
+    ARGON2_TIMEOUT,
   );
 
   it(
@@ -282,22 +564,36 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
     async () => {
       const loginName = "rollback";
       const password = generatePassphrase().secret;
-      const registration = await registerAccount({ loginName, password, vaultRelayUrls });
+      const registration = await registerAccount({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
 
       const store = new InMemoryKeyValueStore();
       // Simulate this device having previously observed a higher generation for this account.
-      await raiseHighWaterMark(store, registration.everydayPublicKey, { generation: 5 });
+      await raiseHighWaterMark(store, registration.everydayPublicKey, {
+        generation: 5,
+      });
 
       // Fails closed by default -- the client cannot tell "old, replayed credential" apart
       // from "relay is merely lagging," so it must not silently grant a session either way.
-      await expect(loginWithPassword({ loginName, password, vaultRelayUrls, store })).rejects.toThrow(RollbackDetectedError);
+      await expect(
+        loginWithPassword({ loginName, password, vaultRelayUrls, store }),
+      ).rejects.toThrow(RollbackDetectedError);
 
       // An explicit override still allows the (still-warned) login through.
-      const login = await loginWithPassword({ loginName, password, vaultRelayUrls, store, acknowledgeRollback: true });
+      const login = await loginWithPassword({
+        loginName,
+        password,
+        vaultRelayUrls,
+        store,
+        acknowledgeRollback: true,
+      });
       expect(login.generation).toBe(0);
       expect(login.rollbackWarning).toBeDefined();
     },
-    ARGON2_TIMEOUT
+    ARGON2_TIMEOUT,
   );
 
   it(
@@ -306,18 +602,32 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       const loginName = "holdout";
       const oldPassword = generatePassphrase().secret;
       const newPassword = generatePassphrase().secret;
-      await registerAccount({ loginName, password: oldPassword, vaultRelayUrls });
+      await registerAccount({
+        loginName,
+        password: oldPassword,
+        vaultRelayUrls,
+      });
 
       // Rotate using only two of the three relays -- the third (relays[2]) never receives the
       // new capsule NOR the tombstone/deletion request, so it keeps serving the original,
       // "revoked" capsule indefinitely (a relay is never obligated to honor a deletion request).
       const rotatingRelays = [relays[0]!.url, relays[1]!.url];
-      await changePassword({ loginName, oldPassword, newPassword, vaultRelayUrls: rotatingRelays });
+      await changePassword({
+        loginName,
+        oldPassword,
+        newPassword,
+        vaultRelayUrls: rotatingRelays,
+      });
 
       // Simulate one continuously-used device/browser: it logs in with the new password (across
       // all relays, including the holdout) and so locally records having seen the new generation.
       const store = new InMemoryKeyValueStore();
-      const afterRotationLogin = await loginWithPassword({ loginName, password: newPassword, vaultRelayUrls, store });
+      const afterRotationLogin = await loginWithPassword({
+        loginName,
+        password: newPassword,
+        vaultRelayUrls,
+        store,
+      });
       expect(afterRotationLogin.generation).toBe(1);
 
       // The same device is now asked to log in with the OLD password, querying ONLY the
@@ -325,7 +635,12 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       // full session (with only a non-blocking warning) because the old password's locator
       // address still decrypts successfully there. It must now fail closed instead.
       await expect(
-        loginWithPassword({ loginName, password: oldPassword, vaultRelayUrls: [relays[2]!.url], store })
+        loginWithPassword({
+          loginName,
+          password: oldPassword,
+          vaultRelayUrls: [relays[2]!.url],
+          store,
+        }),
       ).rejects.toThrow(RollbackDetectedError);
 
       // The explicit escape hatch still exists for a human who is confident this is relay lag.
@@ -334,12 +649,12 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
         password: oldPassword,
         vaultRelayUrls: [relays[2]!.url],
         store,
-        acknowledgeRollback: true
+        acknowledgeRollback: true,
       });
       expect(acknowledged.generation).toBe(0);
       expect(acknowledged.rollbackWarning).toBeDefined();
     },
-    ARGON2_TIMEOUT * 2
+    ARGON2_TIMEOUT * 2,
   );
 
   it(
@@ -347,18 +662,32 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
     async () => {
       const loginName = "disagree";
       const password = generatePassphrase().secret;
-      const registration = await registerAccount({ loginName, password, vaultRelayUrls });
+      const registration = await registerAccount({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
 
       // One relay receives a newer, independently re-signed generation that never reached the
       // other two -- simulating a relay that is ahead while its peers are ahead of *it* in a
       // split-brain sense; either way, "latest per relay" no longer agrees across the pool.
       const normalizedLoginName = normalizeLoginName(loginName);
-      const { locatorPrivateKey, capsuleKey } = await derivePasswordKeys(password, normalizedLoginName);
-      const decrypted = await decryptCredentialCapsuleEvent(registration.credentialEvent, capsuleKey);
+      const { locatorPrivateKey, capsuleKey } = await derivePasswordKeys(
+        password,
+        normalizedLoginName,
+      );
+      const decrypted = await decryptCredentialCapsuleEvent(
+        registration.credentialEvent,
+        capsuleKey,
+      );
       const conflictingEvent = await buildCredentialCapsuleEvent({
         locatorPrivateKey,
         capsuleKey,
-        payload: { ...decrypted, generation: decrypted.generation + 1, created_at: registration.credentialEvent.created_at + 100 }
+        payload: {
+          ...decrypted,
+          generation: decrypted.generation + 1,
+          created_at: registration.credentialEvent.created_at + 100,
+        },
       });
 
       const holdoutConnection = new RelayConnection(relays[2]!.url);
@@ -366,11 +695,15 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       holdoutConnection.close();
 
       const pool = new RelayPool(vaultRelayUrls);
-      const result = await readCredentialCapsule(pool, registration.locatorPublicKey, capsuleKey);
+      const result = await readCredentialCapsule(
+        pool,
+        registration.locatorPublicKey,
+        capsuleKey,
+      );
       pool.closeAll();
       expect(result.relayDisagreement).toBe(true);
     },
-    ARGON2_TIMEOUT
+    ARGON2_TIMEOUT,
   );
 
   it(
@@ -378,50 +711,84 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
     async () => {
       const loginName = "reused";
       const password = generatePassphrase().secret;
-      const original = await registerAccount({ loginName, password, vaultRelayUrls });
+      const original = await registerAccount({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
 
       // Same login name + same password -> the exact same locator address. Without a
       // pre-publish existence check this would silently replace the original account's
       // credential capsule with a brand-new, unrelated everyday identity and recovery phrase.
-      await expect(registerAccount({ loginName, password, vaultRelayUrls })).rejects.toThrow(AccountAlreadyExistsError);
+      await expect(
+        registerAccount({ loginName, password, vaultRelayUrls }),
+      ).rejects.toThrow(AccountAlreadyExistsError);
 
       // The original account must still be exactly as it was -- same everyday identity,
       // same recovery phrase still valid.
-      const login = await loginWithPassword({ loginName, password, vaultRelayUrls });
+      const login = await loginWithPassword({
+        loginName,
+        password,
+        vaultRelayUrls,
+      });
       expect(login.everydayPublicKey).toBe(original.everydayPublicKey);
       expect(login.generation).toBe(0);
     },
-    ARGON2_TIMEOUT * 2
+    ARGON2_TIMEOUT * 2,
   );
 
   it(
-    "a rotation that cannot publish the new capsule leaves the OLD password working (§18.1 ordering)",
+    "a rejected registration recovery write never publishes the credential capsule",
     async () => {
-      // The tombstone DESTROYS the old capsule. Publishing it before the new
-      // capsule is known durable can leave an account with neither password --
-      // recoverable only by phrase. Failing closed keeps the old one alive.
-      const loginName = "ordering";
-      const oldPassword = "old ordering password 41";
-      const newPassword = "new ordering password 42";
-      await registerAccount({ loginName, password: oldPassword, vaultRelayUrls });
+      const loginName = "registration-ordering";
+      const password = generatePassphrase().secret;
+      for (const relay of relays)
+        relay.refusePublishDTags.add(D_TAG_RECOVERY_CAPSULE);
 
-      // Every relay refuses the NEW locator's writes while still accepting
-      // reads and the tombstone -- the partially-hostile quorum case.
-      const newLocator = getPublicKeyHex(
-        (await derivePasswordKeys(newPassword, normalizeLoginName(loginName))).locatorPrivateKey
-      );
-      for (const relay of relays) relay.refusePublishFrom.add(newLocator);
       await expect(
-        changePassword({ loginName, oldPassword, newPassword, vaultRelayUrls })
-      ).rejects.toThrow(/still works|quorum/i);
-      for (const relay of relays) relay.refusePublishFrom.clear();
+        registerAccount({ loginName, password, vaultRelayUrls }),
+      ).rejects.toThrow(/No login credential was published/i);
+      for (const relay of relays) relay.refusePublishDTags.clear();
 
-      // The old password must still sign in, and the new one must not exist.
-      const login = await loginWithPassword({ loginName, password: oldPassword, vaultRelayUrls });
-      expect(login.everydayPublicKey).toMatch(/^[0-9a-f]{64}$/);
+      // Before the fix the credential publish still ran and this login
+      // succeeded even though registration had thrown without revealing the
+      // freshly generated recovery phrase.
+      await expect(
+        loginWithPassword({ loginName, password, vaultRelayUrls }),
+      ).rejects.toThrow(AccountNotFoundError);
     },
-    45_000
+    ARGON2_TIMEOUT * 2,
   );
+
+  it("a rotation that cannot publish the new capsule leaves the OLD password working (§18.1 ordering)", async () => {
+    // The tombstone DESTROYS the old capsule. Publishing it before the new
+    // capsule is known durable can leave an account with neither password --
+    // recoverable only by phrase. Failing closed keeps the old one alive.
+    const loginName = "ordering";
+    const oldPassword = "old ordering password 41";
+    const newPassword = "new ordering password 42";
+    await registerAccount({ loginName, password: oldPassword, vaultRelayUrls });
+
+    // Every relay refuses the NEW locator's writes while still accepting
+    // reads and the tombstone -- the partially-hostile quorum case.
+    const newLocator = getPublicKeyHex(
+      (await derivePasswordKeys(newPassword, normalizeLoginName(loginName)))
+        .locatorPrivateKey,
+    );
+    for (const relay of relays) relay.refusePublishFrom.add(newLocator);
+    await expect(
+      changePassword({ loginName, oldPassword, newPassword, vaultRelayUrls }),
+    ).rejects.toThrow(/still works|quorum/i);
+    for (const relay of relays) relay.refusePublishFrom.clear();
+
+    // The old password must still sign in, and the new one must not exist.
+    const login = await loginWithPassword({
+      loginName,
+      password: oldPassword,
+      vaultRelayUrls,
+    });
+    expect(login.everydayPublicKey).toMatch(/^[0-9a-f]{64}$/);
+  }, 45_000);
 
   it(
     "rotating to a new password that collides with another account under the same login name is refused (§18.1)",
@@ -429,25 +796,46 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       const loginName = "sharedname";
       const passwordA = generatePassphrase().secret;
       const passwordB = generatePassphrase().secret;
-      const accountA = await registerAccount({ loginName, password: passwordA, vaultRelayUrls });
-      const accountB = await registerAccount({ loginName, password: passwordB, vaultRelayUrls });
+      const accountA = await registerAccount({
+        loginName,
+        password: passwordA,
+        vaultRelayUrls,
+      });
+      const accountB = await registerAccount({
+        loginName,
+        password: passwordB,
+        vaultRelayUrls,
+      });
 
       // Rotating account A to password B's exact password would target the exact same
       // locator address as account B's already-registered capsule.
       await expect(
-        changePassword({ loginName, oldPassword: passwordA, newPassword: passwordB, vaultRelayUrls })
+        changePassword({
+          loginName,
+          oldPassword: passwordA,
+          newPassword: passwordB,
+          vaultRelayUrls,
+        }),
       ).rejects.toThrow(AccountAlreadyExistsError);
 
       // Neither account was touched: A's old capsule was never tombstoned, and B's capsule
       // was never overwritten.
-      const loginA = await loginWithPassword({ loginName, password: passwordA, vaultRelayUrls });
+      const loginA = await loginWithPassword({
+        loginName,
+        password: passwordA,
+        vaultRelayUrls,
+      });
       expect(loginA.everydayPublicKey).toBe(accountA.everydayPublicKey);
       expect(loginA.generation).toBe(0);
 
-      const loginB = await loginWithPassword({ loginName, password: passwordB, vaultRelayUrls });
+      const loginB = await loginWithPassword({
+        loginName,
+        password: passwordB,
+        vaultRelayUrls,
+      });
       expect(loginB.everydayPublicKey).toBe(accountB.everydayPublicKey);
       expect(loginB.generation).toBe(0);
     },
-    ARGON2_TIMEOUT * 2
+    ARGON2_TIMEOUT * 2,
   );
 });

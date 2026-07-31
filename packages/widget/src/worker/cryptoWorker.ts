@@ -31,6 +31,7 @@ import {
 } from "@bitlogin/core/vault";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
+import { SerialQueue } from "./serialQueue.js";
 import type { VaultConnectionSummary } from "./protocol.js";
 import type {
   WorkerRequest,
@@ -85,6 +86,7 @@ let vaultRelayUrls: string[] = [...BUILTIN_VAULT_RELAYS];
 let discoveryRelayUrls: string[] = [...BUILTIN_DISCOVERY_RELAYS];
 
 const store = new IndexedDbKeyValueStore();
+const requestQueue = new SerialQueue();
 
 function requireUnlocked(): { signer: NostrSigner; everydayPrivateKey: Uint8Array } {
   if (!session.signer || !session.everydayPrivateKey) {
@@ -204,13 +206,19 @@ async function listLiveConnections(): Promise<{
   vault: VaultSession;
   connections: DecryptedConnectionRecord[];
   rollbackWarnings: string[];
+  unreadable: string[];
+  truncated: boolean;
+  quorumMet: boolean;
 }> {
   const vault = requireVault();
   const listed = await vault.listConnections({ relayUrls: vaultRelayUrls, store });
   return {
     vault,
     connections: listed.connections.filter((c) => c.record.state !== "deleted"),
-    rollbackWarnings: listed.rollbackWarnings
+    rollbackWarnings: listed.rollbackWarnings,
+    unreadable: listed.unreadable,
+    truncated: listed.truncated,
+    quorumMet: listed.quorumMet
   };
 }
 
@@ -496,8 +504,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultList": {
-      const { connections, rollbackWarnings } = await listLiveConnections();
-      return { connections: connections.map(summarize), rollbackWarnings };
+      const { connections, rollbackWarnings, unreadable, truncated, quorumMet } = await listLiveConnections();
+      return { connections: connections.map(summarize), rollbackWarnings, unreadable, truncated, quorumMet };
     }
 
     case "vaultSaveNwc": {
@@ -668,7 +676,7 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
     return;
   }
   const { id, action, payload } = event.data;
-  handle(action, payload).then(
+  requestQueue.run(() => handle(action, payload)).then(
     (result) => {
       const response: WorkerResponse = { id, ok: true, result };
       (self as unknown as Worker).postMessage(response);

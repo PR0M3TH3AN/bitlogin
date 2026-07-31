@@ -1,0 +1,54 @@
+name: Security and release integrity
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Run build, typecheck, tests, dependency audit, and registry signature verification
+        run: npm run security:ci
+      - name: Generate checksums and CycloneDX SBOM
+        shell: bash
+        run: |
+          mkdir -p security-artifacts
+          npm sbom --sbom-format cyclonedx > security-artifacts/sbom.cdx.json
+          find packages/widget/dist packages/demo/dist -type f -print0 | sort -z | xargs -0 sha256sum > security-artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bitlogin-security-artifacts
+          path: security-artifacts/
+          if-no-files-found: error
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install pinned Semgrep
+        run: pipx install semgrep==1.171.0
+      - name: Scan repository rules without per-rule timeouts
+        run: semgrep scan --config auto --error --timeout 0 packages
+      - name: Scan repository history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

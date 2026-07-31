@@ -16,13 +16,29 @@
  * New accounts never come here — registration mints the roots for free.
  */
 import { getPublicKeyHex } from "../crypto/secp256k1.js";
-import { base64urlToBytes, bytesToBase64url } from "../crypto/encoding.js";
-import { randomBytes } from "../crypto/random.js";
-import { isValidRecoveryPhrase, recoveryPhraseToSeed } from "../crypto/bip39.js";
-import { derivePasswordKeys, deriveRecoveryKeys, normalizeLoginName } from "./normalize.js";
+import {
+  base64urlToBytes,
+  bytesToBase64url,
+  constantTimeEqual,
+} from "../crypto/encoding.js";
+import { wipe } from "../crypto/memory.js";
+import {
+  isValidRecoveryPhrase,
+  recoveryPhraseToSeed,
+} from "../crypto/bip39.js";
+import {
+  derivePasswordKeys,
+  deriveRecoveryKeys,
+  normalizeLoginName,
+} from "./normalize.js";
 import { nextCreatedAt } from "./timestamp.js";
 import { RelayPool } from "../nostr/pool.js";
-import { D_TAG_PASSWORD_CAPSULE, D_TAG_RECOVERY_CAPSULE, SCHEMA_CREDENTIAL_V1, SCHEMA_RECOVERY_V1 } from "../nostr/kinds.js";
+import {
+  D_TAG_PASSWORD_CAPSULE,
+  D_TAG_RECOVERY_CAPSULE,
+  SCHEMA_CREDENTIAL_V1,
+  SCHEMA_RECOVERY_V1,
+} from "../nostr/kinds.js";
 import { readCredentialCapsule, readRecoveryCapsule } from "./capsuleReader.js";
 import { buildCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
 import { buildRecoveryCapsuleEvent } from "../capsules/recoveryCapsule.js";
@@ -31,11 +47,16 @@ import {
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
   type CredentialPayload,
-  type RecoveryPayload
+  type RecoveryPayload,
 } from "../capsules/types.js";
 import { publishAndVerify } from "./publish.js";
-import { AccountNotFoundError, RecoveryFailedError, RegistrationFailedError } from "./errors.js";
+import {
+  AccountNotFoundError,
+  RecoveryFailedError,
+  RegistrationFailedError,
+} from "./errors.js";
 import type { PublishVerificationResult } from "./publish.js";
+import { deriveLegacyVaultMaterial } from "../vault/derivation.js";
 
 export interface EnableConnectionVaultParams {
   loginName: string;
@@ -58,27 +79,44 @@ export interface EnableConnectionVaultResult {
 }
 
 export async function enableConnectionVault(
-  params: EnableConnectionVaultParams
+  params: EnableConnectionVaultParams,
 ): Promise<EnableConnectionVaultResult> {
   const now = params.now ?? Math.floor(Date.now() / 1000);
   const normalizedLoginName = normalizeLoginName(params.loginName);
   if (!isValidRecoveryPhrase(params.phrase)) {
-    throw new RecoveryFailedError("This does not look like a valid 12-word BitLogin recovery phrase.");
+    throw new RecoveryFailedError(
+      "This does not look like a valid 12-word BitLogin recovery phrase.",
+    );
   }
 
   // Password path: the current credential capsule.
-  const passwordKeys = await derivePasswordKeys(params.password, normalizedLoginName);
+  const passwordKeys = await derivePasswordKeys(
+    params.password,
+    normalizedLoginName,
+  );
   const locatorPublicKey = getPublicKeyHex(passwordKeys.locatorPrivateKey);
-  const credentialPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: passwordKeys.locatorPrivateKey });
+  const credentialPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: passwordKeys.locatorPrivateKey,
+  });
   let credentialRead;
   try {
-    credentialRead = await readCredentialCapsule(credentialPool, locatorPublicKey, passwordKeys.capsuleKey, params.timeoutMs);
+    credentialRead = await readCredentialCapsule(
+      credentialPool,
+      locatorPublicKey,
+      passwordKeys.capsuleKey,
+      params.timeoutMs,
+    );
   } finally {
     credentialPool.closeAll();
   }
-  if (!credentialRead.quorumMet) throw new AccountNotFoundError("quorum-not-met");
+  if (!credentialRead.quorumMet)
+    throw new AccountNotFoundError("quorum-not-met");
   if (!credentialRead.best) {
-    throw new AccountNotFoundError(credentialRead.candidates.length > 0 ? "no-valid-candidate" : "no-matching-event");
+    throw new AccountNotFoundError(
+      credentialRead.candidates.length > 0
+        ? "no-valid-candidate"
+        : "no-matching-event",
+    );
   }
   const credentialPayload = credentialRead.best.payload!;
   const credentialEvent = credentialRead.best.event;
@@ -87,14 +125,24 @@ export async function enableConnectionVault(
   // account — a phrase for some other account must not be grafted onto this one.
   const bip39Seed = await recoveryPhraseToSeed(params.phrase);
   const recoveryKeys = deriveRecoveryKeys(bip39Seed);
+  wipe(bip39Seed);
   const recoveryPublicKey = getPublicKeyHex(recoveryKeys.recoveryPrivateKey);
   if (recoveryPublicKey !== credentialPayload.recovery_public_key) {
-    throw new RecoveryFailedError("This recovery phrase does not belong to this account.");
+    throw new RecoveryFailedError(
+      "This recovery phrase does not belong to this account.",
+    );
   }
-  const recoveryPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: recoveryKeys.recoveryPrivateKey });
+  const recoveryPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: recoveryKeys.recoveryPrivateKey,
+  });
   let recoveryRead;
   try {
-    recoveryRead = await readRecoveryCapsule(recoveryPool, recoveryPublicKey, recoveryKeys.capsuleKey, params.timeoutMs);
+    recoveryRead = await readRecoveryCapsule(
+      recoveryPool,
+      recoveryPublicKey,
+      recoveryKeys.capsuleKey,
+      params.timeoutMs,
+    );
   } finally {
     recoveryPool.closeAll();
   }
@@ -107,26 +155,57 @@ export async function enableConnectionVault(
   if (!recoveryRead.best) throw new AccountNotFoundError("no-valid-candidate");
   const recoveryPayload = recoveryRead.best.payload!;
   if (recoveryPayload.account_id !== credentialPayload.account_id) {
-    throw new RecoveryFailedError("This recovery phrase does not belong to this account.");
+    throw new RecoveryFailedError(
+      "This recovery phrase does not belong to this account.",
+    );
   }
 
   // Idempotency and partial-failure repair: reuse roots wherever they already
   // exist. Minting twice is the one unforgivable outcome — it would strand
   // whichever records were encrypted under the first mint.
-  const existingRoot = credentialPayload.connection_vault_root ?? recoveryPayload.connection_vault_root;
-  const existingSudo = credentialPayload.vault_sudo_key ?? recoveryPayload.vault_sudo_key;
-  if (
-    credentialPayload.connection_vault_root !== undefined &&
-    recoveryPayload.connection_vault_root !== undefined
-  ) {
+  const credentialRoot = credentialPayload.connection_vault_root;
+  const recoveryRoot = recoveryPayload.connection_vault_root;
+  const credentialSudo = credentialPayload.vault_sudo_key;
+  const recoverySudo = recoveryPayload.vault_sudo_key;
+  if (credentialRoot !== undefined && recoveryRoot !== undefined) {
+    const rootsMatch = constantTimeEqual(
+      base64urlToBytes(credentialRoot),
+      base64urlToBytes(recoveryRoot),
+    );
+    const sudoKeysMatch =
+      credentialSudo === undefined ||
+      constantTimeEqual(
+        base64urlToBytes(credentialSudo),
+        base64urlToBytes(recoverySudo!),
+      );
+    if (!rootsMatch || !sudoKeysMatch) {
+      throw new RecoveryFailedError(
+        "The credential and recovery capsules contain different Connection Vault roots. Refusing to choose one automatically; restore from a known-good recovery export.",
+      );
+    }
     return {
       alreadyEnabled: true,
-      connectionVaultRoot: base64urlToBytes(credentialPayload.connection_vault_root),
-      vaultSudoKey: base64urlToBytes(credentialPayload.vault_sudo_key!)
+      connectionVaultRoot: base64urlToBytes(credentialRoot),
+      vaultSudoKey: base64urlToBytes(recoverySudo!),
     };
   }
-  const connectionVaultRoot = existingRoot !== undefined ? base64urlToBytes(existingRoot) : randomBytes(32);
-  const vaultSudoKey = existingSudo !== undefined ? base64urlToBytes(existingSudo) : randomBytes(32);
+  const existingRoot = credentialRoot ?? recoveryRoot;
+  const existingSudo = recoverySudo ?? credentialSudo;
+  const derived =
+    existingRoot === undefined
+      ? deriveLegacyVaultMaterial(
+          recoveryKeys.capsuleKey,
+          recoveryPayload.account_id,
+        )
+      : undefined;
+  const connectionVaultRoot =
+    existingRoot !== undefined
+      ? base64urlToBytes(existingRoot)
+      : derived!.connectionVaultRoot;
+  const vaultSudoKey =
+    existingSudo !== undefined
+      ? base64urlToBytes(existingSudo)
+      : derived!.vaultSudoKey;
   const rootB64 = bytesToBase64url(connectionVaultRoot);
   const sudoB64 = bytesToBase64url(vaultSudoKey);
 
@@ -143,23 +222,36 @@ export async function enableConnectionVault(
     vault_sudo_key: sudoB64,
     created_at: nextCreatedAt(recoveryRead.best.event.created_at, now),
     vault_relay_hints: params.vaultRelayUrls,
-    protocol: { capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION, recovery_derivation: PROTOCOL_RECOVERY_DERIVATION }
+    protocol: {
+      capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
+      recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+    },
   };
   const refreshedRecoveryEvent = await buildRecoveryCapsuleEvent({
     recoveryPrivateKey: recoveryKeys.recoveryPrivateKey,
     capsuleKey: recoveryKeys.capsuleKey,
-    payload: refreshedRecoveryPayload
+    payload: refreshedRecoveryPayload,
   });
-  const recoveryPublishPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: recoveryKeys.recoveryPrivateKey });
-  const recoveryPublish = await publishAndVerify(recoveryPublishPool, refreshedRecoveryEvent, {
-    dTag: D_TAG_RECOVERY_CAPSULE,
-    minAcks: params.minAcknowledgements,
-    timeoutMs: params.timeoutMs
+  const recoveryPublishPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: recoveryKeys.recoveryPrivateKey,
   });
-  recoveryPublishPool.closeAll();
+  let recoveryPublish: PublishVerificationResult;
+  try {
+    recoveryPublish = await publishAndVerify(
+      recoveryPublishPool,
+      refreshedRecoveryEvent,
+      {
+        dTag: D_TAG_RECOVERY_CAPSULE,
+        minAcks: params.minAcknowledgements,
+        timeoutMs: params.timeoutMs,
+      },
+    );
+  } finally {
+    recoveryPublishPool.closeAll();
+  }
   if (!recoveryPublish.success) {
     throw new RegistrationFailedError(
-      "Enabling the vault did not reach the relay quorum while refreshing the recovery capsule. Nothing was changed; please retry."
+      "Enabling the vault did not reach recovery-capsule quorum. The credential capsule was not changed; retrying is safe and reuses the same deterministic vault roots.",
     );
   }
 
@@ -172,33 +264,48 @@ export async function enableConnectionVault(
     recovery_public_key: credentialPayload.recovery_public_key,
     recovery_capsule_event: refreshedRecoveryEvent,
     connection_vault_root: rootB64,
-    vault_sudo_key: sudoB64,
     created_at: nextCreatedAt(credentialEvent.created_at, now),
     vault_relay_hints: params.vaultRelayUrls,
     protocol: {
       password_kdf: PROTOCOL_PASSWORD_KDF,
       capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
-      recovery_derivation: PROTOCOL_RECOVERY_DERIVATION
-    }
+      recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+    },
   };
   const newCredentialEvent = await buildCredentialCapsuleEvent({
     locatorPrivateKey: passwordKeys.locatorPrivateKey,
     capsuleKey: passwordKeys.capsuleKey,
-    payload: newCredentialPayload
+    payload: newCredentialPayload,
   });
-  const credentialPublishPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: passwordKeys.locatorPrivateKey });
-  const credentialPublish = await publishAndVerify(credentialPublishPool, newCredentialEvent, {
-    dTag: D_TAG_PASSWORD_CAPSULE,
-    minAcks: params.minAcknowledgements,
-    timeoutMs: params.timeoutMs
+  const credentialPublishPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: passwordKeys.locatorPrivateKey,
   });
-  credentialPublishPool.closeAll();
+  let credentialPublish: PublishVerificationResult;
+  try {
+    credentialPublish = await publishAndVerify(
+      credentialPublishPool,
+      newCredentialEvent,
+      {
+        dTag: D_TAG_PASSWORD_CAPSULE,
+        minAcks: params.minAcknowledgements,
+        timeoutMs: params.timeoutMs,
+      },
+    );
+  } finally {
+    credentialPublishPool.closeAll();
+  }
   if (!credentialPublish.success) {
     throw new RegistrationFailedError(
       "The recovery capsule now carries the vault roots, but the credential capsule update did not reach quorum. " +
-        "Retry enableConnectionVault: it will reuse the same roots and only repair the credential capsule."
+        "Retry enableConnectionVault: it will reuse the same roots and only repair the credential capsule.",
     );
   }
 
-  return { alreadyEnabled: false, connectionVaultRoot, vaultSudoKey, recoveryPublish, credentialPublish };
+  return {
+    alreadyEnabled: false,
+    connectionVaultRoot,
+    vaultSudoKey,
+    recoveryPublish,
+    credentialPublish,
+  };
 }

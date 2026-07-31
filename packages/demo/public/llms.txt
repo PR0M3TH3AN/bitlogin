@@ -10,7 +10,7 @@
 ## Integrate in one snippet
 
 ```html
-<script type="module" src="https://bitlogin.network/vendor/bitlogin/bitlogin.js"></script>
+<script type="module" src="/vendor/bitlogin/bitlogin.js"></script>
 <bitlogin-auth
   vault-relays="wss://relay-one.example,wss://relay-two.example,wss://relay-three.example"
   discovery-relays="wss://discovery-one.example,wss://discovery-two.example">
@@ -80,16 +80,17 @@ deployment above.
 
 ## Key facts for integration
 
-- No build step required to consume it — plain `<script type="module">`.
+- Build or obtain a reviewed release, then self-host its complete module graph
+  on the application's own origin and load it with `<script type="module">`.
 - Don't give the element `id="bitlogin"` — browsers auto-expose elements with
   a matching `id`/`name` as a same-named global, which shadows
   `window.bitlogin`. Use `id="bitlogin-widget"` or similar.
 - Configure relays via the `vault-relays` and `discovery-relays` attributes
   (comma-separated `wss://` URLs); omit to use BitLogin's small built-in
   bootstrap list.
-- Manual (user-chosen) passwords are opt-in and discouraged by default — the
-  widget generates a high-entropy passphrase and recommends it, since a
-  downloadable encrypted capsule can be guessed against offline forever.
+- Human-chosen passwords are disabled. The widget always generates a
+  high-entropy passphrase because a downloadable encrypted capsule can be
+  guessed against offline forever.
 - Recovery is a 12-word BIP-39-style phrase, independent of the password;
   losing the password never locks the user out if they still have the
   phrase.

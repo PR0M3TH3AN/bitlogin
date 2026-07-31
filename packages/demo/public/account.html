@@ -7,9 +7,6 @@
 <meta name="description" content="Create, sign in to, recover, and manage a BitLogin account — including password rotation and identity export." />
 <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
 <link rel="manifest" href="./manifest.webmanifest" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="./assets/site.css" />
 </head>
 <body>
@@ -52,17 +49,7 @@
 </footer>
 
 <script type="module" src="./vendor/bitlogin/bitlogin.js"></script>
-<script type="module">
-  const el = document.getElementById('bitlogin-widget');
-  el.addEventListener('bitlogin-login', (e) => console.log('[bitlogin] signed in', e.detail.publicKey));
-  el.addEventListener('bitlogin-logout', () => console.log('[bitlogin] signed out'));
-</script>
-
-
-<script>
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./sw.js").catch(() => {});
-}
-</script>
+<script type="module" src="./assets/account.js"></script>
+<script type="module" src="./assets/site.js"></script>
 </body>
 </html>

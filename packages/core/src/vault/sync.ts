@@ -15,46 +15,35 @@
  */
 import { RelayPool } from "../nostr/pool.js";
 import { KIND_APP_DATA } from "../nostr/kinds.js";
-import { verifyNostrEvent, findTagValue, type NostrEvent } from "../nostr/event.js";
-import { publishAndVerify, type PublishVerificationResult } from "../account/publish.js";
+import {
+  compareNip01ReplacementOrder,
+  verifyNostrEvent,
+  findTagValue,
+  type NostrEvent,
+} from "../nostr/event.js";
+import {
+  publishAndVerify,
+  type PublishVerificationResult,
+} from "../account/publish.js";
+import { wipe } from "../crypto/memory.js";
 import type { KeyValueStore } from "../storage/interface.js";
-import { deriveVaultSigningKey, connectionDTag, connectionIdFromDTag } from "./derivation.js";
+import {
+  deriveVaultSigningKey,
+  connectionDTag,
+  connectionIdFromDTag,
+} from "./derivation.js";
 import { getPublicKeyHex } from "../crypto/secp256k1.js";
+import {
+  getRecordHighWaterMark,
+  raiseRecordHighWaterMark,
+} from "./recordHighWaterMark.js";
 
-function hwmKey(vaultPubkey: string, connectionId: string): string {
-  return `bitlogin:vault-hwm:${vaultPubkey}:${connectionId}`;
-}
-
-export interface RecordHighWaterMark {
-  createdAt: number;
-  eventId: string;
-}
-
-export async function getRecordHighWaterMark(
-  store: KeyValueStore,
-  vaultPubkey: string,
-  connectionId: string
-): Promise<RecordHighWaterMark | null> {
-  const raw = await store.get(hwmKey(vaultPubkey, connectionId));
-  return raw ? (JSON.parse(raw) as RecordHighWaterMark) : null;
-}
-
-export async function raiseRecordHighWaterMark(
-  store: KeyValueStore,
-  vaultPubkey: string,
-  connectionId: string,
-  observed: RecordHighWaterMark
-): Promise<void> {
-  const current = await getRecordHighWaterMark(store, vaultPubkey, connectionId);
-  if (current && current.createdAt > observed.createdAt) return;
-  // Equal timestamps are NOT a no-op: two devices editing the same record in
-  // the same second both compute nextCreatedAt(T) = T+1, so a benign edit can
-  // land at the exact timestamp of a REVOCATION. Ties break on event id (the
-  // addressable-event convention) so the mark advances deterministically
-  // rather than depending on which write arrived first.
-  if (current && current.createdAt === observed.createdAt && current.eventId <= observed.eventId) return;
-  await store.set(hwmKey(vaultPubkey, connectionId), JSON.stringify(observed));
-}
+export {
+  getRecordHighWaterMark,
+  raiseRecordHighWaterMark,
+  RecordHighWaterMarkError,
+  type RecordHighWaterMark,
+} from "./recordHighWaterMark.js";
 
 /** Publishes one record event to the vault relays with the §15.6 quorum bar,
  *  raising the local high-water mark only on success. */
@@ -77,16 +66,22 @@ export async function publishConnectionRecord(params: {
       // The readback bar follows the ack bar: a caller publishing to fewer
       // relays (a targeted repair, a test) has already lowered its quorum.
       minReadbacks: params.minAcknowledgements,
-      timeoutMs: params.timeoutMs
+      timeoutMs: params.timeoutMs,
     });
   } finally {
     pool.closeAll();
+    wipe(signingKey);
   }
   if (result.success) {
-    await raiseRecordHighWaterMark(params.store, params.event.pubkey, params.connectionId, {
-      createdAt: params.event.created_at,
-      eventId: params.event.id
-    });
+    await raiseRecordHighWaterMark(
+      params.store,
+      params.vaultPrk,
+      params.connectionId,
+      {
+        createdAt: params.event.created_at,
+        eventId: params.event.id,
+      },
+    );
   }
   return result;
 }
@@ -121,43 +116,56 @@ export async function fetchConnectionRecordEvents(params: {
   try {
     quorum = await pool.queryQuorum(
       { kinds: [KIND_APP_DATA], authors: [vaultPubkey], limit: FETCH_LIMIT },
-      params.timeoutMs
+      params.timeoutMs,
     );
   } finally {
     pool.closeAll();
+    wipe(signingKey);
   }
 
-  const truncated = quorum.outcomes.some((outcome) => outcome.events.length >= FETCH_LIMIT);
+  const truncated = quorum.outcomes.some(
+    (outcome) => outcome.events.length >= FETCH_LIMIT,
+  );
   const newestById = new Map<string, NostrEvent>();
   for (const event of quorum.outcomes.flatMap((o) => o.events)) {
     if (!verifyNostrEvent(event) || event.pubkey !== vaultPubkey) continue;
     const connectionId = connectionIdFromDTag(findTagValue(event, "d") ?? "");
     if (connectionId === null) continue;
     const current = newestById.get(connectionId);
-    if (!current || event.created_at > current.created_at) newestById.set(connectionId, event);
+    if (!current || compareNip01ReplacementOrder(event, current) > 0)
+      newestById.set(connectionId, event);
   }
 
   const events = new Map<string, NostrEvent>();
   const rollbackWarnings: string[] = [];
   for (const [connectionId, event] of newestById) {
-    const hwm = await getRecordHighWaterMark(params.store, vaultPubkey, connectionId);
-    // Strict `<` alone let a same-second sibling of a revocation through
-    // forever (the relay may keep both events at one address). An equal
-    // timestamp is only acceptable from the SAME event, or a later-sorting
-    // id under the same tie-break the mark itself uses.
+    const hwm = await getRecordHighWaterMark(
+      params.store,
+      params.vaultPrk,
+      connectionId,
+    );
+    // The event is stale only when it loses to the newest coordinate already
+    // accepted locally. At equal timestamps NIP-01's LOWER id is canonical.
     const stale =
       hwm !== null &&
-      (event.created_at < hwm.createdAt ||
-        (event.created_at === hwm.createdAt && event.id < hwm.eventId));
+      compareNip01ReplacementOrder(event, {
+        created_at: hwm.createdAt,
+        id: hwm.eventId,
+      }) < 0;
     if (stale) {
       rollbackWarnings.push(connectionId);
       continue;
     }
     events.set(connectionId, event);
-    await raiseRecordHighWaterMark(params.store, vaultPubkey, connectionId, {
-      createdAt: event.created_at,
-      eventId: event.id
-    });
+    await raiseRecordHighWaterMark(
+      params.store,
+      params.vaultPrk,
+      connectionId,
+      {
+        createdAt: event.created_at,
+        eventId: event.id,
+      },
+    );
   }
 
   return {
@@ -165,6 +173,6 @@ export async function fetchConnectionRecordEvents(params: {
     rollbackWarnings,
     quorumMet: quorum.quorumMet,
     respondedCount: quorum.respondedCount,
-    truncated
+    truncated,
   };
 }

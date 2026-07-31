@@ -15,22 +15,22 @@ export interface EncryptedEnvelope {
 }
 
 /**
- * Connection Vault key material carried by BOTH capsules (connection-vault.md
- * §5.2). Two independent 32-byte random roots, base64url:
+ * Connection Vault key material (connection-vault.md §5.2). Two independent
+ * 32-byte random roots, base64url:
  *
  * - `connection_vault_root` locates, signs, and encrypts connectable-tier
  *   connection records (NWC, scoped S3). Cacheable for the session, so daily
  *   wallet use never re-prompts.
  * - `vault_sudo_key` is REQUIRED additional key material for personal-tier
  *   records (stored passwords, secure notes). The honest-client contract: it
- *   is never persisted outside the capsules and is held in memory only for
- *   the duration of a sudo window — re-obtaining it costs a fresh capsule
- *   decryption (an Argon2id run on the password, or the phrase), which is
- *   what makes "re-enter your password to reveal" a real key ceremony rather
- *   than a skippable UI gate (§SF2).
+ *   is stored only in the phrase-gated recovery capsule and held in memory
+ *   only for the duration of a sudo window. It is intentionally absent from
+ *   newly-written password credential capsules, so a password/offline
+ *   credential-capsule compromise does not unlock personal-tier records.
  *
- * Both fields appear together or not at all; absent means the account
- * predates the vault (see enableConnectionVault).
+ * Recovery capsules carry both fields together. Credential capsules carry
+ * only `connection_vault_root`; `vault_sudo_key` remains optional here solely
+ * so pre-hardening credential capsules can be read and scrubbed on rotation.
  */
 export interface VaultCapsuleFields {
   connection_vault_root?: string; // base64url, 32 bytes

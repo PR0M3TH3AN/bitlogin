@@ -7,9 +7,6 @@
 <meta name="description" content="How to add the BitLogin login widget to any static site in a few minutes." />
 <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
 <link rel="manifest" href="./manifest.webmanifest" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="./assets/site.css" />
 </head>
 <body>
@@ -34,8 +31,8 @@
 <section class="container narrow">
   <ol class="step-list">
     <li>
-      <h3>Copy the widget files next to your site</h3>
-      <p>Grab <code>bitlogin.js</code> and <code>cryptoWorker.js</code> plus every <code>bitlogin-shared-*.js</code> chunk beside them (five files in a current build — two of the chunks are the lazily loaded wallet-connect flow, downloaded only when a user opens it) from a BitLogin release (or build <code>@bitlogin/widget</code> yourself) and drop them in a folder your site serves, e.g. <code>/vendor/bitlogin/</code>. All of them must live in the same directory — the main script resolves the others by relative URL.</p>
+      <h3>Self-host the widget on your site's origin</h3>
+      <p>Build <code>@bitlogin/widget</code> from the reviewed source and copy <code>bitlogin.js</code>, <code>cryptoWorker.js</code>, and every <code>bitlogin-shared-*.js</code> chunk into a folder served by the same origin as your app, e.g. <code>/vendor/bitlogin/</code>. Keep every file together because the entrypoint resolves its worker and chunks by relative URL. Do not load the demo deployment directly from another origin.</p>
     </li>
     <li>
       <h3>Include the script and the element</h3>
@@ -276,10 +273,6 @@ if (window.bitlogin?.releaseSigner()) {
 </footer>
 
 
-<script>
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./sw.js").catch(() => {});
-}
-</script>
+<script type="module" src="./assets/site.js"></script>
 </body>
 </html>

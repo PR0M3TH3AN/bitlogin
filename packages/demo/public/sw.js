@@ -1,30 +1,16 @@
-/**
- * Static-asset-only cache (§22.3). This service worker never sees relay traffic
- * (Nostr relay I/O is WebSocket, not fetch) and never handles form submissions,
- * so there is nothing sensitive in its fetch path by construction. It precaches
- * a fixed, explicit list of public files and serves them cache-first; anything
- * not on that list passes straight through to the network untouched.
- */
-const CACHE_NAME = "bitlogin-demo-v1";
-// Relative to this script's own location, so the same file works whether the
-// site is served from a domain root or a subpath (e.g. a GitHub Pages project
-// site at /bitlogin/).
-const PRECACHE_PATHS = [
-  "./",
-  "./index.html",
-  "./docs.html",
-  "./account.html",
-  "./assets/site.css",
-  "./assets/icon.svg",
-  "./manifest.webmanifest",
-  "./vendor/bitlogin/bitlogin.js",
-  "./vendor/bitlogin/cryptoWorker.js"
-];
-const PRECACHE_URLS = PRECACHE_PATHS.map((p) => new URL(p, self.location.href).toString());
+/** Generated at build time: the version and manifest cover the complete release graph. */
+const CACHE_NAME = "bitlogin-demo-__BITLOGIN_BUILD_HASH__";
+const PRECACHE_PATHS = ["__BITLOGIN_PRECACHE_MANIFEST__"];
+const PRECACHE_URLS = new Set(
+  PRECACHE_PATHS.map((path) => new URL(path, self.location.href).toString()),
+);
 
 self.addEventListener("install", (event) => {
+  // Do not skipWaiting: an older page may still need lazy chunks and the
+  // matching crypto worker from its own release. The new worker activates
+  // only after those clients close, with its complete cache already present.
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then((cache) => cache.addAll([...PRECACHE_URLS])),
   );
 });
 
@@ -32,25 +18,52 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
-      .then(() => self.clients.claim())
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter(
+              (key) => key.startsWith("bitlogin-demo-") && key !== CACHE_NAME,
+            )
+            .map((key) => caches.delete(key)),
+        ),
+      ),
   );
 });
 
+async function cacheFirst(request) {
+  const cached = await caches.match(request, {
+    cacheName: CACHE_NAME,
+    ignoreSearch: true,
+  });
+  return cached ?? fetch(request);
+}
+
+async function navigationForThisRelease(request) {
+  const url = new URL(request.url);
+  const relativePath = url.pathname.slice(
+    new URL("./", self.location.href).pathname.length,
+  );
+  const releasePath =
+    relativePath === "" ? "./index.html" : `./${relativePath}`;
+  const cached = await caches.match(new URL(releasePath, self.location.href), {
+    cacheName: CACHE_NAME,
+    ignoreSearch: true,
+  });
+  return cached ?? fetch(request);
+}
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
-  if (!PRECACHE_URLS.includes(url.toString())) return;
+  if (event.request.method !== "GET" || url.origin !== self.location.origin)
+    return;
 
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const network = fetch(event.request)
-        .then((response) => {
-          if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
-          return response;
-        })
-        .catch(() => cached);
-      return cached ?? network;
-    })
-  );
+  if (event.request.mode === "navigate") {
+    event.respondWith(navigationForThisRelease(event.request));
+    return;
+  }
+
+  if (!PRECACHE_URLS.has(url.toString())) return;
+  // Every controlled client stays on one complete release graph. This is
+  // especially important for lazy chunks and the main/worker protocol pair.
+  event.respondWith(cacheFirst(event.request));
 });

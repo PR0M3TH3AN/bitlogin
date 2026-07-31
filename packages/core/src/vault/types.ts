@@ -48,7 +48,7 @@ export interface ConnectionRecord {
 export interface NwcCredential {
   schema: typeof SCHEMA_CONNECTION_NWC_V1;
   wallet_pubkey: string; // lowercase hex
-  relays: string[]; // at least one, wss:// or ws://
+  relays: string[]; // at least one; TLS required except for loopback development
   secret: string; // lowercase hex, 32 bytes — the bearer client key
   lud16: string | null;
   /** Unknown query parameters retained verbatim for lossless export (§5). */

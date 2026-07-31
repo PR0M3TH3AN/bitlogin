@@ -8,7 +8,7 @@ import { entropyToRecoveryPhrase, isValidRecoveryPhrase, recoveryPhraseToSeed } 
 import { generatePrivateKey, getPublicKeyHex, isValidScalar, sign, verify } from "./secp256k1.js";
 import { aesGcmOpen, aesGcmSeal } from "./aesGcm.js";
 import { bytesToHex, hexToBytes, bytesToBase64url, base64urlToBytes, utf8ToBytes } from "./encoding.js";
-import { getConversationKey, nip44Encrypt, nip44Decrypt } from "./nip44.js";
+import { getConversationKey, MAX_NIP44_BROWSER_PLAINTEXT_LEN, MAX_NIP44_ENCODED_PAYLOAD_LEN, nip44Encrypt, nip44Decrypt } from "./nip44.js";
 import { nip04Encrypt, nip04Decrypt } from "./nip04.js";
 
 describe("ScalarExpand (§11.4 test vector)", () => {
@@ -192,19 +192,38 @@ describe("NIP-44 v2 (window.nostr.nip44 provider surface)", () => {
     expect(bytesToHex(getConversationKey(skA, pubB))).toBe(bytesToHex(getConversationKey(skB, pubA)));
   });
 
-  it.each([1, 31, 32, 33, 64, 100, 1000, 65535, 65536, 70000])(
-    "round-trips a %i-byte plaintext",
-    (len) => {
-      const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
-      const plaintext = "x".repeat(len);
-      const encrypted = nip44Encrypt(key, plaintext);
-      expect(nip44Decrypt(key, encrypted)).toBe(plaintext);
-    }
-  );
+  it.each([1, 31, 32, 33, 64, 100, 1000, 65535, 65536, 70000])("round-trips a %i-byte plaintext", (len) => {
+    const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    const plaintext = "x".repeat(len);
+    const encrypted = nip44Encrypt(key, plaintext);
+    expect(nip44Decrypt(key, encrypted)).toBe(plaintext);
+  });
 
   it("rejects a plaintext of zero bytes", () => {
     const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
     expect(() => nip44Encrypt(key, "")).toThrow();
+  });
+
+  it("validates conversation-key and nonce lengths before cryptographic use", () => {
+    const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    expect(() => nip44Encrypt(new Uint8Array(31), "hello")).toThrow(/conversation key/u);
+    expect(() => nip44Encrypt(key, "hello", new Uint8Array(31))).toThrow(/nonce/u);
+  });
+
+  it("rejects unsupported encodings and undersized payloads before parsing fields", () => {
+    const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    expect(() => nip44Decrypt(key, "#future-format")).toThrow(/Unsupported NIP-44 non-base64 encoding/u);
+    expect(() => nip44Decrypt(key, "A".repeat(131))).toThrow(/payload size/u);
+    // 98 decoded bytes can still occupy the 132-character encoded minimum.
+    expect(bytesToBase64urlForTest(new Uint8Array(98))).toHaveLength(132);
+    expect(() => nip44Decrypt(key, bytesToBase64urlForTest(new Uint8Array(98)))).toThrow(/decoded payload size/u);
+  });
+
+  it("enforces the documented browser cap before base64 decoding", () => {
+    const key = getConversationKey(generatePrivateKey(), getPublicKeyHex(generatePrivateKey()));
+    expect(MAX_NIP44_BROWSER_PLAINTEXT_LEN).toBe(1024 * 1024);
+    expect(() => nip44Decrypt(key, "A".repeat(MAX_NIP44_ENCODED_PAYLOAD_LEN + 1))).toThrow(/payload size/u);
+    expect(() => nip44Encrypt(key, "x".repeat(MAX_NIP44_BROWSER_PLAINTEXT_LEN + 1))).toThrow(/plaintext length/u);
   });
 
   it("fails to decrypt with the wrong conversation key", () => {
@@ -234,7 +253,7 @@ describe("NIP-04 (window.nostr.nip04 provider surface)", () => {
     expect(nip04Decrypt(skB, pubA, encrypted)).toBe(plaintext);
   });
 
-  it("produces the documented \"<ciphertext>?iv=<iv>\" payload shape", () => {
+  it('produces the documented "<ciphertext>?iv=<iv>" payload shape', () => {
     const skA = generatePrivateKey();
     const pubB = getPublicKeyHex(generatePrivateKey());
     const encrypted = nip04Encrypt(skA, pubB, "hello");
@@ -260,7 +279,7 @@ describe("NIP-04 (window.nostr.nip04 provider surface)", () => {
     expect(threw || decrypted !== "secret message").toBe(true);
   });
 
-  it("rejects a payload missing the \"?iv=\" suffix", () => {
+  it('rejects a payload missing the "?iv=" suffix', () => {
     const sk = generatePrivateKey();
     const pub = getPublicKeyHex(generatePrivateKey());
     expect(() => nip04Decrypt(sk, pub, "not-a-real-payload")).toThrow();

@@ -6,7 +6,7 @@
  * Not shipped in the published package.
  */
 import { WebSocketServer, type WebSocket } from "ws";
-import { verifyNostrEvent, findTagValue, type NostrEvent } from "../nostr/event.js";
+import { compareNip01ReplacementOrder, verifyNostrEvent, findTagValue, type NostrEvent } from "../nostr/event.js";
 
 function storageKey(event: NostrEvent): string {
   if (event.kind >= 30000 && event.kind < 40000) {
@@ -33,6 +33,13 @@ export class MockRelay {
    *  that accepts some writes and drops others -- the case that makes write
    *  ORDERING a safety property rather than a style choice. */
   public refusePublishFrom: Set<string> = new Set();
+  /** Frames injected before normal query results, even when they do not match
+   *  the requested filter. Models a malicious or buggy relay. */
+  public unsolicitedQueryEvents: unknown[] = [];
+  /** Addressable-event d tags whose publishes are refused. Lets ordering tests
+   *  reject recovery writes while still accepting credential writes (or vice
+   *  versa), independently of the signing identity. */
+  public refusePublishDTags: Set<string> = new Set();
 
   private constructor(wss: WebSocketServer, port: number) {
     this.wss = wss;
@@ -66,14 +73,16 @@ export class MockRelay {
       if (type === "EVENT") {
         const [event] = rest as [NostrEvent];
         if (!verifyNostrEvent(event)) {
-          socket.send(JSON.stringify(["OK", event.id, false, "invalid: bad signature or id"]));
+          const eventId = typeof event === "object" && event !== null && "id" in event && typeof event.id === "string" ? event.id : "";
+          socket.send(JSON.stringify(["OK", eventId, false, "invalid: bad signature, id, or shape"]));
           return;
         }
         if (this.requireAuthForKinds.has(event.kind)) {
           socket.send(JSON.stringify(["OK", event.id, false, "auth-required: publish requires NIP-42 AUTH"]));
           return;
         }
-        if (this.refusePublishFrom.has(event.pubkey)) {
+        const dTag = findTagValue(event, "d");
+        if (this.refusePublishFrom.has(event.pubkey) || (dTag !== undefined && this.refusePublishDTags.has(dTag))) {
           socket.send(JSON.stringify(["OK", event.id, false, "blocked: refused by test relay"]));
           return;
         }
@@ -84,6 +93,7 @@ export class MockRelay {
       if (type === "REQ") {
         const [subId, ...filters] = rest as [string, Record<string, unknown>];
         const matches = this.query(filters[0] ?? {});
+        for (const event of this.unsolicitedQueryEvents) socket.send(JSON.stringify(["EVENT", subId, event]));
         for (const event of matches) socket.send(JSON.stringify(["EVENT", subId, event]));
         socket.send(JSON.stringify(["EOSE", subId]));
         return;
@@ -105,9 +115,7 @@ export class MockRelay {
       this.events.set(key, event);
       return;
     }
-    if (event.created_at > existing.created_at) {
-      this.events.set(key, event);
-    } else if (event.created_at === existing.created_at && event.id < existing.id) {
+    if (compareNip01ReplacementOrder(event, existing) > 0) {
       this.events.set(key, event);
     }
     // else: existing event wins, replacement discarded (NIP-01 replacement rule)

@@ -6,7 +6,10 @@ import { RelayPool } from "../nostr/pool.js";
 import { readCredentialCapsule } from "./capsuleReader.js";
 import { AccountNotFoundError, RollbackDetectedError } from "./errors.js";
 import { getHighWaterMark, raiseHighWaterMark } from "./highWaterMark.js";
-import { InMemoryKeyValueStore, type KeyValueStore } from "../storage/interface.js";
+import {
+  InMemoryKeyValueStore,
+  type KeyValueStore,
+} from "../storage/interface.js";
 import type { NostrEvent } from "../nostr/event.js";
 
 export interface LoginParams {
@@ -37,7 +40,7 @@ export interface LoginResult {
   recoveryCapsuleEvent: NostrEvent;
   /** Connection Vault root (§CV5.2) — undefined on accounts that have not run enableConnectionVault. Cacheable for the session. */
   connectionVaultRoot?: Uint8Array;
-  /** Sudo key (§CV5.2). The caller must NOT cache this beyond a sudo window — obtaining it again is the ceremony. */
+  /** @deprecated Password login never returns the phrase-gated sudo key. */
   vaultSudoKey?: Uint8Array;
   /** Set when the accepted generation is lower than one this device has previously seen (§16.2 step 6). */
   rollbackWarning?: string;
@@ -52,18 +55,34 @@ export interface LoginResult {
  * that will carry everyday-identity traffic (§23.4) — capsule and
  * everyday-identity operations must never share a relay connection.
  */
-export async function loginWithPassword(params: LoginParams): Promise<LoginResult> {
+export async function loginWithPassword(
+  params: LoginParams,
+): Promise<LoginResult> {
   const normalizedLoginName = normalizeLoginName(params.loginName);
-  const { locatorPrivateKey, capsuleKey } = await derivePasswordKeys(params.password, normalizedLoginName);
+  const { locatorPrivateKey, capsuleKey } = await derivePasswordKeys(
+    params.password,
+    normalizedLoginName,
+  );
   const locatorPublicKey = getPublicKeyHex(locatorPrivateKey);
 
-  const pool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: locatorPrivateKey });
+  const pool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: locatorPrivateKey,
+  });
   try {
-    const result = await readCredentialCapsule(pool, locatorPublicKey, capsuleKey, params.timeoutMs);
+    const result = await readCredentialCapsule(
+      pool,
+      locatorPublicKey,
+      capsuleKey,
+      params.timeoutMs,
+    );
 
     if (!result.quorumMet) throw new AccountNotFoundError("quorum-not-met");
     if (!result.best) {
-      throw new AccountNotFoundError(result.candidates.length > 0 ? "no-valid-candidate" : "no-matching-event");
+      throw new AccountNotFoundError(
+        result.candidates.length > 0
+          ? "no-valid-candidate"
+          : "no-matching-event",
+      );
     }
     const payload = result.best.payload!;
 
@@ -76,10 +95,12 @@ export async function loginWithPassword(params: LoginParams): Promise<LoginResul
     const rollbackWarning = isRollback
       ? `This device previously saw credential generation ${hwm.generation}, but the accepted capsule is generation ${payload.generation}. Relays may be serving stale data, or an old capsule is being replayed.`
       : undefined;
-    await raiseHighWaterMark(store, payload.operational_public_key, { generation: payload.generation });
+    await raiseHighWaterMark(store, payload.operational_public_key, {
+      generation: payload.generation,
+    });
 
     const relayDisagreementWarning = result.relayDisagreement
-      ? "Configured relays returned different credential capsules as \"latest\" for this account. Some relays may be stale, censored, or malicious."
+      ? 'Configured relays returned different credential capsules as "latest" for this account. Some relays may be stale, censored, or malicious.'
       : undefined;
 
     return {
@@ -93,9 +114,8 @@ export async function loginWithPassword(params: LoginParams): Promise<LoginResul
       connectionVaultRoot: payload.connection_vault_root
         ? base64urlToBytes(payload.connection_vault_root)
         : undefined,
-      vaultSudoKey: payload.vault_sudo_key ? base64urlToBytes(payload.vault_sudo_key) : undefined,
       rollbackWarning,
-      relayDisagreementWarning
+      relayDisagreementWarning,
     };
   } finally {
     pool.closeAll();

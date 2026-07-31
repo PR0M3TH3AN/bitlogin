@@ -19,9 +19,9 @@ packages/
                               runs in Node or a browser/worker.
   widget/  @bitlogin/widget — <bitlogin-auth> custom element + a NIP-07-shaped
                               window.nostr provider, backed by a dedicated
-                              crypto Web Worker. Built with Vite into two
-                              static files any site can <script> in.
-  demo/    @bitlogin/demo   — plain static site (no build step of its own)
+                              crypto Web Worker. Built with Vite into a
+                              same-origin, self-hosted module graph.
+  demo/    @bitlogin/demo   — plain static site with a release-manifest build
                               consuming the widget: a landing/branding page,
                               an integration guide, and an account-manager
                               page (create/login/recover, password rotation,
@@ -47,7 +47,8 @@ in `packages/demo/dist/` is a complete, ready-to-host static site.
 <script type="module" src="/vendor/bitlogin/bitlogin.js"></script>
 <bitlogin-auth
   vault-relays="wss://relay-one.example,wss://relay-two.example,wss://relay-three.example"
-  discovery-relays="wss://discovery-one.example,wss://discovery-two.example">
+  discovery-relays="wss://discovery-one.example,wss://discovery-two.example"
+>
 </bitlogin-auth>
 ```
 
@@ -63,14 +64,14 @@ the worker and are not handed to the main thread by the signing APIs — those
 return public keys, signed events, and ciphertext only.
 
 **Be precise about what that does and does not buy you.** The worker protects
-keys from *accidental* exposure through the normal API surface; it is not a
+keys from _accidental_ exposure through the normal API surface; it is not a
 boundary against the host page itself. A page that embeds `<bitlogin-auth>`
 runs same-origin with it and can reach the element's worker client directly,
 so a malicious or XSS-compromised host can call `exportIdentity` and obtain
 the `nsec`, and can synthesize UI events (the widget rejects untrusted ones,
 and can still be visually overlaid by host CSS). This is inherent to an
 embedded same-origin component — the same reason `docs/connection-vault.md`
-§12.3 says wallet credentials are *revealed*, not brokered. Treat the host
+§12.3 says wallet credentials are _revealed_, not brokered. Treat the host
 page as trusted; embed BitLogin only in sites you control, and prefer the
 recovery phrase (never the exported nsec) as the durable backup. A
 cross-origin or extension build is what would change this, and is not
@@ -98,8 +99,12 @@ whichever provider signed in last currently owns.
 user to share an NWC wallet connection with its origin:
 
 ```javascript
-const uri = await document.querySelector("bitlogin-auth")
-  .requestNwcConnection({ appName: "Satisfied", reason: "Pay for meal analysis" });
+const uri = await document
+  .querySelector("bitlogin-auth")
+  .requestNwcConnection({
+    appName: "Satisfied",
+    reason: "Pay for meal analysis",
+  });
 if (uri) payWith(uri); // full nostr+walletconnect:// URI, or null if declined
 ```
 
@@ -200,21 +205,21 @@ or an inline style), without touching the widget's internals:
 
 ```css
 bitlogin-auth {
-  --bl-accent: #3d9bff;       /* primary button / link / focus ring color */
+  --bl-accent: #3d9bff; /* primary button / link / focus ring color */
   --bl-accent-hover: #2f86e0; /* primary button hover */
-  --bl-accent-fg: #04101f;    /* text color on top of --bl-accent */
-  --bl-bg: #12151f;           /* card background */
-  --bl-fg: #eaeef6;           /* body text */
-  --bl-muted: #98a2b6;        /* secondary text */
-  --bl-border: rgba(255, 255, 255, 0.10);
-  --bl-input-bg: #1a1e2b;     /* input/credential-box background */
+  --bl-accent-fg: #04101f; /* text color on top of --bl-accent */
+  --bl-bg: #12151f; /* card background */
+  --bl-fg: #eaeef6; /* body text */
+  --bl-muted: #98a2b6; /* secondary text */
+  --bl-border: rgba(255, 255, 255, 0.1);
+  --bl-input-bg: #1a1e2b; /* input/credential-box background */
   --bl-danger: #ff6b6b;
   --bl-danger-bg: rgba(255, 107, 107, 0.16);
   --bl-warn: #ff6b6b;
   --bl-warn-bg: rgba(255, 107, 107, 0.16);
   --bl-radius: 14px;
   --bl-font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  --bl-max-width: none;       /* default 380px keeps it a fixed-width card;
+  --bl-max-width: none; /* default 380px keeps it a fixed-width card;
                                   override to fill a wider container */
 }
 ```
@@ -235,14 +240,19 @@ configuration. GitHub Pages was evaluated but dropped — Pages requires a paid
 plan for private repositories, whereas Vercel's free tier deploys a private
 repo without that restriction.
 
-Because the deployed demo serves the built widget files as plain static
-assets at `/vendor/bitlogin/`, **any other site can point directly at the
-Vercel deployment today** without installing anything locally:
+The widget and its dedicated worker must be served from the application's
+own origin. Build the reviewed source, then vendor the complete output of
+`packages/widget/dist/` into your deployment:
 
 ```html
-<script type="module" src="https://bitlogin.network/vendor/bitlogin/bitlogin.js"></script>
+<script type="module" src="/vendor/bitlogin/bitlogin.js"></script>
 <bitlogin-auth></bitlogin-auth>
 ```
+
+Keep `bitlogin.js`, `cryptoWorker.js`, and every `bitlogin-shared-*.js` chunk
+together. Do not point production applications directly at the demo domain:
+cross-origin workers are rejected by browsers, and remotely mutable account
+code would add an unnecessary supply-chain trust dependency.
 
 `bitlogin.network` and `www.bitlogin.network` are attached to the same
 Vercel project as production domains (`bitlogin.vercel.app` keeps working as
@@ -250,9 +260,9 @@ the underlying `*.vercel.app` alias regardless). DNS for a domain bought
 outside Vercel has to be pointed at it separately — see "Custom domain DNS"
 below if you're standing this project up on a new domain yourself.
 
-This is fine for prototyping across multiple projects; for production use in
-someone else's app, self-hosting the built files (or a future published npm
-package / CDN release) avoids depending on this demo deployment's uptime.
+The Vercel deployment is the reference demo and account manager, not a widget
+CDN. Published release checksums and an SBOM should be verified before vendoring
+artifacts into another application.
 
 ### Custom domain DNS
 
@@ -345,6 +355,7 @@ relay list plumbing (§19), and the full crypto stack from §11 (Argon2id,
 HKDF, ScalarExpand, AES-256-GCM, JCS, fixed padding buckets).
 
 **Deferred / not in this pass:**
+
 - Phase 2 messaging (NIP-17 inbox/compose) — the NIP-44 primitive is built
   and tested, but no conversation UI is wired up.
 - Phase 3 application redirect-auth flow (§26.3) and NIP-46/NIP-07 browser
@@ -353,8 +364,9 @@ HKDF, ScalarExpand, AES-256-GCM, JCS, fixed padding buckets).
   shipped unverified against official test vectors; plain `nsec`/`npub`
   (NIP-19) export is implemented instead.
 - The maintainer-signed bootstrap relay-list channel (§19.1) has the
-  verify/merge logic implemented but ships with a placeholder maintainer
-  public key — a real deployment needs to swap in a real one.
+  verify/merge logic implemented but is deliberately disabled (`null`) until
+  a real controlled maintainer key and rotation/revocation process are
+  reviewed and announced out-of-band.
 - Native clients, hardware-backed recovery, independent second
   implementation, and formal security audit (Phase 4).
 

@@ -192,6 +192,12 @@ export interface VaultConnectionSummary {
 export interface VaultListResult {
   connections: VaultConnectionSummary[];
   rollbackWarnings: string[];
+  /** Signed records that could not be decrypted or validated and were omitted. */
+  unreadable: string[];
+  /** True when at least one relay filled the fetch page, so records may be missing. */
+  truncated: boolean;
+  /** True when enough configured relays participated in the read. */
+  quorumMet: boolean;
 }
 
 export interface VaultSaveNwcPayload {

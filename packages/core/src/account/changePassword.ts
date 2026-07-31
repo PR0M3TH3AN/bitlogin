@@ -3,16 +3,35 @@ import { getPublicKeyHex } from "../crypto/secp256k1.js";
 import { derivePasswordKeys, normalizeLoginName } from "./normalize.js";
 import { nextCreatedAt } from "./timestamp.js";
 import { RelayPool, countAcknowledgements } from "../nostr/pool.js";
-import { D_TAG_PASSWORD_CAPSULE, KIND_APP_DATA, SCHEMA_CREDENTIAL_V1 } from "../nostr/kinds.js";
+import {
+  D_TAG_PASSWORD_CAPSULE,
+  KIND_APP_DATA,
+  SCHEMA_CREDENTIAL_V1,
+} from "../nostr/kinds.js";
 import { readCredentialCapsule } from "./capsuleReader.js";
-import { buildCredentialCapsuleEvent, buildCredentialTombstoneEvent } from "../capsules/credentialCapsule.js";
+import {
+  buildCredentialCapsuleEvent,
+  buildCredentialTombstoneEvent,
+} from "../capsules/credentialCapsule.js";
 import { buildDeletionRequest } from "../nostr/nip09.js";
-import { PROTOCOL_CAPSULE_ENCRYPTION, PROTOCOL_PASSWORD_KDF, PROTOCOL_RECOVERY_DERIVATION } from "../capsules/types.js";
+import {
+  PROTOCOL_CAPSULE_ENCRYPTION,
+  PROTOCOL_PASSWORD_KDF,
+  PROTOCOL_RECOVERY_DERIVATION,
+} from "../capsules/types.js";
 import type { CredentialPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
-import { AccountAlreadyExistsError, AccountNotFoundError, RegistrationFailedError, RollbackDetectedError } from "./errors.js";
+import {
+  AccountAlreadyExistsError,
+  AccountNotFoundError,
+  RegistrationFailedError,
+  RollbackDetectedError,
+} from "./errors.js";
 import { getHighWaterMark, raiseHighWaterMark } from "./highWaterMark.js";
-import { InMemoryKeyValueStore, type KeyValueStore } from "../storage/interface.js";
+import {
+  InMemoryKeyValueStore,
+  type KeyValueStore,
+} from "../storage/interface.js";
 import type { NostrEvent } from "../nostr/event.js";
 
 export interface ChangePasswordParams {
@@ -44,23 +63,39 @@ export interface ChangePasswordResult {
   deletionAcknowledgedCount: number;
 }
 
-export async function changePassword(params: ChangePasswordParams): Promise<ChangePasswordResult> {
+export async function changePassword(
+  params: ChangePasswordParams,
+): Promise<ChangePasswordResult> {
   const now = params.now ?? Math.floor(Date.now() / 1000);
   const normalizedLoginName = normalizeLoginName(params.loginName);
 
-  const oldKeys = await derivePasswordKeys(params.oldPassword, normalizedLoginName);
+  const oldKeys = await derivePasswordKeys(
+    params.oldPassword,
+    normalizedLoginName,
+  );
   const oldLocatorPublicKey = getPublicKeyHex(oldKeys.locatorPrivateKey);
 
-  const readPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: oldKeys.locatorPrivateKey });
+  const readPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: oldKeys.locatorPrivateKey,
+  });
   let readResult;
   try {
-    readResult = await readCredentialCapsule(readPool, oldLocatorPublicKey, oldKeys.capsuleKey, params.timeoutMs);
+    readResult = await readCredentialCapsule(
+      readPool,
+      oldLocatorPublicKey,
+      oldKeys.capsuleKey,
+      params.timeoutMs,
+    );
   } finally {
     readPool.closeAll();
   }
   if (!readResult.quorumMet) throw new AccountNotFoundError("quorum-not-met");
   if (!readResult.best) {
-    throw new AccountNotFoundError(readResult.candidates.length > 0 ? "no-valid-candidate" : "no-matching-event");
+    throw new AccountNotFoundError(
+      readResult.candidates.length > 0
+        ? "no-valid-candidate"
+        : "no-matching-event",
+    );
   }
   const oldPayload = readResult.best.payload!;
   const oldEvent = readResult.best.event;
@@ -76,7 +111,10 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
     throw new RollbackDetectedError(hwm.generation, oldPayload.generation);
   }
 
-  const newKeys = await derivePasswordKeys(params.newPassword, normalizedLoginName);
+  const newKeys = await derivePasswordKeys(
+    params.newPassword,
+    normalizedLoginName,
+  );
   const newLocatorPublicKey = getPublicKeyHex(newKeys.locatorPrivateKey);
 
   // §15.6/§18.1 — the new locator address is a NIP-33 replaceable event too, fully
@@ -84,21 +122,28 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
   // exists there (this login name rotated to a password that happens to already be
   // registered under it), publishing would silently destroy that other account exactly
   // like an unchecked registration would.
-  const newLocatorCheckPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: newKeys.locatorPrivateKey });
+  const newLocatorCheckPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: newKeys.locatorPrivateKey,
+  });
   let existingAtNewLocator;
   try {
-    existingAtNewLocator = await readCredentialCapsule(newLocatorCheckPool, newLocatorPublicKey, newKeys.capsuleKey, params.timeoutMs);
+    existingAtNewLocator = await readCredentialCapsule(
+      newLocatorCheckPool,
+      newLocatorPublicKey,
+      newKeys.capsuleKey,
+      params.timeoutMs,
+    );
   } finally {
     newLocatorCheckPool.closeAll();
   }
   if (!existingAtNewLocator.quorumMet) {
     throw new RegistrationFailedError(
-      "Couldn't verify the new password isn't already registered under this login name. Please retry, or add more vault relays."
+      "Couldn't verify the new password isn't already registered under this login name. Please retry, or add more vault relays.",
     );
   }
   if (existingAtNewLocator.candidates.length > 0) {
     throw new AccountAlreadyExistsError(
-      "Another account is already registered with this login name and the new password you chose. Pick a different new password."
+      "Another account is already registered with this login name and the new password you chose. Pick a different new password.",
     );
   }
 
@@ -112,32 +157,38 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
     operational_public_key: oldPayload.operational_public_key,
     recovery_public_key: oldPayload.recovery_public_key,
     recovery_capsule_event: oldPayload.recovery_capsule_event,
-    // Carried forward like every other long-lived field (§CV5.2): dropping
-    // the vault roots on a password change would strand every connection
-    // record until the next phrase ceremony.
+    // Carry only the session root. A legacy credential may contain the sudo
+    // key, but rotation deliberately scrubs it; personal-tier access remains
+    // phrase-gated through the recovery capsule.
     ...(oldPayload.connection_vault_root !== undefined
-      ? { connection_vault_root: oldPayload.connection_vault_root, vault_sudo_key: oldPayload.vault_sudo_key }
+      ? { connection_vault_root: oldPayload.connection_vault_root }
       : {}),
     created_at: now,
     vault_relay_hints: params.vaultRelayUrls,
     protocol: {
       password_kdf: PROTOCOL_PASSWORD_KDF,
       capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
-      recovery_derivation: PROTOCOL_RECOVERY_DERIVATION
-    }
+      recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+    },
   };
   const newCredentialEvent = await buildCredentialCapsuleEvent({
     locatorPrivateKey: newKeys.locatorPrivateKey,
     capsuleKey: newKeys.capsuleKey,
-    payload: newPayload
+    payload: newPayload,
   });
 
-  const newPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: newKeys.locatorPrivateKey });
-  const newCredentialPublish = await publishAndVerify(newPool, newCredentialEvent, {
-    dTag: D_TAG_PASSWORD_CAPSULE,
-    minAcks: params.minAcknowledgements,
-    timeoutMs: params.timeoutMs
+  const newPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: newKeys.locatorPrivateKey,
   });
+  const newCredentialPublish = await publishAndVerify(
+    newPool,
+    newCredentialEvent,
+    {
+      dTag: D_TAG_PASSWORD_CAPSULE,
+      minAcks: params.minAcknowledgements,
+      timeoutMs: params.timeoutMs,
+    },
+  );
   newPool.closeAll();
 
   // ORDERING IS A SAFETY PROPERTY, not a style choice. The tombstone below
@@ -151,30 +202,34 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
   if (!newCredentialPublish.success) {
     throw new RegistrationFailedError(
       "The new credential capsule did not reach the required relay acknowledgement and readback quorum. " +
-        "Your existing password still works; nothing was changed. Please retry."
+        "Your existing password still works; nothing was changed. Please retry.",
     );
   }
 
   // §18.1 steps 4-5: mandatory tombstone + NIP-09 deletion at the OLD locator address.
   const tombstoneEvent = buildCredentialTombstoneEvent({
     oldLocatorPrivateKey: oldKeys.locatorPrivateKey,
-    createdAt: nextCreatedAt(oldEvent.created_at, now)
+    createdAt: nextCreatedAt(oldEvent.created_at, now),
   });
   const deletionRequestEvent = buildDeletionRequest({
     privateKey: oldKeys.locatorPrivateKey,
     eventIdToDelete: oldEvent.id,
     deletedEventKind: KIND_APP_DATA,
-    createdAt: now
+    createdAt: now,
   });
 
-  const oldPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: oldKeys.locatorPrivateKey });
+  const oldPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: oldKeys.locatorPrivateKey,
+  });
   const [tombstoneOutcomes, deletionOutcomes] = await Promise.all([
     oldPool.publishAll(tombstoneEvent, params.timeoutMs),
-    oldPool.publishAll(deletionRequestEvent, params.timeoutMs)
+    oldPool.publishAll(deletionRequestEvent, params.timeoutMs),
   ]);
   oldPool.closeAll();
 
-  await raiseHighWaterMark(store, oldPayload.operational_public_key, { generation: newGeneration });
+  await raiseHighWaterMark(store, oldPayload.operational_public_key, {
+    generation: newGeneration,
+  });
 
   return {
     normalizedLoginName,
@@ -188,6 +243,6 @@ export async function changePassword(params: ChangePasswordParams): Promise<Chan
     deletionRequestEvent,
     newCredentialPublish,
     tombstoneAcknowledgedCount: countAcknowledgements(tombstoneOutcomes),
-    deletionAcknowledgedCount: countAcknowledgements(deletionOutcomes)
+    deletionAcknowledgedCount: countAcknowledgements(deletionOutcomes),
   };
 }

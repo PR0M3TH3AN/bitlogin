@@ -224,9 +224,7 @@ Each connection is stored as its own NIP-78-style addressable event:
   "pubkey": "<connection-vault-public-key>",
   "created_at": 1784750000,
   "kind": 30078,
-  "tags": [
-    ["d", "bitlogin:connection:Vx7LgdZCsVbT_2uvB0YoGA"]
-  ],
+  "tags": [["d", "bitlogin:connection:Vx7LgdZCsVbT_2uvB0YoGA"]],
   "content": "<encoded-encrypted-envelope>",
   "sig": "<vault-signature>"
 }
@@ -384,13 +382,13 @@ Conceptual API:
 
 ```javascript
 const connections = await bitlogin.connections.list({
-  type: "nwc"
+  type: "nwc",
 });
 
 const grant = await bitlogin.connections.requestAccess({
   connectionId: connections[0].id,
   operations: ["pay_invoice", "get_balance"],
-  reason: "Pay for AI inference"
+  reason: "Pay for AI inference",
 });
 ```
 
@@ -544,10 +542,9 @@ At minimum:
 These were finalized when §5–§13 shipped in `@bitlogin/core`. Where this
 section and the earlier prose disagree, this section wins.
 
-### 18.1 Two capsule fields, not one
+### 18.1 Phrase-gated sudo material
 
-The capsules gained **two** paired 32-byte roots, not just the vault root of
-§5.2:
+The vault uses two independent 32-byte roots:
 
 ```json
 {
@@ -556,13 +553,20 @@ The capsules gained **two** paired 32-byte roots, not just the vault root of
 }
 ```
 
-Validation enforces that they appear together or not at all (a capsule with
-one but not the other is corrupt and must not grant a session). Registration
-mints both for every new account; `enableConnectionVault` is the §5.3
-ceremony for accounts that predate them, requires the recovery phrase,
-writes the recovery capsule first, fails closed, and is idempotent — a retry
-after a partial failure REUSES roots found in either capsule rather than
-minting twice, because minting twice would strand existing records.
+The phrase-gated recovery capsule carries both fields together. A newly
+written password credential capsule carries only `connection_vault_root`.
+This lets an ordinary login restore connectable-tier records without placing
+the personal-tier `vault_sudo_key` behind the same offline-guessable password
+capsule. Pre-hardening credential capsules that contain both remain readable
+for compatibility, but password login does not return their sudo key and the
+next password rotation scrubs it from the credential capsule.
+
+Registration mints both roots for every new account;
+`enableConnectionVault` is the §5.3 ceremony for accounts that predate them,
+requires the recovery phrase, writes the recovery capsule first, fails
+closed, and is idempotent. Legacy migration derives the same roots
+deterministically from phrase-protected material and `account_id`, so two
+concurrent migration attempts cannot mint divergent roots.
 
 ### 18.2 The sensitivity-tier model and why the sudo key exists
 
@@ -577,12 +581,11 @@ Records carry a `tier` field:
 - **`personal`** (stored passwords, secure notes): record keys additionally
   require `vault_sudo_key` as HKDF input
   (`personal_prk = HKDF-Extract(SHA256("bitlogin/connection-vault-personal/v1"), root || sudo_key)`).
-  The honest-client contract: the sudo key is never persisted outside the
-  capsules and is held in memory only during a sudo window
-  (`VaultSession.enableSudo`/`endSudo`, which wipe it). Re-opening a window
-  requires re-decrypting a capsule — a fresh Argon2id run on the password, or
-  the phrase — which is what makes "re-enter your password to reveal" a real
-  key ceremony rather than the cosmetic gate §SF2 forbids.
+  The sudo key is stored only in the phrase-gated recovery capsule and held
+  in memory only during a sudo window (`VaultSession.enableSudo`/`endSudo`,
+  which wipe it). Re-opening a window requires a phrase ceremony; an ordinary
+  password login cannot provide the key. Personal-tier UI remains deferred
+  until that ceremony has a separately reviewed interface.
   **The app-facing API must be structurally blind to this tier**: an embedded
   widget cannot do exact-origin matching, and revealing one site's password
   to another site's page is a phishing machine with a consent screen.
@@ -619,24 +622,28 @@ newest accepted `created_at` per connection id, and `fetchConnectionRecordEvents
 withholds and reports anything older instead of serving it — a stale replica
 must never silently resurrect a revoked credential.
 
-
 ## 19. Known limitations (audit, 2026-07-31)
 
 An adversarial audit of the implementation produced fixes for the worst
 findings (origin binding now enforced worker-side; `destroy()` wipes the root
 and poisons the session; equal-timestamp rollback tie-break; per-record
 listing isolation; quorum enforced before the migration's mint decision).
-These remain OPEN and are the honest limits of the current build:
+The audit's implementation defects are remediated in the current working
+tree. These fundamental limits remain and must stay visible in product claims:
 
-1. **No compare-and-swap on capsule writes.** Two devices enabling the vault
-   concurrently can each mint a root and write it, leaving the credential and
-   recovery capsules disagreeing. Mitigation today: enable the vault once,
-   from one device. A `previous_recovery_event_id` precondition check on
-   write is the fix.
+1. **No relay-enforced compare-and-swap on capsule writes.** Deterministic
+   legacy migration prevents concurrent vault-enable attempts from minting
+   different roots, and recovery now performs collision checks before writes
+   and stops after a failed recovery quorum. Relays still provide no atomic
+   compare-and-swap primitive, so simultaneous phrase-recovery refreshes can
+   produce signed siblings. The recovery hash chain detects such a fork when
+   both siblings are visible; it cannot prevent one.
 2. **Rollback protection is per-device local state.** A fresh install has no
    high-water marks, so the oldest record a hostile relay serves is accepted
-   and becomes the mark. A record-level generation counter inside the
-   encrypted payload would close this; the local mark cannot.
+   and becomes the mark. Clearing or deleting the protected marker is likewise
+   indistinguishable from a genuinely fresh device; AEAD detects modification
+   of a marker that still exists, not its absence. A trusted remote monotonic
+   anchor would close this; purely local state cannot.
 3. **A tombstone does not destroy the prior ciphertext.** Record keys are
    derived from the immutable `connection_id`, so the superseded event — which
    still contains the credential — remains decryptable by anyone who later
@@ -644,15 +651,19 @@ These remain OPEN and are the honest limits of the current build:
    Deleting a connection in BitLogin is therefore NOT revocation: revoke at
    the wallet or provider, which §11 already says and which this makes
    cryptographically concrete.
-4. **The sudo key ships with the vault root at every login**, because both
-   live in the same capsule under the same password-derived key. The
-   personal tier's separation is real against a stolen *record*, but the
-   "fresh Argon2id run to reveal" ceremony is a host-side convention, not a
-   cryptographic gate. Personal-tier UI should not ship until this is either
-   fixed (separate capsule) or the claim is weakened.
-5. **Fetches do not fail closed on quorum failure**, and `limit: 500`
-   truncates silently — a single relay can shape a new device's view of the
-   vault.
-6. **The high-water-mark store is plaintext and unauthenticated**, leaking the
-   derived vault pubkey and the connection inventory to same-origin storage
-   access, and is tamperable to disable rollback detection.
+4. **Legacy password capsules may still contain the sudo key.** New
+   registration, recovery, migration, and password-rotation writes omit it;
+   password login deliberately ignores a legacy copy. An archived old capsule
+   remains decryptable forever by its old password, so existing users who
+   want the stronger separation must rotate and should assume previously
+   downloaded capsules retain the old exposure.
+5. **The embedded host remains fully trusted.** CSP and same-origin vendoring
+   reduce accidental script and supply-chain exposure, but code already
+   executing on the application origin can drive the worker and export the
+   unlocked identity. A cross-origin signer, browser extension, or comparable
+   isolated surface is required to create a real boundary.
+
+Closed audit items: listing fails closed below quorum and exposes truncation
+and unreadable records through the widget; per-record high-water marks are now
+AEAD-authenticated and stored under keyed, inventory-hiding identifiers, with
+fail-closed migration from the legacy plaintext format.

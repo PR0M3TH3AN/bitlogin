@@ -23,6 +23,14 @@ const MIN_PLAINTEXT_LEN = 1;
 const EXTENDED_PREFIX_THRESHOLD = 0x10000;
 /** Absolute ceiling for the 4-byte extended-length prefix (2^32 - 1). */
 const MAX_PLAINTEXT_LEN = 0xffffffff;
+const MIN_ENCODED_PAYLOAD_LEN = 132;
+const MIN_DECODED_PAYLOAD_LEN = 99;
+/**
+ * Browser-safe implementation ceiling. NIP-44's wire format can represent
+ * nearly 4 GiB, but decoding and crypto require several simultaneous copies.
+ * One MiB is ample for signed Nostr event content and bounds memory DoS.
+ */
+export const MAX_NIP44_BROWSER_PLAINTEXT_LEN = 1024 * 1024;
 
 export function getConversationKey(privateKey: Uint8Array, peerPublicKeyHex: string): Uint8Array {
   const peerPoint = concatBytes(new Uint8Array([0x02]), hexToBytes(peerPublicKeyHex));
@@ -38,6 +46,8 @@ interface MessageKeys {
 }
 
 function deriveMessageKeys(conversationKey: Uint8Array, nonce: Uint8Array): MessageKeys {
+  if (conversationKey.length !== 32) throw new Error("NIP-44 conversation key must be exactly 32 bytes.");
+  if (nonce.length !== 32) throw new Error("NIP-44 nonce must be exactly 32 bytes.");
   const expanded = hkdfExpand(conversationKey, nonce, 76);
   return {
     chachaKey: expanded.slice(0, 32),
@@ -52,6 +62,10 @@ function calcPaddedLen(unpaddedLen: number): number {
   const chunk = nextPower <= 256 ? 32 : nextPower / 8;
   return chunk * (Math.floor((unpaddedLen - 1) / chunk) + 1);
 }
+
+const MAX_NIP44_DECODED_PAYLOAD_LEN = 1 + 32 + 6 + calcPaddedLen(MAX_NIP44_BROWSER_PLAINTEXT_LEN) + 32;
+/** Maximum accepted base64 characters, checked before allocating decoded bytes. */
+export const MAX_NIP44_ENCODED_PAYLOAD_LEN = Math.ceil(MAX_NIP44_DECODED_PAYLOAD_LEN / 3) * 4;
 
 /**
  * Length prefix: 2-byte big-endian length below the extended threshold, matching every
@@ -73,8 +87,8 @@ function lengthPrefix(len: number): Uint8Array {
 
 function pad(plaintext: Uint8Array): Uint8Array {
   const len = plaintext.length;
-  if (len < MIN_PLAINTEXT_LEN || len > MAX_PLAINTEXT_LEN) {
-    throw new Error(`NIP-44 plaintext length must be between ${MIN_PLAINTEXT_LEN} and ${MAX_PLAINTEXT_LEN} bytes.`);
+  if (len < MIN_PLAINTEXT_LEN || len > MAX_NIP44_BROWSER_PLAINTEXT_LEN) {
+    throw new Error(`NIP-44 plaintext length must be between ${MIN_PLAINTEXT_LEN} and ${MAX_NIP44_BROWSER_PLAINTEXT_LEN} bytes on this platform.`);
   }
   const prefix = lengthPrefix(len);
   const paddedLen = calcPaddedLen(len);
@@ -109,6 +123,7 @@ function calcMac(hmacKey: Uint8Array, nonce: Uint8Array, ciphertext: Uint8Array)
 
 export function nip44Encrypt(conversationKey: Uint8Array, plaintext: string, nonceOverride?: Uint8Array): string {
   const nonce = nonceOverride ?? randomBytes(32);
+  if (nonce.length !== 32) throw new Error("NIP-44 nonce must be exactly 32 bytes.");
   const { chachaKey, chachaNonce, hmacKey } = deriveMessageKeys(conversationKey, nonce);
   const padded = pad(utf8ToBytes(plaintext));
   const ciphertext = chacha20(chachaKey, chachaNonce, padded);
@@ -117,9 +132,17 @@ export function nip44Encrypt(conversationKey: Uint8Array, plaintext: string, non
 }
 
 export function nip44Decrypt(conversationKey: Uint8Array, payload: string): string {
+  if (payload.startsWith("#")) throw new Error("Unsupported NIP-44 non-base64 encoding.");
+  if (payload.length < MIN_ENCODED_PAYLOAD_LEN || payload.length > MAX_NIP44_ENCODED_PAYLOAD_LEN) {
+    throw new Error("NIP-44 payload size is outside this platform's supported range.");
+  }
   const decoded = base64.decode(payload);
+  if (decoded.length < MIN_DECODED_PAYLOAD_LEN || decoded.length > MAX_NIP44_DECODED_PAYLOAD_LEN) {
+    throw new Error("NIP-44 decoded payload size is outside this platform's supported range.");
+  }
   if (decoded[0] !== NIP44_VERSION) throw new Error(`Unsupported NIP-44 version: ${decoded[0]}`);
   const nonce = decoded.slice(1, 33);
+  if (nonce.length !== 32) throw new Error("NIP-44 nonce must be exactly 32 bytes.");
   const mac = decoded.slice(decoded.length - 32);
   const ciphertext = decoded.slice(33, decoded.length - 32);
 

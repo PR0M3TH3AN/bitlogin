@@ -2,8 +2,15 @@
 import { getPublicKeyHex } from "../crypto/secp256k1.js";
 import { wipe } from "../crypto/memory.js";
 import { base64urlToBytes, bytesToBase64url } from "../crypto/encoding.js";
-import { isValidRecoveryPhrase, recoveryPhraseToSeed } from "../crypto/bip39.js";
-import { deriveRecoveryKeys, derivePasswordKeys, normalizeLoginName } from "./normalize.js";
+import {
+  isValidRecoveryPhrase,
+  recoveryPhraseToSeed,
+} from "../crypto/bip39.js";
+import {
+  deriveRecoveryKeys,
+  derivePasswordKeys,
+  normalizeLoginName,
+} from "./normalize.js";
 import { nextCreatedAt } from "./timestamp.js";
 import { RelayPool } from "../nostr/pool.js";
 import { verifyNostrEvent, type NostrEvent } from "../nostr/event.js";
@@ -13,17 +20,24 @@ import {
   KIND_DM_RELAY_LIST,
   KIND_RELAY_LIST,
   SCHEMA_CREDENTIAL_V1,
-  SCHEMA_RECOVERY_V1
+  SCHEMA_RECOVERY_V1,
 } from "../nostr/kinds.js";
 import {
   readCredentialCapsule,
   readRecoveryCapsule,
   checkRecoveryChainAcrossCandidates,
-  type Candidate
+  type Candidate,
 } from "./capsuleReader.js";
-import { buildRecoveryCapsuleEvent, decryptRecoveryCapsuleEvent } from "../capsules/recoveryCapsule.js";
+import {
+  buildRecoveryCapsuleEvent,
+  decryptRecoveryCapsuleEvent,
+} from "../capsules/recoveryCapsule.js";
 import { buildCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
-import { PROTOCOL_CAPSULE_ENCRYPTION, PROTOCOL_PASSWORD_KDF, PROTOCOL_RECOVERY_DERIVATION } from "../capsules/types.js";
+import {
+  PROTOCOL_CAPSULE_ENCRYPTION,
+  PROTOCOL_PASSWORD_KDF,
+  PROTOCOL_RECOVERY_DERIVATION,
+} from "../capsules/types.js";
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { parseDmRelayListEvent, parseRelayListEvent } from "./profileEvents.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
@@ -68,9 +82,13 @@ function pickNewestValidEvent(events: NostrEvent[]): NostrEvent | undefined {
 }
 
 /** §17.1-§17.4: derives the recovery identity, locates the recovery capsule, and restores relay preferences. */
-export async function recoverWithPhrase(params: RecoverWithPhraseParams): Promise<RecoveredIdentity> {
+export async function recoverWithPhrase(
+  params: RecoverWithPhraseParams,
+): Promise<RecoveredIdentity> {
   if (!isValidRecoveryPhrase(params.phrase)) {
-    throw new RecoveryFailedError("This does not look like a valid 12-word BitLogin recovery phrase.");
+    throw new RecoveryFailedError(
+      "This does not look like a valid 12-word BitLogin recovery phrase.",
+    );
   }
   const bip39Seed = await recoveryPhraseToSeed(params.phrase);
   const { recoveryPrivateKey, capsuleKey } = deriveRecoveryKeys(bip39Seed);
@@ -80,10 +98,17 @@ export async function recoverWithPhrase(params: RecoverWithPhraseParams): Promis
   wipe(bip39Seed);
   const recoveryPublicKey = getPublicKeyHex(recoveryPrivateKey);
 
-  const vaultPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: recoveryPrivateKey });
+  const vaultPool = new RelayPool(params.vaultRelayUrls, {
+    authPrivateKey: recoveryPrivateKey,
+  });
   let result;
   try {
-    result = await readRecoveryCapsule(vaultPool, recoveryPublicKey, capsuleKey, params.timeoutMs);
+    result = await readRecoveryCapsule(
+      vaultPool,
+      recoveryPublicKey,
+      capsuleKey,
+      params.timeoutMs,
+    );
   } finally {
     vaultPool.closeAll();
   }
@@ -93,21 +118,38 @@ export async function recoverWithPhrase(params: RecoverWithPhraseParams): Promis
     for (const event of params.offlineRecoveryCapsuleEvents) {
       if (!verifyNostrEvent(event)) continue;
       try {
-        offlineCandidates.push({ event, payload: await decryptRecoveryCapsuleEvent(event, capsuleKey) });
+        offlineCandidates.push({
+          event,
+          payload: await decryptRecoveryCapsuleEvent(event, capsuleKey),
+        });
       } catch (err) {
-        offlineCandidates.push({ event, payload: null, error: (err as Error).message });
+        offlineCandidates.push({
+          event,
+          payload: null,
+          error: (err as Error).message,
+        });
       }
     }
     const merged = new Map<string, Candidate<RecoveryPayload>>();
-    for (const candidate of [...result.candidates, ...offlineCandidates]) merged.set(candidate.event.id, candidate);
-    const candidates = [...merged.values()].sort((a, b) => b.event.created_at - a.event.created_at);
+    for (const candidate of [...result.candidates, ...offlineCandidates])
+      merged.set(candidate.event.id, candidate);
+    const candidates = [...merged.values()].sort(
+      (a, b) => b.event.created_at - a.event.created_at,
+    );
     const best = candidates.find((c) => c.payload !== null) ?? null;
-    result = { ...result, candidates, best, quorumMet: result.quorumMet || best !== null };
+    result = {
+      ...result,
+      candidates,
+      best,
+      quorumMet: result.quorumMet || best !== null,
+    };
   }
 
   if (!result.quorumMet) throw new AccountNotFoundError("quorum-not-met");
   if (!result.best) {
-    throw new AccountNotFoundError(result.candidates.length > 0 ? "no-valid-candidate" : "no-matching-event");
+    throw new AccountNotFoundError(
+      result.candidates.length > 0 ? "no-valid-candidate" : "no-matching-event",
+    );
   }
   const payload = result.best.payload!;
   const chainCheck = checkRecoveryChainAcrossCandidates(result.candidates);
@@ -117,23 +159,29 @@ export async function recoverWithPhrase(params: RecoverWithPhraseParams): Promis
 
   // §17.4 step 4 — restore relay preferences from the user's own public kind 10002/10050 events,
   // searched across the discovery relays plus this capsule's own vault-relay hints.
-  const discoveryTargets = [...new Set([...params.discoveryRelayUrls, ...payload.vault_relay_hints])];
+  const discoveryTargets = [
+    ...new Set([...params.discoveryRelayUrls, ...payload.vault_relay_hints]),
+  ];
   const discoveryPool = new RelayPool(discoveryTargets);
   let generalRelays: string[] = [];
   let dmRelays: string[] = [];
   try {
     const relayListQuorum = await discoveryPool.queryQuorum(
       { kinds: [KIND_RELAY_LIST], authors: [everydayPublicKey], limit: 5 },
-      params.timeoutMs
+      params.timeoutMs,
     );
-    const relayListEvent = pickNewestValidEvent(relayListQuorum.outcomes.flatMap((o) => o.events));
+    const relayListEvent = pickNewestValidEvent(
+      relayListQuorum.outcomes.flatMap((o) => o.events),
+    );
     if (relayListEvent) generalRelays = parseRelayListEvent(relayListEvent);
 
     const dmListQuorum = await discoveryPool.queryQuorum(
       { kinds: [KIND_DM_RELAY_LIST], authors: [everydayPublicKey], limit: 5 },
-      params.timeoutMs
+      params.timeoutMs,
     );
-    const dmListEvent = pickNewestValidEvent(dmListQuorum.outcomes.flatMap((o) => o.events));
+    const dmListEvent = pickNewestValidEvent(
+      dmListQuorum.outcomes.flatMap((o) => o.events),
+    );
     if (dmListEvent) dmRelays = parseDmRelayListEvent(dmListEvent);
   } finally {
     discoveryPool.closeAll();
@@ -150,7 +198,7 @@ export async function recoverWithPhrase(params: RecoverWithPhraseParams): Promis
     currentRecoveryPayload: payload,
     generalRelays,
     dmRelays,
-    chainWarning: chainCheck.consistent ? undefined : chainCheck.warning
+    chainWarning: chainCheck.consistent ? undefined : chainCheck.warning,
   };
 }
 
@@ -188,119 +236,201 @@ export interface CompleteRecoveryResult {
  * roll back. Account-level continuity across this reset is carried by the
  * unchanged everyday identity and by the recovery_generation hash chain.
  */
-export async function completeRecoveryWithNewCredentials(params: CompleteRecoveryParams): Promise<CompleteRecoveryResult> {
+export async function completeRecoveryWithNewCredentials(
+  params: CompleteRecoveryParams,
+): Promise<CompleteRecoveryResult> {
   const now = params.now ?? Math.floor(Date.now() / 1000);
   const normalizedLoginName = normalizeLoginName(params.newLoginName);
   const { recovered } = params;
 
   // §CV13.2 — the vault roots ride the refresh so a phrase-only recovery
   // restores connections, not just identity.
-  const vaultFields =
+  const recoveryVaultFields =
     recovered.currentRecoveryPayload.connection_vault_root !== undefined
       ? {
-          connection_vault_root: recovered.currentRecoveryPayload.connection_vault_root,
-          vault_sudo_key: recovered.currentRecoveryPayload.vault_sudo_key
+          connection_vault_root:
+            recovered.currentRecoveryPayload.connection_vault_root,
+          vault_sudo_key: recovered.currentRecoveryPayload.vault_sudo_key,
         }
       : {};
-  const refreshedPayload: RecoveryPayload = {
-    schema: SCHEMA_RECOVERY_V1,
-    account_id: recovered.accountId,
-    recovery_generation: recovered.currentRecoveryPayload.recovery_generation + 1,
-    previous_recovery_event_id: recovered.currentRecoveryEvent.id,
-    operational_private_key: bytesToBase64url(recovered.everydayPrivateKey),
-    operational_public_key: recovered.everydayPublicKey,
-    recovery_public_key: recovered.recoveryPublicKey,
-    ...vaultFields,
-    created_at: nextCreatedAt(recovered.currentRecoveryEvent.created_at, now),
-    vault_relay_hints: params.vaultRelayUrls,
-    protocol: { capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION, recovery_derivation: PROTOCOL_RECOVERY_DERIVATION }
-  };
-  const refreshedRecoveryEvent = await buildRecoveryCapsuleEvent({
-    recoveryPrivateKey: recovered.recoveryPrivateKey,
-    capsuleKey: recovered.recoveryCapsuleKey,
-    payload: refreshedPayload
-  });
-
-  const recoveryPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: recovered.recoveryPrivateKey });
-  const recoveryPublish = await publishAndVerify(recoveryPool, refreshedRecoveryEvent, {
-    dTag: D_TAG_RECOVERY_CAPSULE,
-    minAcks: params.minAcknowledgements,
-    timeoutMs: params.timeoutMs
-  });
-  recoveryPool.closeAll();
-
-  const { locatorPrivateKey, capsuleKey } = await derivePasswordKeys(params.newPassword, normalizedLoginName);
-  const locatorPublicKey = getPublicKeyHex(locatorPrivateKey);
-
-  // §15.6 -- the SAME guard registration and rotation already carry, and it
-  // was missing only here. The new locator address is fully determined by
-  // (login name, new password); if a DIFFERENT account already lives there,
-  // publishing would replace and destroy it. Recovery is the one flow where
-  // the user is picking fresh credentials under stress, so it is exactly
-  // where a collision is most likely to be shrugged past.
-  const collisionPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: locatorPrivateKey });
-  let existingAtLocator;
+  const credentialVaultFields =
+    recovered.currentRecoveryPayload.connection_vault_root !== undefined
+      ? {
+          connection_vault_root:
+            recovered.currentRecoveryPayload.connection_vault_root,
+        }
+      : {};
+  const { locatorPrivateKey, capsuleKey } = await derivePasswordKeys(
+    params.newPassword,
+    normalizedLoginName,
+  );
   try {
-    existingAtLocator = await readCredentialCapsule(
-      collisionPool,
-      locatorPublicKey,
-      capsuleKey,
-      params.timeoutMs
-    );
-  } finally {
-    collisionPool.closeAll();
-  }
-  if (!existingAtLocator.quorumMet) {
-    throw new RecoveryFailedError(
-      "Couldn't verify the new login name and password aren't already registered. Please retry, or add more vault relays."
-    );
-  }
-  if (existingAtLocator.candidates.length > 0) {
-    throw new RecoveryFailedError(
-      "Another account is already registered with that login name and password. Pick a different one."
-    );
-  }
+    const locatorPublicKey = getPublicKeyHex(locatorPrivateKey);
 
-  const credentialPayload: CredentialPayload = {
-    schema: SCHEMA_CREDENTIAL_V1,
-    account_id: recovered.accountId,
-    generation: 0,
-    operational_private_key: bytesToBase64url(recovered.everydayPrivateKey),
-    operational_public_key: recovered.everydayPublicKey,
-    recovery_public_key: recovered.recoveryPublicKey,
-    recovery_capsule_event: refreshedRecoveryEvent,
-    ...vaultFields,
-    created_at: now,
-    vault_relay_hints: params.vaultRelayUrls,
-    protocol: {
-      password_kdf: PROTOCOL_PASSWORD_KDF,
-      capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
-      recovery_derivation: PROTOCOL_RECOVERY_DERIVATION
-    }
-  };
-  const credentialEvent = await buildCredentialCapsuleEvent({ locatorPrivateKey, capsuleKey, payload: credentialPayload });
-  const credentialPool = new RelayPool(params.vaultRelayUrls, { authPrivateKey: locatorPrivateKey });
-  const credentialPublish = await publishAndVerify(credentialPool, credentialEvent, {
-    dTag: D_TAG_PASSWORD_CAPSULE,
-    minAcks: params.minAcknowledgements,
-    timeoutMs: params.timeoutMs
-  });
-  credentialPool.closeAll();
-
-  if (!recoveryPublish.success || !credentialPublish.success) {
-    throw new RecoveryFailedError("Could not publish the refreshed recovery and credential capsules to enough relays. Please retry.");
-  }
-
-  // Only after both capsules are durable: the recovered account is now
-  // authoritatively at generation 0, so the mark must follow it down rather
-  // than keep flagging every future login as a rollback (see
-  // resetHighWaterMark for why the phrase is entitled to do this).
-  if (params.store) {
-    await resetHighWaterMark(params.store, recovered.everydayPublicKey, {
-      generation: 0,
-      recoveryGeneration: recovered.currentRecoveryPayload.recovery_generation + 1
+    // §15.6 -- collision refusal is a PRECONDITION for mutating the recovery
+    // chain. A failed or occupied locator read must leave the current recovery
+    // event untouched so the caller can safely retry with different credentials.
+    const collisionPool = new RelayPool(params.vaultRelayUrls, {
+      authPrivateKey: locatorPrivateKey,
     });
-  }
+    let existingAtLocator;
+    try {
+      existingAtLocator = await readCredentialCapsule(
+        collisionPool,
+        locatorPublicKey,
+        capsuleKey,
+        params.timeoutMs,
+      );
+    } finally {
+      collisionPool.closeAll();
+    }
+    if (!existingAtLocator.quorumMet) {
+      throw new RecoveryFailedError(
+        "Couldn't verify the new login name and password aren't already registered. Please retry, or add more vault relays.",
+      );
+    }
+    const existingPayload = existingAtLocator.best?.payload ?? null;
+    const resumesPartialCredentialWrite =
+      existingPayload !== null &&
+      existingPayload.account_id === recovered.accountId &&
+      existingPayload.operational_public_key === recovered.everydayPublicKey &&
+      existingPayload.recovery_public_key === recovered.recoveryPublicKey &&
+      existingPayload.generation === 0 &&
+      existingPayload.recovery_capsule_event.id ===
+        recovered.currentRecoveryEvent.id;
+    if (
+      existingAtLocator.candidates.length > 0 &&
+      !resumesPartialCredentialWrite
+    ) {
+      throw new RecoveryFailedError(
+        "Another account is already registered with that login name and password. Pick a different one.",
+      );
+    }
 
-  return { normalizedLoginName, locatorPublicKey, credentialEvent, refreshedRecoveryEvent, credentialPublish, recoveryPublish };
+    const nextRecoveryGeneration =
+      recovered.currentRecoveryPayload.recovery_generation + 1;
+    const refreshedPayload: RecoveryPayload = {
+      schema: SCHEMA_RECOVERY_V1,
+      account_id: recovered.accountId,
+      recovery_generation: nextRecoveryGeneration,
+      previous_recovery_event_id: recovered.currentRecoveryEvent.id,
+      operational_private_key: bytesToBase64url(recovered.everydayPrivateKey),
+      operational_public_key: recovered.everydayPublicKey,
+      recovery_public_key: recovered.recoveryPublicKey,
+      ...recoveryVaultFields,
+      created_at: nextCreatedAt(recovered.currentRecoveryEvent.created_at, now),
+      vault_relay_hints: params.vaultRelayUrls,
+      protocol: {
+        capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
+        recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+      },
+    };
+    const refreshedRecoveryEvent = await buildRecoveryCapsuleEvent({
+      recoveryPrivateKey: recovered.recoveryPrivateKey,
+      capsuleKey: recovered.recoveryCapsuleKey,
+      payload: refreshedPayload,
+    });
+
+    const recoveryPool = new RelayPool(params.vaultRelayUrls, {
+      authPrivateKey: recovered.recoveryPrivateKey,
+    });
+    let recoveryPublish: PublishVerificationResult;
+    try {
+      recoveryPublish = await publishAndVerify(
+        recoveryPool,
+        refreshedRecoveryEvent,
+        {
+          dTag: D_TAG_RECOVERY_CAPSULE,
+          minAcks: params.minAcknowledgements,
+          timeoutMs: params.timeoutMs,
+        },
+      );
+    } finally {
+      recoveryPool.closeAll();
+    }
+    if (!recoveryPublish.success) {
+      throw new RecoveryFailedError(
+        "Could not publish the refreshed recovery capsule to enough relays. No new credential was published; please retry.",
+      );
+    }
+
+    // The recovery event is already authoritative at this point even if the
+    // following credential write fails. Advance the caller's pending state
+    // immediately so an in-memory retry chains from this durable event rather
+    // than creating a same-generation sibling from the stale predecessor.
+    recovered.currentRecoveryEvent = refreshedRecoveryEvent;
+    recovered.currentRecoveryPayload = refreshedPayload;
+
+    const credentialPayload: CredentialPayload = {
+      schema: SCHEMA_CREDENTIAL_V1,
+      account_id: recovered.accountId,
+      generation: 0,
+      operational_private_key: bytesToBase64url(recovered.everydayPrivateKey),
+      operational_public_key: recovered.everydayPublicKey,
+      recovery_public_key: recovered.recoveryPublicKey,
+      recovery_capsule_event: refreshedRecoveryEvent,
+      ...credentialVaultFields,
+      // A retry may be repairing a credential that reached only one relay.
+      // It must replace that partial event deterministically on every relay.
+      created_at: existingAtLocator.best
+        ? nextCreatedAt(existingAtLocator.best.event.created_at, now)
+        : now,
+      vault_relay_hints: params.vaultRelayUrls,
+      protocol: {
+        password_kdf: PROTOCOL_PASSWORD_KDF,
+        capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
+        recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+      },
+    };
+    const credentialEvent = await buildCredentialCapsuleEvent({
+      locatorPrivateKey,
+      capsuleKey,
+      payload: credentialPayload,
+    });
+    const credentialPool = new RelayPool(params.vaultRelayUrls, {
+      authPrivateKey: locatorPrivateKey,
+    });
+    let credentialPublish: PublishVerificationResult;
+    try {
+      credentialPublish = await publishAndVerify(
+        credentialPool,
+        credentialEvent,
+        {
+          dTag: D_TAG_PASSWORD_CAPSULE,
+          minAcks: params.minAcknowledgements,
+          timeoutMs: params.timeoutMs,
+        },
+      );
+    } finally {
+      credentialPool.closeAll();
+    }
+
+    if (!credentialPublish.success) {
+      throw new RecoveryFailedError(
+        "Could not publish the new credential capsule to enough relays. Please retry.",
+      );
+    }
+
+    // Only after both capsules are durable: the recovered account is now
+    // authoritatively at generation 0, so the mark must follow it down rather
+    // than keep flagging every future login as a rollback (see
+    // resetHighWaterMark for why the phrase is entitled to do this).
+    if (params.store) {
+      await resetHighWaterMark(params.store, recovered.everydayPublicKey, {
+        generation: 0,
+        recoveryGeneration: nextRecoveryGeneration,
+      });
+    }
+
+    return {
+      normalizedLoginName,
+      locatorPublicKey,
+      credentialEvent,
+      refreshedRecoveryEvent,
+      credentialPublish,
+      recoveryPublish,
+    };
+  } finally {
+    wipe(locatorPrivateKey, capsuleKey);
+  }
 }

@@ -25,11 +25,15 @@ import { hkdfExtract, hkdfExpand, labelSalt } from "../crypto/hkdf.js";
 import { scalarExpand } from "../crypto/scalarExpand.js";
 import { base64urlToBytes, bytesToBase64url, concatBytes, utf8ToBytes } from "../crypto/encoding.js";
 import { randomBytes } from "../crypto/random.js";
+import { wipe } from "../crypto/memory.js";
 
 export const VAULT_ROOT_LABEL = "bitlogin/connection-vault-root/v1";
 export const VAULT_SIGNING_INFO = "bitlogin/connection-vault-signing/v1";
 export const VAULT_RECORD_KEY_INFO = "bitlogin/connection-record-encryption/v1";
 export const VAULT_PERSONAL_LABEL = "bitlogin/connection-vault-personal/v1";
+export const VAULT_MIGRATION_LABEL = "bitlogin/connection-vault-migration/v1";
+export const VAULT_MIGRATION_ROOT_INFO = "bitlogin/connection-vault-migration-root/v1";
+export const VAULT_MIGRATION_SUDO_INFO = "bitlogin/connection-vault-migration-sudo/v1";
 
 /** `d` tag prefix (§CV8.1): generic on purpose — it must not reveal the credential type. */
 export const D_TAG_CONNECTION_PREFIX = "bitlogin:connection:";
@@ -49,13 +53,48 @@ export function deriveVaultSigningKey(vaultPrk: Uint8Array): Uint8Array {
 }
 
 export function deriveVaultPublicKey(vaultPrk: Uint8Array): string {
-  return getPublicKeyHex(deriveVaultSigningKey(vaultPrk));
+  const signingKey = deriveVaultSigningKey(vaultPrk);
+  try {
+    return getPublicKeyHex(signingKey);
+  } finally {
+    wipe(signingKey);
+  }
 }
 
 export function derivePersonalPrk(connectionVaultRoot: Uint8Array, vaultSudoKey: Uint8Array): Uint8Array {
   if (vaultSudoKey.length !== 32) throw new Error("vault_sudo_key must be exactly 32 bytes.");
   if (connectionVaultRoot.length !== 32) throw new Error("connection_vault_root must be exactly 32 bytes.");
   return hkdfExtract(labelSalt(VAULT_PERSONAL_LABEL), concatBytes(connectionVaultRoot, vaultSudoKey));
+}
+
+/**
+ * Deterministic material for the one-time migration of a pre-vault account.
+ *
+ * Two devices can run the phrase-gated migration concurrently. Random roots
+ * would let both devices publish internally valid but mutually incompatible
+ * capsules. The recovery capsule key and account id are stable, secret inputs,
+ * so both devices instead derive the same roots. This is intentionally scoped
+ * to legacy migration; new registrations continue to mint random roots.
+ */
+export function deriveLegacyVaultMaterial(
+  recoveryCapsuleKey: Uint8Array,
+  accountId: string
+): { connectionVaultRoot: Uint8Array; vaultSudoKey: Uint8Array } {
+  if (recoveryCapsuleKey.length !== 32) throw new Error("recovery capsule key must be exactly 32 bytes.");
+  const accountIdBytes = base64urlToBytes(accountId);
+  if (accountIdBytes.length !== 16) throw new Error("account_id must decode to exactly 16 bytes.");
+  const migrationPrk = hkdfExtract(
+    labelSalt(VAULT_MIGRATION_LABEL),
+    concatBytes(recoveryCapsuleKey, accountIdBytes)
+  );
+  try {
+    return {
+      connectionVaultRoot: hkdfExpand(migrationPrk, VAULT_MIGRATION_ROOT_INFO, 32),
+      vaultSudoKey: hkdfExpand(migrationPrk, VAULT_MIGRATION_SUDO_INFO, 32)
+    };
+  } finally {
+    wipe(migrationPrk, accountIdBytes);
+  }
 }
 
 /** Per-record encryption key (§CV6): the info string, a 0x00 separator, then
