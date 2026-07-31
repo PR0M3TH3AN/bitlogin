@@ -188,7 +188,29 @@ modulo) must turn them red — verify this locally before committing, then rever
 
 ---
 
-### L1 — `Math.random` in the backup-verification quiz
+### L1 — `Math.random` in the backup-verification quiz — **DONE 2026-07-31**
+
+`pickRandomIndices` now uses `randomUniformInt`, and `relay.ts`'s subscription
+id is `bytesToHex(randomBytes(8))` rather than a hash over `Math.random()`.
+Neither was a secret; both were changed so the ban below has **no standing
+exception**.
+
+That ban is now machine-enforced. `.semgrep.yml` adds three rules over
+`packages/*/src/**`, run in CI as a separate step after `--config auto`:
+
+- `bitlogin-no-math-random` — no `Math.random` anywhere, secret or not
+- `bitlogin-no-crypto-fallback` — no `?? fallback`, `|| fallback`, or
+  catch-and-substitute around `getRandomValues`
+- `bitlogin-no-time-or-id-seeded-secrets` — no hashing `Date.now()` /
+  `performance.now()` into a key
+
+Verified the rules actually fire rather than merely passing: reintroducing the
+old `Math.floor(Math.random() * pool.length)` produces 1 blocking finding and
+exit 1; the tree is clean at 0 findings with it restored.
+
+The original note follows.
+
+### L1 (original) — `Math.random` in the backup-verification quiz
 
 `packages/widget/src/element.ts:1471`:
 
@@ -218,7 +240,7 @@ this same function, vendored. Fixing it here and re-running
 
 ---
 
-### L2 — `Math.random` in the relay subscription id
+### L2 — `Math.random` in the relay subscription id — **DONE 2026-07-31** (folded into L1)
 
 `packages/core/src/nostr/relay.ts:223` mixes `Math.random()` into the material
 hashed for a subscription id. A subscription id is a public wire identifier

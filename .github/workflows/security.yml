@@ -48,6 +48,8 @@ jobs:
         run: pipx install semgrep==1.171.0
       - name: Scan repository rules without per-rule timeouts
         run: semgrep scan --config auto --error --timeout 0 packages
+      - name: Enforce local randomness rules (entropy audit §13)
+        run: semgrep scan --config .semgrep.yml --error --timeout 0 packages
       - name: Scan repository history for secrets
         uses: gitleaks/gitleaks-action@v2
         env:

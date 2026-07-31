@@ -21,9 +21,15 @@ avoid modulo bias. Three hardening items, in order:
   Verified from a real consumer against the built package: all three deep-import
   routes fail with `ERR_PACKAGE_PATH_NOT_EXPORTED`. `knownAnswer.test.ts` green
   throughout — the derivation chain is untouched.
-- **L1** — `Math.random` in the backup-quiz word picker (`element.ts:1471`).
-  Not a secret, but it forces a standing exception in any `Math.random` ban rule.
-  Last remaining item from the entropy audit in this repo.
+- **L1 — done.** Both `Math.random` calls (backup-quiz picker, relay subscription
+  id) now use the CSPRNG, so the ban has no standing exception. `.semgrep.yml`
+  enforces it in CI alongside two more rules: no fallback around
+  `getRandomValues`, and no timestamp-seeded secrets. Verified the rules fire —
+  reintroducing the old call gives 1 blocking finding and exit 1.
+
+**The entropy audit is closed for this repo.** The only gate left is an
+independent review of the RNG path by someone other than the author, which is
+not something a coding agent can sign off.
 
 ## Owner action items
 

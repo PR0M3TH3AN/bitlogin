@@ -2,14 +2,11 @@
  * A single relay WebSocket connection: NIP-01 EVENT/REQ/CLOSE, NIP-42 AUTH,
  * and NIP-11 relay information document fetches (§11.8, §16.1, §17.3, §19.2).
  */
-import {
-  computeEventId,
-  signNostrEvent,
-  verifyNostrEvent,
-  type NostrEvent,
-} from "./event.js";
+import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "./event.js";
 import { KIND_AUTH } from "./kinds.js";
 import { getPublicKeyHex } from "../crypto/secp256k1.js";
+import { randomBytes } from "../crypto/random.js";
+import { bytesToHex } from "../crypto/encoding.js";
 import { isAllowedRelayUrl } from "./relayUrl.js";
 
 export interface NostrFilter {
@@ -215,13 +212,11 @@ export class RelayConnection {
     timeoutMs = 8000,
   ): Promise<NostrEvent[]> {
     await this.connect();
-    const subId = computeEventId({
-      pubkey: "0".repeat(64),
-      created_at: Date.now(),
-      kind: 0,
-      tags: [],
-      content: JSON.stringify(filter) + Math.random(),
-    }).slice(0, 16);
+    // Subscription ids are public wire identifiers scoped to one socket, not
+    // secrets — collision is the only failure mode. Drawn from the CSPRNG
+    // regardless, so `Math.random` stays banned package-wide (.semgrep.yml)
+    // with no standing exception to reason about at review time.
+    const subId = bytesToHex(randomBytes(8));
 
     return new Promise<NostrEvent[]>((resolve, reject) => {
       const events: NostrEvent[] = [];

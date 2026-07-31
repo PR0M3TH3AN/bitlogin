@@ -7,6 +7,7 @@ import {
   type RecoveryExportFile
 } from "@bitlogin/core/account";
 import { encodeNpub } from "@bitlogin/core/nostr";
+import { randomUniformInt } from "@bitlogin/core/crypto";
 import { WorkerClient } from "./worker/workerClient.js";
 import { createNip07Provider, type Nip07Provider } from "./provider.js";
 import { readConfigFromElement } from "./config.js";
@@ -1468,12 +1469,22 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 }
 
+/**
+ * Picks `count` distinct indices in [0, max) for the write-it-down confirmation
+ * quiz.
+ *
+ * This is not a secret and leaks no entropy — the recovery phrase itself comes
+ * from randomEntropy128, and an attacker who cannot see the phrase gains
+ * nothing from predicting which words get quizzed. It uses the CSPRNG anyway so
+ * that `Math.random` can be banned outright in this package (see
+ * .semgrep.yml). A ban with a standing exception is where the next real misuse
+ * hides.
+ */
 function pickRandomIndices(max: number, count: number): number[] {
   const pool = Array.from({ length: max }, (_, i) => i);
   const chosen: number[] = [];
   for (let i = 0; i < count && pool.length > 0; i++) {
-    const idx = Math.floor(Math.random() * pool.length);
-    chosen.push(pool.splice(idx, 1)[0]!);
+    chosen.push(pool.splice(randomUniformInt(pool.length), 1)[0]!);
   }
   return chosen.sort((a, b) => a - b);
 }

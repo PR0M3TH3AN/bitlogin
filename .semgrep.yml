@@ -1,0 +1,56 @@
+# Local semgrep rules, run alongside `--config auto` in
+# .github/workflows/security.yml.
+#
+# Checklist §13 of docs/entropy-audit-2026-07-31.md: make the randomness rules
+# machine-enforced rather than review-enforced. Every rule here is currently
+# clean across packages/ — they exist to keep it that way, not to flag a
+# backlog.
+rules:
+  - id: bitlogin-no-math-random
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Math.random() is not a CSPRNG and must not be used anywhere in this
+      package, including for values that are not secrets. Use randomBytes or
+      randomUniformInt from @bitlogin/core/crypto. A ban with a standing
+      exception is where the next real misuse hides -- if you believe this
+      specific call is safe, the correct move is still to use the CSPRNG, which
+      costs nothing here.
+    paths:
+      include:
+        - /packages/*/src/**
+    pattern: Math.random(...)
+
+  - id: bitlogin-no-crypto-fallback
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Do not fall back to another source when getRandomValues is unavailable.
+      Key generation must fail closed -- "continue with reduced security" is the
+      COLDCARD defect class. crypto/random.ts throws by design; keep it that way.
+    paths:
+      include:
+        - /packages/*/src/**
+    patterns:
+      - pattern-either:
+          - pattern: $C.getRandomValues(...) ?? $FALLBACK
+          - pattern: $C.getRandomValues(...) || $FALLBACK
+          - pattern: |
+              try { ... $C.getRandomValues(...) ... } catch(...) { ... return $FALLBACK; ... }
+
+  - id: bitlogin-no-time-or-id-seeded-secrets
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Timestamps, counters and identifiers are not entropy. A secret derived
+      from Date.now() or performance.now() is predictable to anyone who knows
+      roughly when it was created.
+    paths:
+      include:
+        - /packages/*/src/**
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $KEY = $HASH(Date.now(), ...)
+          - pattern: |
+              $KEY = $HASH(performance.now(), ...)
