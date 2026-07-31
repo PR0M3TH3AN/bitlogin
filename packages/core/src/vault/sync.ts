@@ -99,7 +99,13 @@ export interface FetchedConnectionEvents {
   rollbackWarnings: string[];
   quorumMet: boolean;
   respondedCount: number;
+  /** True when a relay returned the full page, so records may be missing. */
+  truncated: boolean;
 }
+
+/** Ceiling on records fetched in one query. Hit means the relay, not the
+ *  user, decided which connections exist -- so it is REPORTED, not silent. */
+const FETCH_LIMIT = 500;
 
 /** Fetches every connection record visible for this vault identity (§CV10). */
 export async function fetchConnectionRecordEvents(params: {
@@ -114,13 +120,14 @@ export async function fetchConnectionRecordEvents(params: {
   let quorum;
   try {
     quorum = await pool.queryQuorum(
-      { kinds: [KIND_APP_DATA], authors: [vaultPubkey], limit: 500 },
+      { kinds: [KIND_APP_DATA], authors: [vaultPubkey], limit: FETCH_LIMIT },
       params.timeoutMs
     );
   } finally {
     pool.closeAll();
   }
 
+  const truncated = quorum.outcomes.some((outcome) => outcome.events.length >= FETCH_LIMIT);
   const newestById = new Map<string, NostrEvent>();
   for (const event of quorum.outcomes.flatMap((o) => o.events)) {
     if (!verifyNostrEvent(event) || event.pubkey !== vaultPubkey) continue;
@@ -157,6 +164,7 @@ export async function fetchConnectionRecordEvents(params: {
     events,
     rollbackWarnings,
     quorumMet: quorum.quorumMet,
-    respondedCount: quorum.respondedCount
+    respondedCount: quorum.respondedCount,
+    truncated
   };
 }

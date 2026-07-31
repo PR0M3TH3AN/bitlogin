@@ -226,14 +226,28 @@ export class VaultSession {
     relayUrls: string[];
     store: KeyValueStore;
     timeoutMs?: number;
+    /** Accept a below-quorum answer anyway. Off by default: a partial view
+     *  of a credential store reads as authoritative and isn't. */
+    acknowledgeIncompleteQuorum?: boolean;
   }): Promise<{
     connections: DecryptedConnectionRecord[];
     rollbackWarnings: string[];
     /** Event ids that failed to decrypt or validate. Surfaced, never silent. */
     unreadable: string[];
+    /** True when the relay page filled, so records may be missing. */
+    truncated: boolean;
     quorumMet: boolean;
   }> {
     const fetched = await this.fetchEvents(params);
+    if (!fetched.quorumMet && !params.acknowledgeIncompleteQuorum) {
+      // Failing closed matters more here than for a read of public data: a
+      // short listing looks identical to "you have no connections", and a
+      // single relay deciding that is how a revoked-looking vault gets
+      // re-populated or a live credential gets hidden.
+      throw new Error(
+        "Not enough vault relays answered to list your connections reliably. Check your connection and retry."
+      );
+    }
     const connections: DecryptedConnectionRecord[] = [];
     const unreadable: string[] = [];
     for (const event of fetched.events.values()) {
@@ -254,6 +268,7 @@ export class VaultSession {
       connections,
       rollbackWarnings: fetched.rollbackWarnings,
       unreadable,
+      truncated: fetched.truncated,
       quorumMet: fetched.quorumMet
     };
   }

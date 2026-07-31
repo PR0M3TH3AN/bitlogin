@@ -601,36 +601,26 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultOfferCheck": {
-      // The offer-to-save flow's dedupe: the same wallet + secret already
-      // stored means nothing NEW would enter the vault, so no consent screen
-      // is warranted. The origin binding is refreshed silently — the offering
-      // origin already HOLDS the credential (it supplied it), so binding is
-      // bookkeeping for later one-tap approvals, not a new grant.
+      // READ-ONLY on purpose. This used to publish an origin rebinding to
+      // relays -- a real, durable mutation of the user's account -- from a
+      // plain host API call, before any consent screen existed. Deduping is
+      // a question, not a write. If the caller wants the binding refreshed,
+      // that happens through the consented save path.
       const p = payload as { uri: string };
       const origin = selfOrigin();
       const credential = parseNwcUri(p.uri);
-      const { vault, connections } = await listLiveConnections();
+      const { connections } = await listLiveConnections();
       const existing = connections.find(
         (c) =>
           c.record.connection_type === "nwc" &&
           sameNwcCredential(c.record.credential as unknown as NwcCredential, credential)
       );
       if (!existing) return { duplicate: false };
-      if (existing.record.application_binding.origin !== origin) {
-        const { record, event } = await vault.updateConnection(existing, {
-          application_binding: { origin, app_pubkey: null }
-        });
-        const publish = await vault.publish({
-          event,
-          connectionId: record.connection_id,
-          relayUrls: vaultRelayUrls,
-          store
-        });
-        if (publish.success) {
-          const decrypted = await vault.decryptEvent(event);
-          return { duplicate: true, connection: summarize(decrypted!) };
-        }
-      }
+      // Only report it as already-saved when it is already THIS origin's.
+      // A wallet stored under another origin is not this caller's to claim
+      // silently; treating it as new sends the user through consent, which
+      // is the only place a cross-origin binding may legitimately change.
+      if (existing.record.application_binding.origin !== origin) return { duplicate: false };
       return { duplicate: true, connection: summarize(existing) };
     }
 
@@ -639,7 +629,32 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
   }
 }
 
+const KNOWN_ACTIONS = new Set<string>([
+  "configure", "register", "previewImportKey", "login", "recover", "completeRecovery",
+  "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
+  "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
+  "buildRecoveryExport", "repairReplicas", "getSessionStatus", "restoreSession", "logout",
+  "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
+  "vaultSetBinding", "vaultDelete", "vaultOfferCheck"
+]);
+
 self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
+  // Validate the envelope BEFORE destructuring. A malformed frame (or a
+  // stray postMessage from anything else on the page) used to throw straight
+  // out of this listener, which posts no response at all and leaves the
+  // caller's promise pending forever.
+  const frame = event.data as Partial<WorkerRequest> | null;
+  if (!frame || typeof frame !== "object" || typeof frame.id !== "string") return;
+  if (typeof frame.action !== "string" || !KNOWN_ACTIONS.has(frame.action)) {
+    const response: WorkerResponse = {
+      id: frame.id,
+      ok: false,
+      error: `Unknown worker action: ${String(frame.action)}`,
+      errorName: "Error"
+    };
+    (self as unknown as Worker).postMessage(response);
+    return;
+  }
   const { id, action, payload } = event.data;
   handle(action, payload).then(
     (result) => {

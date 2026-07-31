@@ -123,6 +123,8 @@ export class BitLoginAuthElement extends HTMLElement {
   private vaultConnections: VaultConnectionSummary[] | null = null;
   /** offerNwcConnection state: the app already holds this URI; the only
    *  question on screen is whether a copy enters the user's vault. */
+  /** Claimed synchronously by offerNwcConnection before any await (see there). */
+  private offerInFlight = false;
   private vaultOffer: {
     uri: string;
     appName: string;
@@ -239,6 +241,10 @@ export class BitLoginAuthElement extends HTMLElement {
     const appName = options.appName?.trim() || window.location.hostname || "This app";
     return new Promise<string | null>((resolve) => {
       this.vaultRequest = { appName, reason: options.reason, origin, stage: "auth", resolve };
+      // Symmetric with bitlogin-offer-pending. Without it, a host following
+      // the recommended hidden-mount pattern navigated a HIDDEN element to a
+      // consent screen nobody could see, and the promise never settled.
+      this.dispatchEvent(new CustomEvent("bitlogin-request-pending"));
       void (async () => {
         try {
           const status = await this.worker.getSessionStatus();
@@ -272,12 +278,26 @@ export class BitLoginAuthElement extends HTMLElement {
     uri: string,
     options: { appName?: string; label?: string } = {}
   ): Promise<"saved" | "declined" | "already-saved" | "unavailable"> {
-    if (this.vaultOffer || this.vaultRequest) return "unavailable";
+    // The slot is claimed SYNCHRONOUSLY. The guard used to sit above three
+    // awaits, so two concurrent calls both passed it and the second
+    // overwrote the first's resolve -- dropping a promise that never settled.
+    if (this.vaultOffer || this.vaultRequest || this.offerInFlight) return "unavailable";
+    this.offerInFlight = true;
+    try {
+      return await this.runOfferNwcConnection(uri, options);
+    } finally {
+      this.offerInFlight = false;
+    }
+  }
+
+  private async runOfferNwcConnection(
+    uri: string,
+    options: { appName?: string; label?: string }
+  ): Promise<"saved" | "declined" | "already-saved" | "unavailable"> {
     const status = await this.worker.getSessionStatus().catch(() => ({ unlocked: false }));
     if (!status.unlocked) return "unavailable";
     const vaultStatus = await this.worker.vaultStatus();
     if (!vaultStatus.enabled) return "unavailable";
-    const origin = window.location.origin;
     const check = await this.worker.vaultOfferCheck({ uri });
     if (check.duplicate) return "already-saved";
 
