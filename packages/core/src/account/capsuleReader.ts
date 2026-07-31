@@ -4,7 +4,7 @@
  * recovery, and password-change (which must read the capsule it replaces).
  */
 import { RelayPool } from "../nostr/pool.js";
-import { verifyNostrEvent, type NostrEvent } from "../nostr/event.js";
+import { verifyNostrEvent, findTagValue, type NostrEvent } from "../nostr/event.js";
 import { KIND_APP_DATA, D_TAG_PASSWORD_CAPSULE, D_TAG_RECOVERY_CAPSULE } from "../nostr/kinds.js";
 import { decryptCredentialCapsuleEvent } from "../capsules/credentialCapsule.js";
 import { decryptRecoveryCapsuleEvent } from "../capsules/recoveryCapsule.js";
@@ -28,9 +28,28 @@ export interface CapsuleReadResult<TPayload> {
   relayDisagreement: boolean;
 }
 
-function dedupeAndSort(events: NostrEvent[]): NostrEvent[] {
+/**
+ * Keeps only events that are actually AT the address we asked for.
+ *
+ * A relay's response is a claim, not an answer: nothing stops it returning a
+ * validly-signed event by some other author, of some other kind, or under a
+ * different `d` tag. Signature verification alone accepted all of those.
+ * `best` was never at risk (the AEAD binds the ciphertext to the event's own
+ * pubkey, so a foreign event cannot decrypt) -- but `candidates.length` is
+ * load-bearing in the registration, rotation, and recovery collision guards,
+ * so ONE junk event from ONE relay was enough to block all three, for every
+ * login name and password the user tried, at zero cost.
+ */
+function dedupeAndSort(
+  events: NostrEvent[],
+  authorPubkeyHex: string,
+  dTag: string
+): NostrEvent[] {
   const byId = new Map<string, NostrEvent>();
   for (const event of events) {
+    if (event.pubkey !== authorPubkeyHex) continue;
+    if (event.kind !== KIND_APP_DATA) continue;
+    if (findTagValue(event, "d") !== dTag) continue;
     if (verifyNostrEvent(event)) byId.set(event.id, event);
   }
   return [...byId.values()].sort((a, b) => b.created_at - a.created_at);
@@ -49,7 +68,7 @@ async function readAddressableCapsule<TPayload>(
   );
 
   const allEvents = quorum.outcomes.flatMap((o) => o.events);
-  const sortedEvents = dedupeAndSort(allEvents);
+  const sortedEvents = dedupeAndSort(allEvents, authorPubkeyHex, dTag);
 
   const candidates: Array<Candidate<TPayload>> = [];
   for (const event of sortedEvents) {
@@ -63,8 +82,12 @@ async function readAddressableCapsule<TPayload>(
   const best = candidates.find((c) => c.payload !== null) ?? null;
 
   const latestIdPerRelay = quorum.outcomes
-    .filter((o) => o.responded && o.events.length > 0)
-    .map((o) => o.events.slice().sort((a, b) => b.created_at - a.created_at)[0]!.id);
+    .map((outcome) => ({
+      responded: outcome.responded,
+      events: dedupeAndSort(outcome.events, authorPubkeyHex, dTag)
+    }))
+    .filter((outcome) => outcome.responded && outcome.events.length > 0)
+    .map((outcome) => outcome.events[0]!.id);
   const relayDisagreement = new Set(latestIdPerRelay).size > 1;
 
   return {

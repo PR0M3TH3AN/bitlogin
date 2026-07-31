@@ -36,8 +36,10 @@ identity and recovery model.
 The Connection Vault stores portable application credentials outside the core
 identity capsules as independently encrypted records. Its protocol layer
 (records, key hierarchy, relay sync, migration, tiers) is **implemented in
-`@bitlogin/core`'s `src/vault/`**; the widget authorization layer (consent
-UI, grants, Connected apps) is still to come.
+`@bitlogin/core`'s `src/vault/`**; the widget authorization layer shipped 2026-07-30 in REVEAL mode
+(`requestNwcConnection`, `offerNwcConnection`, and a Wallet-connections
+screen). Durable per-origin grants and a Connected-apps page are still to
+come; see `connection-vault.md` §19 for the open limitations.
 
 - [`connection-vault.md`](./connection-vault.md) — overall vault architecture,
   key hierarchy, relay storage, authorization, recovery, and deletion; §18

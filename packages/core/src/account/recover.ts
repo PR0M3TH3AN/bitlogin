@@ -28,6 +28,8 @@ import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { parseDmRelayListEvent, parseRelayListEvent } from "./profileEvents.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
 import { AccountNotFoundError, RecoveryFailedError } from "./errors.js";
+import { resetHighWaterMark } from "./highWaterMark.js";
+import type { KeyValueStore } from "../storage/interface.js";
 
 export interface RecoverWithPhraseParams {
   phrase: string;
@@ -160,6 +162,10 @@ export interface CompleteRecoveryParams {
   minAcknowledgements?: number;
   timeoutMs?: number;
   now?: number;
+  /** Where this device's rollback high-water mark lives. Passing it is what
+   *  stops the recovered account from tripping the rollback alarm on every
+   *  later login (the new capsule legitimately restarts at generation 0). */
+  store?: KeyValueStore;
 }
 
 export interface CompleteRecoveryResult {
@@ -283,6 +289,17 @@ export async function completeRecoveryWithNewCredentials(params: CompleteRecover
 
   if (!recoveryPublish.success || !credentialPublish.success) {
     throw new RecoveryFailedError("Could not publish the refreshed recovery and credential capsules to enough relays. Please retry.");
+  }
+
+  // Only after both capsules are durable: the recovered account is now
+  // authoritatively at generation 0, so the mark must follow it down rather
+  // than keep flagging every future login as a rollback (see
+  // resetHighWaterMark for why the phrase is entitled to do this).
+  if (params.store) {
+    await resetHighWaterMark(params.store, recovered.everydayPublicKey, {
+      generation: 0,
+      recoveryGeneration: recovered.currentRecoveryPayload.recovery_generation + 1
+    });
   }
 
   return { normalizedLoginName, locatorPublicKey, credentialEvent, refreshedRecoveryEvent, credentialPublish, recoveryPublish };

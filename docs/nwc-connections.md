@@ -3,7 +3,11 @@
 **Status:** Experimental design
 **Document version:** 0.1
 **Date:** July 22, 2026
-**Implementation status:** Not implemented
+**Implementation status:** PARTIALLY implemented. The parser/exporter and the
+canonical credential shipped in `packages/core/src/vault/nwc.ts`, and the
+request/offer flows shipped in the widget. NOT implemented: declared
+capabilities, budget and expiry fields, `get_info` refresh, the suspend state,
+broker mode, and the `wallet.*` API in §12 — those sections remain design.
 
 ## 1. Summary
 

@@ -7,7 +7,7 @@ password that unlocks a portable Nostr identity, plus an independent 12-word
 recovery phrase. Encrypted account material lives on public Nostr relays —
 no account server, no password-reset email, no database.
 
-This repo implements the protocol from `docs/spec.md` (v0.4) as a modular
+This repo implements the protocol from `docs/spec.md` (v0.6) as a modular
 system any static site can embed for login and Nostr signing.
 
 ## Layout
@@ -312,7 +312,7 @@ point of vendoring is that this is a reviewed step, not an automatic one.
 This build covers the protocol's Phase 0 (cryptographic core + test vectors)
 and the load-bearing parts of Phase 1 (account MVP), verified two ways:
 
-- **Protocol-level tests** (`npm test`, 79 tests): Argon2id/ScalarExpand/JCS/
+- **Protocol-level tests** (`npm test`, 120 tests): Argon2id/ScalarExpand/JCS/
   padding/timestamp/NIP-44 unit tests with the spec's exact byte layouts
   (§11), and full end-to-end scenarios — create → clean-device login, phrase
   recovery → new credentials → clean-device login, password change with

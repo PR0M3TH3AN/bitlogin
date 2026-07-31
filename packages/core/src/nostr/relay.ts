@@ -184,16 +184,27 @@ export class RelayConnection {
       content: JSON.stringify(filter) + Math.random()
     }).slice(0, 16);
 
-    return new Promise<NostrEvent[]>((resolve) => {
+    return new Promise<NostrEvent[]>((resolve, reject) => {
       const events: NostrEvent[] = [];
-      const finish = () => {
+      const settle = (fail?: Error) => {
         clearTimeout(timer);
         this.subs.delete(subId);
         this.send(["CLOSE", subId]);
-        resolve(events);
+        if (fail) reject(fail);
+        else resolve(events);
       };
-      const timer = setTimeout(finish, timeoutMs);
-      this.subs.set(subId, { events, onEose: finish });
+      // A relay that opened a socket and then said NOTHING for the whole
+      // window has not answered, and must not be counted toward quorum:
+      // quorumMet was measuring reachability, not participation, which made
+      // every "not enough relays answered" guard -- login, recovery,
+      // rotation, and the registration collision check -- near-vacuous
+      // against a set of connectable-but-silent relays. Only EOSE is an
+      // answer; the timeout is a failure.
+      const timer = setTimeout(
+        () => settle(new Error("relay did not answer the subscription before the timeout")),
+        timeoutMs
+      );
+      this.subs.set(subId, { events, onEose: () => settle() });
       this.send(["REQ", subId, filter]);
     });
   }

@@ -88,9 +88,7 @@ const signed = await window.nostr.signEvent({
 const cipher = await window.nostr.nip44.encrypt(peerPubkeyHex, 'hi there');
 const plain  = await window.nostr.nip44.decrypt(peerPubkeyHex, cipher);</code></pre>
       <div class="callout">
-        <strong>Private keys never leave a dedicated Web Worker.</strong> The main thread — your page's JS — only ever
-        sees public keys, signed events, and ciphertext. <code>window.nostr</code> calls are proxied into the worker
-        and back.
+        <strong>Private keys live in a dedicated Web Worker.</strong> The signing APIs return only public keys, signed events, and ciphertext — the main thread never receives a private key through them. Be precise about the limit, though: an embedded widget runs <em>same-origin</em> with the page hosting it, so a malicious or XSS-compromised host can reach the worker directly (including <code>exportIdentity</code>, which backs the widget's own "reveal private key" button) and can visually overlay the consent UI. Treat the host page as trusted and embed BitLogin only in sites you control.
       </div>
     </li>
     <li>

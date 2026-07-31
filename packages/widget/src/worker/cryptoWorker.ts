@@ -333,7 +333,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         recovered: session.pendingRecovery,
         newLoginName: p.newLoginName,
         newPassword: p.newPassword,
-        vaultRelayUrls
+        vaultRelayUrls,
+        store
       });
       session.activeCredentialEvent = result.credentialEvent;
       session.activeRecoveryEvent = result.refreshedRecoveryEvent;
@@ -561,10 +562,21 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultSetBinding": {
+      // Two transitions only, and the difference is the whole feature:
+      // origin === null is UNBIND (the dashboard's "Revoke app access"), and
+      // anything else binds to THIS origin -- never a caller-named one, or a
+      // host could adopt a wallet the user bound to another site.
+      //
+      // The bare identifier `origin` sat here and silently resolved to the
+      // WORKER GLOBAL self.origin, so revoke rebound the record to the
+      // calling page instead of clearing it -- the exact adoption this guard
+      // exists to prevent, wearing the label of the button that prevents it.
+      // It typechecked because the DOM lib declares that global.
       const p = payload as { connectionId: string; origin: string | null };
       const { vault, connection } = await findConnection(p.connectionId);
+      const nextOrigin = p.origin === null ? null : selfOrigin();
       const { record, event } = await vault.updateConnection(connection, {
-        application_binding: { origin, app_pubkey: null }
+        application_binding: { origin: nextOrigin, app_pubkey: null }
       });
       const publish = await vault.publish({
         event,
