@@ -2,6 +2,21 @@
 
 Updated: 2026-07-31
 
+## Entropy audit (2026-07-31)
+
+[`entropy-audit-2026-07-31.md`](./entropy-audit-2026-07-31.md) — RNG and
+randomness-integration audit. **No predictable-fallback defect:** `random.ts`
+is the single chokepoint, throws rather than degrading, and rejection-samples to
+avoid modulo bias. Three hardening items, in order:
+
+- **M2** — nothing tests that the RNG fails closed. Do this first; it is
+  additive, cannot touch the derivation chain, and it is what stops M1's fix
+  from regressing later.
+- **M1** — `nonceOverride` / `ivOverride` are reachable from the public
+  `@bitlogin/core/crypto` surface. Move behind a non-exported test module.
+- **L1** — `Math.random` in the backup-quiz word picker (`element.ts:1471`).
+  Not a secret, but it forces a standing exception in any `Math.random` ban rule.
+
 ## Owner action items
 
 1. **Close the Dependabot PR on
