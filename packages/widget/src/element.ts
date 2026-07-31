@@ -289,6 +289,10 @@ export class BitLoginAuthElement extends HTMLElement {
         label: options.label?.trim() || `${appName} wallet`,
         resolve
       };
+      // Hosts that keep this element hidden until needed (the recommended
+      // permanent-mount pattern) listen for this to reveal it: the silent
+      // outcomes above never fire it, so nothing flashes for a duplicate.
+      this.dispatchEvent(new CustomEvent("bitlogin-offer-pending"));
       this.goto("vault-offer");
     });
   }
