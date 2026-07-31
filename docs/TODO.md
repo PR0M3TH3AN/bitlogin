@@ -9,9 +9,11 @@ randomness-integration audit. **No predictable-fallback defect:** `random.ts`
 is the single chokepoint, throws rather than degrading, and rejection-samples to
 avoid modulo bias. Three hardening items, in order:
 
-- **M2** — nothing tests that the RNG fails closed. Do this first; it is
-  additive, cannot touch the derivation chain, and it is what stops M1's fix
-  from regressing later.
+- **M2 — done.** Nine tests in `packages/core/src/crypto/crypto.test.ts` pin
+  fail-closed behaviour and `randomUniformInt`'s uniformity. Mutation-verified:
+  a zero-filling stub in place of the throw turns five of them red, and
+  swapping rejection sampling for bare modulo gives chi-square 5614 against a
+  threshold of 147.
 - **M1** — `nonceOverride` / `ivOverride` are reachable from the public
   `@bitlogin/core/crypto` surface. Move behind a non-exported test module.
 - **L1** — `Math.random` in the backup-quiz word picker (`element.ts:1471`).

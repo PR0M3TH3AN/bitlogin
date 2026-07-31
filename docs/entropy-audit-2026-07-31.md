@@ -81,7 +81,23 @@ rule in `TODO.md`, that means the change is account-breaking.
 
 ---
 
-### M2 — Nothing tests that the RNG fails closed
+### M2 — Nothing tests that the RNG fails closed — **DONE 2026-07-31**
+
+Landed in `packages/core/src/crypto/crypto.test.ts` as two new blocks, nine
+tests, bringing that file to 59 and the suite to 181.
+
+Both guards were mutation-verified rather than assumed:
+
+| Mutation | Result |
+| --- | --- |
+| `webcrypto()` returns a zero-filling stub instead of throwing | 5 fail-closed tests red |
+| `randomUniformInt` uses bare `value % maxExclusive` | chi-square **5614** against a threshold of 147 |
+
+The second number is the point of the exercise: a modulo-biased generator
+still produces different-looking values every call and passes every
+self-consistency test in the suite. Only a distribution test sees it.
+
+The original problem statement follows.
 
 This is the gap the whole exercise turns on. The crypto suite is genuinely good
 — known-answer coverage for HKDF, ScalarExpand, the Argon2id profile, BIP-39

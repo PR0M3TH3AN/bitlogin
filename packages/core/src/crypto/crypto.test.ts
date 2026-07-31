@@ -10,6 +10,7 @@ import { aesGcmOpen, aesGcmSeal } from "./aesGcm.js";
 import { bytesToHex, hexToBytes, bytesToBase64url, base64urlToBytes, utf8ToBytes } from "./encoding.js";
 import { getConversationKey, MAX_NIP44_BROWSER_PLAINTEXT_LEN, MAX_NIP44_ENCODED_PAYLOAD_LEN, nip44Encrypt, nip44Decrypt } from "./nip44.js";
 import { nip04Encrypt, nip04Decrypt } from "./nip04.js";
+import { randomBytes, randomEntropy128, randomUniformInt } from "./random.js";
 
 describe("ScalarExpand (§11.4 test vector)", () => {
   it("derives a stable, valid scalar for fixed input on counter 0", () => {
@@ -294,6 +295,103 @@ function base64urlToBytesForTest(value: string): Uint8Array {
 function bytesToBase64urlForTest(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
+
+describe("RNG fails closed (§11.1, §11.6)", () => {
+  /**
+   * Every secret this codebase mints -- recovery entropy, everyday keys, vault
+   * roots, AEAD nonces, account ids, generated passphrases -- funnels through
+   * random.ts. It is correct today: it throws when no secure source exists
+   * rather than falling back. Nothing else in this suite would notice if that
+   * stopped being true.
+   *
+   * That is the gap these tests close. A deterministic stream satisfies every
+   * self-consistency check here -- same input, same output -- which is exactly
+   * how a predictable RNG survives a health check that only asks whether the
+   * output looks random.
+   */
+  const withGlobalCrypto = (value: unknown, run: () => void): void => {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    try {
+      Object.defineProperty(globalThis, "crypto", { value, configurable: true });
+      run();
+    } finally {
+      if (saved) Object.defineProperty(globalThis, "crypto", saved);
+      else delete (globalThis as { crypto?: unknown }).crypto;
+    }
+  };
+
+  it("throws when no crypto object exists at all", () => {
+    withGlobalCrypto(undefined, () => {
+      expect(() => randomBytes(32)).toThrow(/no cryptographically secure/iu);
+    });
+  });
+
+  it("throws when crypto exists but getRandomValues does not", () => {
+    withGlobalCrypto({}, () => {
+      expect(() => randomBytes(32)).toThrow(/no cryptographically secure/iu);
+    });
+  });
+
+  it("throws when getRandomValues is not callable", () => {
+    withGlobalCrypto({ getRandomValues: "nope" }, () => {
+      expect(() => randomBytes(32)).toThrow(/no cryptographically secure/iu);
+    });
+  });
+
+  it("aborts key and entropy generation rather than substituting a value", () => {
+    withGlobalCrypto(undefined, () => {
+      // Each must fail, not silently degrade: a returned value here is the
+      // COLDCARD defect class -- predictable material that looks fine.
+      expect(() => randomEntropy128()).toThrow();
+      expect(() => generatePrivateKey()).toThrow();
+      expect(() => randomUniformInt(7776)).toThrow();
+    });
+  });
+
+  it("recovers normally once a secure source is available again", () => {
+    withGlobalCrypto(undefined, () => {
+      expect(() => randomBytes(1)).toThrow();
+    });
+    expect(randomBytes(32)).toHaveLength(32);
+  });
+});
+
+describe("randomUniformInt is unbiased (§9.2)", () => {
+  /**
+   * Guards the rejection loop specifically. Replacing it with a bare
+   * `value % maxExclusive` would leave every other test green while giving 68
+   * of 94 charset positions a 50% higher probability than the other 26.
+   */
+  it("stays uniform across a modulus that does not divide 256", () => {
+    const modulus = 94;
+    const samples = 200_000;
+    const counts = new Array<number>(modulus).fill(0);
+    for (let i = 0; i < samples; i++) counts[randomUniformInt(modulus)]! += 1;
+
+    const expected = samples / modulus;
+    const chi2 = counts.reduce((acc, c) => acc + (c - expected) ** 2 / expected, 0);
+    // df = 93; the p<0.001 critical value is ~147. A modulo-biased generator
+    // lands in the thousands here.
+    expect(chi2).toBeLessThan(147);
+    expect(Math.min(...counts)).toBeGreaterThan(0);
+  });
+
+  it("covers the full range of the EFF wordlist modulus", () => {
+    const seen = new Set<number>();
+    for (let i = 0; i < 100_000; i++) seen.add(randomUniformInt(7776));
+    expect(seen.size).toBeGreaterThan(7000);
+  });
+
+  it("rejects invalid bounds instead of returning something", () => {
+    for (const bad of [0, -1, 1.5, 2 ** 32 + 1, Number.NaN]) {
+      expect(() => randomUniformInt(bad)).toThrow(/maxExclusive/u);
+    }
+  });
+
+  it("always returns 0 for a modulus of 1", () => {
+    for (let i = 0; i < 100; i++) expect(randomUniformInt(1)).toBe(0);
+  });
+});
 
 describe("Encoding helpers", () => {
   it("hex round-trips", () => {
