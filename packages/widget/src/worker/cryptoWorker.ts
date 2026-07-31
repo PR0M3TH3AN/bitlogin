@@ -24,6 +24,7 @@ import {
   VaultSession,
   parseNwcUri,
   toNwcUri,
+  sameNwcCredential,
   validateNwcCredential,
   type DecryptedConnectionRecord,
   type NwcCredential
@@ -568,6 +569,39 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         // The tombstone is the durable part; a failed NIP-09 broadcast is not.
       }
       return {};
+    }
+
+    case "vaultOfferCheck": {
+      // The offer-to-save flow's dedupe: the same wallet + secret already
+      // stored means nothing NEW would enter the vault, so no consent screen
+      // is warranted. The origin binding is refreshed silently — the offering
+      // origin already HOLDS the credential (it supplied it), so binding is
+      // bookkeeping for later one-tap approvals, not a new grant.
+      const p = payload as { uri: string; origin: string | null };
+      const credential = parseNwcUri(p.uri);
+      const { vault, connections } = await listLiveConnections();
+      const existing = connections.find(
+        (c) =>
+          c.record.connection_type === "nwc" &&
+          sameNwcCredential(c.record.credential as unknown as NwcCredential, credential)
+      );
+      if (!existing) return { duplicate: false };
+      if (p.origin !== null && existing.record.application_binding.origin !== p.origin) {
+        const { record, event } = await vault.updateConnection(existing, {
+          application_binding: { origin: p.origin, app_pubkey: null }
+        });
+        const publish = await vault.publish({
+          event,
+          connectionId: record.connection_id,
+          relayUrls: vaultRelayUrls,
+          store
+        });
+        if (publish.success) {
+          const decrypted = await vault.decryptEvent(event);
+          return { duplicate: true, connection: summarize(decrypted!) };
+        }
+      }
+      return { duplicate: true, connection: summarize(existing) };
     }
 
     default:

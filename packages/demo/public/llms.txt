@@ -56,6 +56,12 @@ deployment above.
   mode: the origin receives the full bearer credential — wallet-side budgets
   are the real security boundary. Requires `style-src-attr 'unsafe-inline'`
   in the host CSP. Fires `bitlogin-connection-granted` after each share.
+- `offerNwcConnection(uri, { appName, label })` on the element — the inverse:
+  the app obtained an NWC URI by its own means and offers the user a portable
+  copy. Consent screen in the widget's own UI, never a silent save; resolves
+  'saved' | 'declined' | 'already-saved' (same wallet+secret exists; origin
+  binding refreshed, no UI) | 'unavailable' (no session/vault — treat as
+  no-op). Safe to fire after every successful connect.
 - Events on the element: `bitlogin-login` (`detail.publicKey`),
   `bitlogin-logout`, `bitlogin-signer-claimed`, `bitlogin-signer-released`
   (the last also fires on `window` when triggered via

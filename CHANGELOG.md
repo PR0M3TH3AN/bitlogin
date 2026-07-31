@@ -20,6 +20,13 @@ would plausibly want. Newest first.
   widget now ships FIVE files (two extra lazy chunks) that must travel
   together, and hosts using the wallet flow need `style-src-attr
   'unsafe-inline'` in their CSP.
+- **Widget: `offerNwcConnection()` — offer-to-save for app-obtained
+  wallets.** The inverse of `requestNwcConnection`: an app that got an NWC
+  URI through its own chooser or paste box can offer the user a portable
+  copy. Consent-gated in the widget's own UI, never silent (the write goes
+  to the user's account); duplicates by wallet+secret resolve
+  `already-saved` with a silent origin-binding refresh and no UI, so apps
+  can fire it after every successful connect.
 - **Connection Vault protocol layer in `@bitlogin/core`** (`src/vault/`):
   encrypted per-connection records signed by a derived vault identity, the
   finalized §CV6 key hierarchy with pinned test vectors, the NWC credential

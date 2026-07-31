@@ -220,6 +220,18 @@ export interface VaultDeletePayload {
   connectionId: string;
 }
 
+export interface VaultOfferCheckPayload {
+  uri: string;
+  origin: string | null;
+}
+/** duplicate=true means the same wallet+secret is already stored; the worker
+ *  has silently refreshed its origin binding, and no consent UI is needed —
+ *  nothing new entered the vault. */
+export interface VaultOfferCheckResult {
+  duplicate: boolean;
+  connection?: VaultConnectionSummary;
+}
+
 export type WorkerActionMap = {
   configure: [ConfigurePayload, Record<string, never>];
   register: [RegisterPayload, RegisterResult];
@@ -248,6 +260,7 @@ export type WorkerActionMap = {
   vaultRevealNwc: [VaultRevealNwcPayload, VaultRevealNwcResult];
   vaultSetBinding: [VaultSetBindingPayload, VaultConnectionSummary];
   vaultDelete: [VaultDeletePayload, Record<string, never>];
+  vaultOfferCheck: [VaultOfferCheckPayload, VaultOfferCheckResult];
 };
 
 export type WorkerAction = keyof WorkerActionMap;

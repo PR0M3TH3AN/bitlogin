@@ -21,7 +21,8 @@ import type {
   VaultFindForOriginPayload,
   VaultRevealNwcPayload,
   VaultSetBindingPayload,
-  VaultDeletePayload
+  VaultDeletePayload,
+  VaultOfferCheckPayload
 } from "./protocol.js";
 
 export class WorkerClient {
@@ -140,6 +141,9 @@ export class WorkerClient {
   }
   vaultDelete(payload: VaultDeletePayload) {
     return this.call("vaultDelete", payload);
+  }
+  vaultOfferCheck(payload: VaultOfferCheckPayload) {
+    return this.call("vaultOfferCheck", payload);
   }
   logout() {
     return this.call("logout", {});

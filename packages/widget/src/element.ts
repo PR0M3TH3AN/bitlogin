@@ -32,7 +32,8 @@ type Screen =
   | "rollback-confirm"
   | "vault-consent"
   | "vault-import"
-  | "vault-manage";
+  | "vault-manage"
+  | "vault-offer";
 
 interface ConfirmSlot {
   index: number;
@@ -120,6 +121,14 @@ export class BitLoginAuthElement extends HTMLElement {
   private vaultUnsaved = false;
   private vaultUnsavedReason: "no-vault" | "stale-cache" | undefined;
   private vaultConnections: VaultConnectionSummary[] | null = null;
+  /** offerNwcConnection state: the app already holds this URI; the only
+   *  question on screen is whether a copy enters the user's vault. */
+  private vaultOffer: {
+    uri: string;
+    appName: string;
+    label: string;
+    resolve: (outcome: "saved" | "declined") => void;
+  } | null = null;
 
   constructor() {
     super();
@@ -244,6 +253,71 @@ export class BitLoginAuthElement extends HTMLElement {
         }
       })();
     });
+  }
+
+  /**
+   * Offer-to-save (the inverse of requestNwcConnection): the app OBTAINED an
+   * NWC URI by its own means — its own wallet chooser, its own paste box —
+   * and offers the user a portable copy. Consent-gated in this widget's own
+   * UI, never silent: the write goes to the user's account (encrypted events
+   * under their vault identity), and nothing enters or leaves the vault
+   * without the user seeing it happen in BitLogin's chrome.
+   *
+   * Resolves "saved", "declined", "already-saved" (same wallet + secret
+   * exists; its origin binding was refreshed, no UI shown), or "unavailable"
+   * (no session or no vault root — the offer is quietly impossible, and an
+   * app should treat that as a no-op rather than an error).
+   */
+  async offerNwcConnection(
+    uri: string,
+    options: { appName?: string; label?: string } = {}
+  ): Promise<"saved" | "declined" | "already-saved" | "unavailable"> {
+    if (this.vaultOffer || this.vaultRequest) return "unavailable";
+    const status = await this.worker.getSessionStatus().catch(() => ({ unlocked: false }));
+    if (!status.unlocked) return "unavailable";
+    const vaultStatus = await this.worker.vaultStatus();
+    if (!vaultStatus.enabled) return "unavailable";
+    const origin = window.location.origin;
+    const check = await this.worker.vaultOfferCheck({ uri, origin });
+    if (check.duplicate) return "already-saved";
+
+    const appName = options.appName?.trim() || window.location.hostname || "This app";
+    return new Promise((resolve) => {
+      this.vaultOffer = {
+        uri,
+        appName,
+        label: options.label?.trim() || `${appName} wallet`,
+        resolve
+      };
+      this.goto("vault-offer");
+    });
+  }
+
+  private finishVaultOffer(outcome: "saved" | "declined"): void {
+    const offer = this.vaultOffer;
+    if (!offer) return;
+    this.vaultOffer = null;
+    offer.resolve(outcome);
+    this.goto(this.session ? "dashboard" : "welcome");
+  }
+
+  private async acceptVaultOffer(): Promise<void> {
+    const offer = this.vaultOffer;
+    if (!offer) return;
+    this.setBusy(true);
+    try {
+      const label = this.field("vaultOfferLabel").trim() || offer.label;
+      await this.worker.vaultSaveNwc({ uri: offer.uri, label, origin: window.location.origin });
+      this.setBusy(false);
+      this.finishVaultOffer("saved");
+      this.flashSuccess(this.screen, "Wallet saved");
+      this.dispatchEvent(
+        new CustomEvent("bitlogin-connection-granted", { detail: { origin: window.location.origin } })
+      );
+    } catch (err) {
+      this.setBusy(false);
+      this.fail(err);
+    }
   }
 
   /** Settles the pending request exactly once and returns to a neutral screen. */
@@ -463,6 +537,10 @@ export class BitLoginAuthElement extends HTMLElement {
       this.finishVaultRequest(null);
       return;
     }
+    if (screen === "welcome" && this.vaultOffer) {
+      this.finishVaultOffer("declined");
+      return;
+    }
     this.screen = screen;
     this.errorMessage = undefined;
     this.render();
@@ -545,6 +623,11 @@ export class BitLoginAuthElement extends HTMLElement {
     if (!target) return;
     const action = target.dataset.action!;
     switch (action) {
+      case "vault-offer-save":
+        return this.acceptVaultOffer();
+      case "vault-offer-decline":
+        this.finishVaultOffer("declined");
+        return;
       case "vault-approve":
         return this.approveVaultCandidate();
       case "vault-different":
@@ -1411,6 +1494,23 @@ export class BitLoginAuthElement extends HTMLElement {
           </form>
           <div class="notice info">Set a spending budget on the wallet's own authorization page — the wallet is the only place a budget is actually enforced.</div>
           <button class="link" type="button" data-action="vault-cancel">Cancel</button>
+        `;
+      }
+
+      case "vault-offer": {
+        const offer = this.vaultOffer;
+        if (!offer) return `<div class="notice error">No wallet offer is in progress.</div>`;
+        return `
+          <h2>Save this wallet to your BitLogin?</h2>
+          <p class="sub">${escapeHtml(offer.appName)} just connected a wallet on this device. Saved to your BitLogin, the connection follows you — on a new device it's one tap instead of another paste.</p>
+          ${this.renderError()}
+          <label for="vaultOfferLabel">Name this connection</label>
+          <input type="text" name="vaultOfferLabel" id="vaultOfferLabel" autocomplete="off" maxlength="120" value="${escapeHtml(offer.label)}" />
+          <button class="primary" type="button" data-action="vault-offer-save" ${this.busy ? "disabled" : ""}>
+            ${this.busy ? '<span class="spinner"></span>Saving…' : "Save to BitLogin"}
+          </button>
+          <button class="link" type="button" data-action="vault-offer-decline" ${this.busy ? "disabled" : ""}>No thanks — keep it on this device only</button>
+          <div class="notice info">Stored encrypted on your account; ${escapeHtml(offer.appName)} keeps working either way. Remove it any time from Wallet connections.</div>
         `;
       }
 

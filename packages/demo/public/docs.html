@@ -125,6 +125,15 @@ if (uri) payWith(uri); // full nostr+walletconnect:// URI, or null if declined</
       stored as an encrypted record on the user's account. A <code>bitlogin-connection-granted</code> event
       fires on the element after each share, and users manage or revoke grants from the widget dashboard's
       "Wallet connections" screen.</p>
+      <p>The inverse direction exists too: if your app obtained a connection by its own means (its own
+      wallet chooser, its own paste box), offer the user a portable copy —</p>
+      <pre><code>const outcome = await bl.offerNwcConnection(uri, { appName: 'Satisfied' });
+// 'saved' | 'declined' | 'already-saved' | 'unavailable'</code></pre>
+      <p>The widget shows its own consent screen ("Save this wallet to your BitLogin?") and never saves
+      silently — the write goes to the user's account, so it happens in BitLogin's chrome or not at all.
+      Duplicates (same wallet + secret) resolve <code>already-saved</code> with no UI, so it's safe to
+      fire after every successful connect. <code>unavailable</code> means nobody is signed in or the
+      account has no vault; treat it as a no-op.</p>
       <div class="callout">
         <strong>This is reveal mode, and the consent screen says so.</strong> Your origin receives the full
         bearer credential and everything its wallet-side budget allows — an embedded same-origin widget is

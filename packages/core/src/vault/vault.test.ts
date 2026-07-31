@@ -18,7 +18,7 @@ import {
   deriveVaultPublicKey,
   newConnectionId
 } from "./derivation.js";
-import { parseNwcUri, toNwcUri, NwcParseError } from "./nwc.js";
+import { parseNwcUri, toNwcUri, sameNwcCredential, NwcParseError } from "./nwc.js";
 import {
   buildConnectionRecordEvent,
   decryptConnectionRecordEvent,
@@ -130,6 +130,14 @@ describe("NWC profile (nwc-connections.md §5-§6)", () => {
   it("round-trips losslessly through export and re-parse", () => {
     const credential = parseNwcUri(URI);
     expect(parseNwcUri(toNwcUri(credential))).toEqual(credential);
+  });
+
+  it("identity of a connection is wallet + secret, not relays or labels", () => {
+    const a = parseNwcUri(URI);
+    const b = { ...a, relays: ["wss://relay.other"], lud16: null };
+    const c = { ...a, secret: "ef".repeat(32) };
+    expect(sameNwcCredential(a, b)).toBe(true);
+    expect(sameNwcCredential(a, c)).toBe(false);
   });
 
   it("refuses missing relay, missing secret, bad pubkey, and non-websocket relays", () => {

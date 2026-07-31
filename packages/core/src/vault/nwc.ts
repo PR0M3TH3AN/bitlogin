@@ -90,6 +90,13 @@ export function toNwcUri(credential: NwcCredential): string {
   return `nostr+walletconnect://${credential.wallet_pubkey}?${params.toString()}`;
 }
 
+/** True when two credentials are the SAME connection: same wallet service,
+ *  same client secret. Relays/labels/lud16 may drift without making a new
+ *  connection — the secret is the identity of the grant. */
+export function sameNwcCredential(a: NwcCredential, b: NwcCredential): boolean {
+  return a.wallet_pubkey === b.wallet_pubkey && a.secret === b.secret;
+}
+
 export function validateNwcCredential(credential: unknown): asserts credential is NwcCredential {
   const c = credential as Partial<NwcCredential> | null;
   const fail = (message: string) => {
