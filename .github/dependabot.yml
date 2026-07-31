@@ -1,3 +1,20 @@
+# Dependency updates.
+#
+# The original config grouped `*` with no update-type restriction, so its very
+# first PR bundled @noble/hashes 1.8->2.2, @noble/curves 1.9->2.2, @scure/base
+# 1.2->2.2, @scure/bip39 1.6->2.2, TypeScript 5->7, Vite 6->8 and Vitest 3->4
+# into one change. It failed the build outright (noble v2 dropped the
+# extensionless subpath exports this code imports), which was the lucky
+# outcome -- a grouped major that COMPILED would have been far worse.
+#
+# The reason to be careful here is specific to this project. Account capsules
+# live on public relays and the login name plus password derive the locator,
+# signing scalar and capsule key deterministically. Those outputs are a
+# compatibility contract with every account that already exists: change HKDF,
+# the scalar loop, base64url framing, BIP-39 seeding or JCS ordering and users
+# are locked out permanently, with no server-side record to migrate. See
+# packages/core/src/crypto/knownAnswer.test.ts, which pins those values so an
+# upgrade that alters them fails loudly instead of shipping.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -6,9 +23,29 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      npm-security-and-maintenance:
+      # Only non-breaking updates travel together. Majors still get proposed,
+      # but individually, so each can be judged on its own merits instead of
+      # arriving as one unreviewable pile.
+      minor-and-patch:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # The derivation chain. A major here is an account-compatibility event,
+      # not a maintenance chore, so it should be a deliberate piece of work
+      # with the known-answer vectors green -- never an automated PR waiting to
+      # be merged on a quiet afternoon.
+      - dependency-name: "@noble/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@scure/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "hash-wasm"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "canonicalize"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
