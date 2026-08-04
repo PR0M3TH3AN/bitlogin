@@ -9,8 +9,21 @@ self.addEventListener("install", (event) => {
   // Do not skipWaiting: an older page may still need lazy chunks and the
   // matching crypto worker from its own release. The new worker activates
   // only after those clients close, with its complete cache already present.
+  //
+  // cache: "reload" bypasses the HTTP cache for every precache fetch. Without
+  // it, an asset whose bytes didn't change between deploys revalidates to a
+  // 304 and keeps its OLD stored headers -- and headers are load-bearing: a
+  // worker script cached with a stale Content-Security-Policy runs under that
+  // stale policy for the whole release (this shipped once: cryptoWorker.js
+  // kept a pre-'wasm-unsafe-eval' CSP and Argon2id could not compile).
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll([...PRECACHE_URLS])),
+    caches
+      .open(CACHE_NAME)
+      .then((cache) =>
+        cache.addAll(
+          [...PRECACHE_URLS].map((url) => new Request(url, { cache: "reload" })),
+        ),
+      ),
   );
 });
 
