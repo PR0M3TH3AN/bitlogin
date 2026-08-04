@@ -63,7 +63,7 @@
 
 bl.addEventListener('bitlogin-login', (e) => {
   console.log('signed in as', e.detail.publicKey);
-  console.log('via', e.detail.method); // 'bitlogin' | 'nip07'
+  console.log('via', e.detail.method); // 'bitlogin' | 'nip07' | 'nip46'
   console.log('supports', e.detail.capabilities); // { nip44, nip04, getRelays }
 });
 
@@ -73,8 +73,9 @@ bl.addEventListener('bitlogin-logout', () => {
       <div class="callout">
         <strong>One login surface, several methods.</strong> If the visitor's browser has a NIP-07 signer
         extension (Alby, nos2x, …), the widget's welcome screen offers "Use your Nostr extension instead"
-        below the primary username/password sign-in — you embed one element and both kinds of users are
-        covered. <code>detail.method</code> tells you which way the user came in, and
+        below the primary username/password sign-in, and every visitor gets "Use a remote signer (bunker)" —
+        a NIP-46 connect screen with a scannable QR for phone signers (Amber, nsec.app) and a
+        <code>bunker://</code> paste box. You embed one element and all three kinds of users are covered. <code>detail.method</code> tells you which way the user came in, and
         <code>detail.capabilities</code> what the active signer supports (some extensions lack
         <code>nip44</code>). Extension sessions are signer-only: signing and encryption work through the
         element exactly the same, but BitLogin account features — wallet connections, password rotation,

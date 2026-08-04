@@ -7,6 +7,7 @@
  */
 import { WebSocketServer, type WebSocket } from "ws";
 import { compareNip01ReplacementOrder, verifyNostrEvent, findTagValue, type NostrEvent } from "../nostr/event.js";
+import { matchesNostrFilter, type NostrFilter } from "../nostr/relay.js";
 
 function storageKey(event: NostrEvent): string {
   if (event.kind >= 30000 && event.kind < 40000) {
@@ -28,6 +29,10 @@ export class MockRelay {
   private wss: WebSocketServer;
   private events = new Map<string, NostrEvent>();
   private plainEvents: NostrEvent[] = [];
+  /** Open subscriptions per socket, for live post-EOSE delivery -- real relays
+   *  push newly published events to every matching open REQ, and NIP-46 round
+   *  trips depend on that. */
+  private liveSubs = new Map<WebSocket, Map<string, NostrFilter>>();
   public requireAuthForKinds: Set<number> = new Set();
   /** Pubkeys whose publishes are refused. Models the partially-hostile relay
    *  that accepts some writes and drops others -- the case that makes write
@@ -88,6 +93,7 @@ export class MockRelay {
         }
         this.store(event);
         socket.send(JSON.stringify(["OK", event.id, true, ""]));
+        this.broadcast(event);
         return;
       }
       if (type === "REQ") {
@@ -96,12 +102,34 @@ export class MockRelay {
         for (const event of this.unsolicitedQueryEvents) socket.send(JSON.stringify(["EVENT", subId, event]));
         for (const event of matches) socket.send(JSON.stringify(["EVENT", subId, event]));
         socket.send(JSON.stringify(["EOSE", subId]));
+        let subsForSocket = this.liveSubs.get(socket);
+        if (!subsForSocket) {
+          subsForSocket = new Map();
+          this.liveSubs.set(socket, subsForSocket);
+        }
+        subsForSocket.set(subId, (filters[0] ?? {}) as NostrFilter);
         return;
       }
       if (type === "CLOSE") {
+        const [subId] = rest as [string];
+        if (typeof subId === "string") this.liveSubs.get(socket)?.delete(subId);
         return;
       }
     });
+    socket.on("close", () => {
+      this.liveSubs.delete(socket);
+    });
+  }
+
+  /** Pushes a just-published event to every open subscription it matches. */
+  private broadcast(event: NostrEvent): void {
+    for (const [socket, subs] of this.liveSubs) {
+      for (const [subId, filter] of subs) {
+        if (matchesNostrFilter(event, filter)) {
+          socket.send(JSON.stringify(["EVENT", subId, event]));
+        }
+      }
+    }
   }
 
   private store(event: NostrEvent): void {

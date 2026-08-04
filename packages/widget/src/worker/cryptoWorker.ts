@@ -18,8 +18,19 @@ import {
   NostrSigner,
   type RecoveredIdentity
 } from "@bitlogin/core/account";
-import { RelayPool, BUILTIN_VAULT_RELAYS, BUILTIN_DISCOVERY_RELAYS, encodeNsec, encodeNpub, type NostrEvent } from "@bitlogin/core/nostr";
-import { getPublicKeyHex, base64urlToBytes, wipe } from "@bitlogin/core/crypto";
+import {
+  RelayPool,
+  BUILTIN_VAULT_RELAYS,
+  BUILTIN_DISCOVERY_RELAYS,
+  encodeNsec,
+  encodeNpub,
+  Nip46Client,
+  parseBunkerUri,
+  buildNostrconnectUri,
+  listenForNostrconnect,
+  type NostrEvent
+} from "@bitlogin/core/nostr";
+import { getPublicKeyHex, base64urlToBytes, wipe, generatePrivateKey, randomBytes, bytesToHex } from "@bitlogin/core/crypto";
 import {
   VaultSession,
   parseNwcUri,
@@ -48,7 +59,9 @@ import type {
   Nip44DecryptPayload,
   Nip04EncryptPayload,
   Nip04DecryptPayload,
-  PreviewImportKeyPayload
+  PreviewImportKeyPayload,
+  Nip46ConnectPayload,
+  Nip46NostrconnectStartPayload
 } from "./protocol.js";
 
 interface SessionState {
@@ -232,8 +245,131 @@ async function findConnection(connectionId: string): Promise<{
   return { vault, connection };
 }
 
+// ---- NIP-46 remote-signer session (§LM5) ----
+// Deliberately separate from `session`: a remote-signer session has no account,
+// no vault, and nothing persisted. The ephemeral client key never leaves this
+// worker (§LM5.4); close() ends everything.
+let nip46: { client: Nip46Client; userPubkey: string } | null = null;
+let nostrconnectPending: { clientSecretKey: Uint8Array; relayUrls: string[]; secret: string } | null = null;
+
+function postAuthUrlNotification(url: string): void {
+  (self as unknown as Worker).postMessage({ notify: "nip46-auth-url", url });
+}
+
+function requireNip46(): { client: Nip46Client; userPubkey: string } {
+  if (!nip46) throw new Error("No remote signer is connected.");
+  return nip46;
+}
+
+function adoptNip46Client(client: Nip46Client, userPubkey: string): void {
+  nip46?.client.close();
+  nip46 = { client, userPubkey };
+}
+
 async function handle(action: string, payload: unknown): Promise<unknown> {
   switch (action) {
+    case "nip46Connect": {
+      const p = payload as Nip46ConnectPayload;
+      const pointer = parseBunkerUri(p.uri);
+      const client = new Nip46Client({
+        clientSecretKey: generatePrivateKey(),
+        pointer,
+        onAuthUrl: postAuthUrlNotification
+      });
+      try {
+        await client.connect();
+        const userPubkey = await client.getUserPublicKey();
+        adoptNip46Client(client, userPubkey);
+        return { userPubkey };
+      } catch (err) {
+        client.close();
+        throw err;
+      }
+    }
+
+    case "nip46NostrconnectStart": {
+      const p = payload as Nip46NostrconnectStartPayload;
+      const relayUrls = vaultRelayUrls;
+      const clientSecretKey = generatePrivateKey();
+      // The secret is the proof-of-scan: whoever echoes it back becomes this
+      // session's signer, so it gets real entropy, not a friendly string.
+      const secret = bytesToHex(randomBytes(16));
+      nostrconnectPending = { clientSecretKey, relayUrls, secret };
+      const uri = buildNostrconnectUri({
+        clientPubkey: getPublicKeyHex(clientSecretKey),
+        relayUrls,
+        secret,
+        name: p.appName?.trim() || "BitLogin",
+        perms: ["sign_event", "nip44_encrypt", "nip44_decrypt", "nip04_encrypt", "nip04_decrypt"]
+      });
+      return { uri };
+    }
+
+    case "nip46NostrconnectAwait": {
+      const pending = nostrconnectPending;
+      if (!pending) throw new Error("No signer-connection attempt is in progress.");
+      const { signerPubkey } = await listenForNostrconnect({
+        clientSecretKey: pending.clientSecretKey,
+        relayUrls: pending.relayUrls,
+        secret: pending.secret,
+        timeoutMs: 180_000
+      });
+      if (nostrconnectPending !== pending) throw new Error("This signer-connection attempt was superseded.");
+      nostrconnectPending = null;
+      const client = new Nip46Client({
+        clientSecretKey: pending.clientSecretKey,
+        pointer: { signerPubkey, relayUrls: pending.relayUrls },
+        onAuthUrl: postAuthUrlNotification
+      });
+      try {
+        // The signer initiated (it echoed the secret), so no connect RPC is
+        // needed -- go straight to asking whose key it signs for.
+        const userPubkey = await client.getUserPublicKey();
+        adoptNip46Client(client, userPubkey);
+        return { userPubkey };
+      } catch (err) {
+        client.close();
+        throw err;
+      }
+    }
+
+    case "nip46SignEvent": {
+      const p = payload as SignEventPayload;
+      return requireNip46().client.signEvent({
+        kind: p.kind,
+        content: p.content,
+        tags: (p.tags ?? []) as string[][],
+        created_at: p.created_at ?? Math.floor(Date.now() / 1000)
+      });
+    }
+
+    case "nip46Nip44Encrypt": {
+      const p = payload as Nip44EncryptPayload;
+      return { ciphertext: await requireNip46().client.nip44Encrypt(p.peerPublicKey, p.plaintext) };
+    }
+
+    case "nip46Nip44Decrypt": {
+      const p = payload as Nip44DecryptPayload;
+      return { plaintext: await requireNip46().client.nip44Decrypt(p.peerPublicKey, p.payload) };
+    }
+
+    case "nip46Nip04Encrypt": {
+      const p = payload as Nip04EncryptPayload;
+      return { ciphertext: await requireNip46().client.nip04Encrypt(p.peerPublicKey, p.plaintext) };
+    }
+
+    case "nip46Nip04Decrypt": {
+      const p = payload as Nip04DecryptPayload;
+      return { plaintext: await requireNip46().client.nip04Decrypt(p.peerPublicKey, p.payload) };
+    }
+
+    case "nip46Disconnect": {
+      nip46?.client.close();
+      nip46 = null;
+      nostrconnectPending = null;
+      return {};
+    }
+
     case "configure": {
       const p = payload as ConfigurePayload;
       if (p.vaultRelayUrls?.length) vaultRelayUrls = p.vaultRelayUrls;
@@ -655,7 +791,10 @@ const KNOWN_ACTIONS = new Set<string>([
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "getSessionStatus", "restoreSession", "logout",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
-  "vaultSetBinding", "vaultDelete", "vaultOfferCheck"
+  "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
+  "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",
+  "nip46Nip44Encrypt", "nip46Nip44Decrypt", "nip46Nip04Encrypt", "nip46Nip04Decrypt",
+  "nip46Disconnect"
 ]);
 
 self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
@@ -676,7 +815,15 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
     return;
   }
   const { id, action, payload } = event.data;
-  requestQueue.run(() => handle(action, payload)).then(
+  // NIP-46 calls run OUTSIDE the serial queue: they touch none of the
+  // account/vault state the queue exists to order, and a signer waiting
+  // minutes for a human's approval must not block every other worker call
+  // behind it (getSessionStatus, vault requests, even logout).
+  const run =
+    action.startsWith("nip46")
+      ? (operation: () => Promise<unknown>) => operation()
+      : (operation: () => Promise<unknown>) => requestQueue.run(operation);
+  run(() => handle(action, payload)).then(
     (result) => {
       const response: WorkerResponse = { id, ok: true, result };
       (self as unknown as Worker).postMessage(response);

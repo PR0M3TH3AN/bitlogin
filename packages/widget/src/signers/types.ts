@@ -9,7 +9,7 @@
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import type { UnsignedEventForSigning } from "../provider.js";
 
-export type SignerMethod = "bitlogin" | "nip07";
+export type SignerMethod = "bitlogin" | "nip07" | "nip46";
 
 /** What the active signer actually supports. NIP-07 extensions vary -- some lack nip44,
  * older ones lack nip04 -- and the facade reports honestly instead of throwing a

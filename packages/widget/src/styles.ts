@@ -236,4 +236,14 @@ button.link {
   margin-right: 6px;
 }
 @keyframes bl-spin { to { transform: rotate(360deg); } }
+
+/* nostrconnect QR (§LM5). The white backing and quiet zone are drawn inside
+   the SVG itself -- scanners need them regardless of host theme -- so the
+   wrapper only sizes and centers it. */
+.qr-wrap {
+  display: block;
+  width: min(240px, 100%);
+  margin: 14px auto;
+}
+.qr-wrap svg { display: block; width: 100%; height: auto; }
 `;

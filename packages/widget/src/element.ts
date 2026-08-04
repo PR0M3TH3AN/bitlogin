@@ -9,18 +9,22 @@ import {
 import { encodeNpub } from "@bitlogin/core/nostr";
 import { randomUniformInt } from "@bitlogin/core/crypto";
 import { WorkerClient } from "./worker/workerClient.js";
-import { createNip07Provider, type Nip07Provider } from "./provider.js";
+import { createElementRoutedProvider, type Nip07Provider } from "./provider.js";
 import { readConfigFromElement } from "./config.js";
 import { WIDGET_STYLES } from "./styles.js";
 import { chooseWalletViaBitcoinConnect } from "./vault/bitcoinConnect.js";
 import type { VaultConnectionSummary } from "./worker/protocol.js";
 import { buildVaultIntegrityWarnings } from "./vault/integrityWarnings.js";
 import { detectForeignNip07Provider, Nip07Signer } from "./signers/nip07.js";
-import type { SignerCapabilities, SignerMethod } from "./signers/types.js";
+import { Nip46Signer } from "./signers/nip46.js";
+import type { Signer, SignerCapabilities, SignerMethod } from "./signers/types.js";
+import { renderQrSvg } from "./qr.js";
 
 type Screen =
   | "welcome"
   | "extension-confirm"
+  | "bunker-connect"
+  | "bunker-confirm"
   | "import-key"
   | "create-name"
   | "create-credential"
@@ -75,15 +79,22 @@ export class BitLoginAuthElement extends HTMLElement {
 
   private session: { publicKey: string; npub: string; accountId?: string; method: SignerMethod } | null = null;
 
-  // ---- NIP-07 extension sessions (docs/login-methods.md §LM4, §LM7) ----
-  // `pending` holds the signer between "the extension answered getPublicKey" and the
-  // user confirming that npub is theirs; only `active` routes the public API. Thin by
-  // design: no capsule, no vault, no persistence -- a reload simply signs the user out,
-  // and the extension is asked again next visit.
+  // ---- Alternative-method sessions (docs/login-methods.md §LM4, §LM5, §LM7) ----
+  // `pending*` state holds a candidate between "the signer answered" and the user
+  // confirming that npub is theirs; only `altSigner` routes the public API. Thin by
+  // design: no capsule, no vault, no persistence -- a reload simply signs the user
+  // out, and the signer is asked again next visit.
   private pendingExtensionSigner: Nip07Signer | null = null;
-  private activeExtensionSigner: Nip07Signer | null = null;
+  private altSigner: Signer | null = null;
   private extensionPreviewNpub = "";
   private extensionPreviewPubkey = "";
+
+  // NIP-46 connect flow (§LM5). The QR/copyable nostrconnect URI, the signer's
+  // interactive-approval URL if one arrives mid-connect, and the confirmed-but-
+  // not-yet-adopted user identity.
+  private bunkerConnectUri = "";
+  private bunkerAuthUrl = "";
+  private pendingBunker: { userPubkey: string; npub: string } | null = null;
   private sessionWarnings: string[] = [];
   private lastSignedEventJson = "";
   private exportedNsec = "";
@@ -149,6 +160,13 @@ export class BitLoginAuthElement extends HTMLElement {
     sheet.replaceSync(WIDGET_STYLES);
     this.root.adoptedStyleSheets = [sheet];
     this.worker = new WorkerClient();
+    this.worker.onNotification = (notification) => {
+      if (notification.notify === "nip46-auth-url") {
+        // Arrives mid-connect, while nip46Connect is still pending (§LM5.1).
+        this.bunkerAuthUrl = notification.url;
+        this.render();
+      }
+    };
   }
 
   connectedCallback(): void {
@@ -164,7 +182,10 @@ export class BitLoginAuthElement extends HTMLElement {
     this.root.addEventListener("change", (e) => void this.onFileChange(e));
     this.render();
 
-    this.installedProvider = createNip07Provider(this.worker, () => this.vaultRelayUrls);
+    // Routed through this element, not bound to the worker directly, so the
+    // provider follows the ACTIVE signer -- worker for BitLogin accounts,
+    // worker-held NIP-46 client for remote-signer sessions (§LM3, §LM5).
+    this.installedProvider = createElementRoutedProvider(this, () => this.vaultRelayUrls);
     if (!(window as unknown as { nostr?: unknown }).nostr) {
       // See claimSigner()'s doc comment: an extension can make this property
       // non-configurable, which makes even this guarded assignment throw.
@@ -187,11 +208,11 @@ export class BitLoginAuthElement extends HTMLElement {
   // always), the extension's provider for a NIP-07 session (§LM3). Hosts holding a
   // reference to this element get the right backend either way.
   async getPublicKey(): Promise<string> {
-    if (this.activeExtensionSigner) return this.activeExtensionSigner.getPublicKey();
+    if (this.altSigner) return this.altSigner.getPublicKey();
     return (await this.worker.getPublicKey()).publicKey;
   }
   async signEvent(event: { kind: number; tags?: string[][]; content: string; created_at?: number }) {
-    if (this.activeExtensionSigner) return this.activeExtensionSigner.signEvent(event);
+    if (this.altSigner) return this.altSigner.signEvent(event);
     return this.worker.signEvent(event);
   }
   /**
@@ -203,11 +224,11 @@ export class BitLoginAuthElement extends HTMLElement {
    * racing other providers for that slot.
    */
   async nip44Encrypt(peerPublicKey: string, plaintext: string): Promise<string> {
-    if (this.activeExtensionSigner) return this.activeExtensionSigner.nip44Encrypt(peerPublicKey, plaintext);
+    if (this.altSigner) return this.altSigner.nip44Encrypt(peerPublicKey, plaintext);
     return (await this.worker.nip44Encrypt({ peerPublicKey, plaintext })).ciphertext;
   }
   async nip44Decrypt(peerPublicKey: string, payload: string): Promise<string> {
-    if (this.activeExtensionSigner) return this.activeExtensionSigner.nip44Decrypt(peerPublicKey, payload);
+    if (this.altSigner) return this.altSigner.nip44Decrypt(peerPublicKey, payload);
     return (await this.worker.nip44Decrypt({ peerPublicKey, payload })).plaintext;
   }
   /**
@@ -216,19 +237,23 @@ export class BitLoginAuthElement extends HTMLElement {
    * (or their older DM code paths) that still expect NIP-04 rather than NIP-44.
    */
   async nip04Encrypt(peerPublicKey: string, plaintext: string): Promise<string> {
-    if (this.activeExtensionSigner) return this.activeExtensionSigner.nip04Encrypt(peerPublicKey, plaintext);
+    if (this.altSigner) return this.altSigner.nip04Encrypt(peerPublicKey, plaintext);
     return (await this.worker.nip04Encrypt({ peerPublicKey, plaintext })).ciphertext;
   }
   async nip04Decrypt(peerPublicKey: string, payload: string): Promise<string> {
-    if (this.activeExtensionSigner) return this.activeExtensionSigner.nip04Decrypt(peerPublicKey, payload);
+    if (this.altSigner) return this.altSigner.nip04Decrypt(peerPublicKey, payload);
     return (await this.worker.nip04Decrypt({ peerPublicKey, payload })).plaintext;
   }
   async logout(): Promise<void> {
-    if (this.activeExtensionSigner) {
-      // Nothing to tear down beyond our own reference: the session held no worker
-      // state, persisted nothing, and never claimed window.nostr (§LM4).
-      this.activeExtensionSigner = null;
+    if (this.altSigner) {
+      // Thin sessions persist nothing (§LM7). A NIP-46 session additionally
+      // holds a live client in the worker to close, and claimed window.nostr
+      // (its backend is ours) -- releaseSigner is a safe no-op for NIP-07,
+      // which never claimed the slot (§LM4).
+      if (this.altSigner.method === "nip46") void this.worker.nip46Disconnect();
+      this.altSigner = null;
       this.session = null;
+      this.releaseSigner();
       this.dispatchEvent(new CustomEvent("bitlogin-logout"));
       this.goto("welcome");
       return;
@@ -259,7 +284,7 @@ export class BitLoginAuthElement extends HTMLElement {
     if (this.vaultRequest) throw new Error("A wallet connection request is already in progress.");
     // Extension sessions are signer-only (§LM7): no vault, and prompting a password
     // sign-in over an active session would be worse than an honest decline.
-    if (this.activeExtensionSigner) return null;
+    if (this.altSigner) return null;
     const origin = window.location.origin;
     const appName = options.appName?.trim() || window.location.hostname || "This app";
     return new Promise<string | null>((resolve) => {
@@ -545,7 +570,7 @@ export class BitLoginAuthElement extends HTMLElement {
    * detail shape: which method granted the session and what it can do (§LM3). The
    * pre-existing `publicKey` field is unchanged for hosts written before `method`. */
   private dispatchLogin(): void {
-    const capabilities: SignerCapabilities = this.activeExtensionSigner?.capabilities ?? {
+    const capabilities: SignerCapabilities = this.altSigner?.capabilities ?? {
       nip44: true,
       nip04: true,
       getRelays: true
@@ -716,6 +741,15 @@ export class BitLoginAuthElement extends HTMLElement {
       case "goto-welcome":
         this.pendingRollback = null;
         this.pendingExtensionSigner = null;
+        // Backing out of an unfinished bunker connect abandons the worker-side
+        // attempt -- but never a live session (altSigner) that's merely
+        // navigating around.
+        if (!this.altSigner && (this.bunkerConnectUri || this.pendingBunker)) {
+          void this.worker.nip46Disconnect();
+        }
+        this.pendingBunker = null;
+        this.bunkerConnectUri = "";
+        this.bunkerAuthUrl = "";
         this.goto("welcome");
         return;
       case "extension-signin":
@@ -723,6 +757,36 @@ export class BitLoginAuthElement extends HTMLElement {
       case "extension-continue":
         this.handleExtensionConfirm();
         return;
+      case "goto-bunker":
+        this.pendingBunker = null;
+        this.bunkerConnectUri = "";
+        this.bunkerAuthUrl = "";
+        this.errorMessage = undefined;
+        this.goto("bunker-connect");
+        void this.startNostrconnect();
+        return;
+      case "bunker-continue":
+        this.handleBunkerConfirm();
+        return;
+      case "copy-bunker-uri": {
+        const button = target;
+        const original = button.textContent ?? "Copy";
+        const flash = (text: string) => {
+          button.textContent = text;
+          setTimeout(() => {
+            if (button.isConnected) button.textContent = original;
+          }, 2000);
+        };
+        if (!this.bunkerConnectUri || !navigator.clipboard?.writeText) {
+          flash("Copy not available");
+          return;
+        }
+        navigator.clipboard.writeText(this.bunkerConnectUri).then(
+          () => flash("Copied"),
+          () => flash("Copy failed")
+        );
+        return;
+      }
       case "goto-dashboard":
         this.goto("dashboard");
         return;
@@ -811,6 +875,8 @@ export class BitLoginAuthElement extends HTMLElement {
           return await this.handleChangePasswordSubmit();
         case "vault-import":
           return await this.handleVaultImportSubmit();
+        case "bunker-connect":
+          return await this.handleBunkerSubmit();
         default:
           return;
       }
@@ -994,13 +1060,91 @@ export class BitLoginAuthElement extends HTMLElement {
       return;
     }
     this.pendingExtensionSigner = null;
-    this.activeExtensionSigner = signer;
+    this.altSigner = signer;
     this.session = { publicKey: this.extensionPreviewPubkey, npub: this.extensionPreviewNpub, method: "nip07" };
     this.sessionWarnings = [];
     // A wallet request that was waiting on sign-in expected a BitLogin account; an
     // extension session has no vault, so settle it honestly instead of letting the
     // dashboard hook run it into worker calls that cannot succeed (§LM7).
     if (this.vaultRequest) this.finishVaultRequest(null);
+    this.dispatchLogin();
+    this.flashSuccess("dashboard", "Signed in");
+  }
+
+  /**
+   * nostrconnect leg of the remote-signer flow (§LM5.1): the worker mints an
+   * ephemeral client key and a secret, we show the resulting URI as a QR for a
+   * phone signer to scan, and the worker listens for whichever signer echoes
+   * the secret. Runs alongside the paste form -- whichever leg completes first
+   * wins, and the worker refuses a superseded listen.
+   */
+  private async startNostrconnect(): Promise<void> {
+    try {
+      const { uri } = await this.worker.nip46NostrconnectStart({
+        appName: window.location.hostname || "BitLogin"
+      });
+      if (this.screen !== "bunker-connect") return; // user navigated away
+      this.bunkerConnectUri = uri;
+      this.render();
+      const { userPubkey } = await this.worker.nip46NostrconnectAwait();
+      if (this.screen !== "bunker-connect" || this.pendingBunker) {
+        // The paste leg (or another flow entirely) won while we listened.
+        return;
+      }
+      this.adoptBunkerPreview(userPubkey);
+    } catch (err) {
+      // Only worth surfacing if the user is still looking at this screen and
+      // nothing else succeeded -- a superseded or abandoned listen is expected.
+      if (this.screen === "bunker-connect" && !this.pendingBunker && !this.session) {
+        this.bunkerConnectUri = "";
+        this.fail(err);
+      }
+    }
+  }
+
+  /** bunker:// paste leg (§LM5.1). */
+  private async handleBunkerSubmit(): Promise<void> {
+    const uri = this.field("bunkerUri").trim();
+    if (!uri) {
+      this.errorMessage = "Paste a bunker:// address first.";
+      this.render();
+      return;
+    }
+    this.setBusy(true);
+    this.bunkerAuthUrl = "";
+    try {
+      const { userPubkey } = await this.worker.nip46Connect({ uri });
+      this.busy = false;
+      this.adoptBunkerPreview(userPubkey);
+    } catch (err) {
+      this.fail(err);
+    }
+  }
+
+  private adoptBunkerPreview(userPubkey: string): void {
+    this.pendingBunker = { userPubkey, npub: encodeNpub(userPubkey) };
+    this.bunkerConnectUri = "";
+    this.bunkerAuthUrl = "";
+    this.errorMessage = undefined;
+    this.goto("bunker-confirm");
+  }
+
+  /** The user confirmed the identity their remote signer reported (§LM5). */
+  private handleBunkerConfirm(): void {
+    const pending = this.pendingBunker;
+    if (!pending) {
+      this.goto("welcome");
+      return;
+    }
+    this.pendingBunker = null;
+    this.altSigner = new Nip46Signer(this.worker, pending.userPubkey);
+    this.session = { publicKey: pending.userPubkey, npub: pending.npub, method: "nip46" };
+    this.sessionWarnings = [];
+    if (this.vaultRequest) this.finishVaultRequest(null);
+    // Unlike NIP-07 there is no extension owning window.nostr here -- the
+    // element-routed provider IS this session's public surface, so claim the
+    // slot (best-effort, §LM4's claim semantics unchanged).
+    this.noteSignerClaim(this.claimSigner());
     this.dispatchLogin();
     this.flashSuccess("dashboard", "Signed in");
   }
@@ -1253,6 +1397,7 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="link" data-action="goto-import">Import an existing Nostr key</button>
           <button class="link" data-action="goto-recover">Forgot password? Recover with phrase</button>
           ${extensionOption}
+          <button class="link" data-action="goto-bunker">Use a remote signer (bunker)</button>
         `;
       }
 
@@ -1264,6 +1409,47 @@ export class BitLoginAuthElement extends HTMLElement {
           <p class="small">Check this is the profile you expect — extensions can hold more than one. BitLogin never sees this identity's private key; your extension signs on its behalf. This session lasts until you log out or leave the page, and BitLogin account features (wallet connections, password rotation, recovery) stay with BitLogin accounts.</p>
           ${this.renderError()}
           <button class="primary" type="button" data-action="extension-continue">This is me — continue</button>
+          <button class="link" data-action="goto-welcome">Back</button>
+        `;
+
+      case "bunker-connect": {
+        const authNotice = this.bunkerAuthUrl
+          ? `<div class="notice info">Your signer asks you to approve this connection first.
+               <a href="${escapeHtml(this.bunkerAuthUrl)}" target="_blank" rel="noopener noreferrer">Open the approval page</a>, then return here.</div>`
+          : "";
+        const qrBlock = this.bunkerConnectUri
+          ? `<div class="qr-wrap" aria-live="polite">${renderQrSvg(this.bunkerConnectUri, "Nostr Connect QR code")}</div>
+             <button class="secondary" type="button" data-action="copy-bunker-uri">Copy connection code</button>
+             <p class="small">Waiting for your signer to connect…</p>`
+          : this.errorMessage
+            ? `<button class="secondary" type="button" data-action="goto-bunker">Generate a new code</button>`
+            : `<p class="sub"><span class="spinner"></span>Preparing connection code…</p>`;
+        return `
+          <h2>Use a remote signer</h2>
+          <p class="sub">Scan with a signer app on your phone (Amber, nsec.app, …). Your key stays in the signer; BitLogin only requests signatures.</p>
+          ${this.renderError()}
+          ${authNotice}
+          ${qrBlock}
+          <div class="divider"></div>
+          <form data-form="bunker-connect">
+            <label for="bunkerUri">Or paste a bunker:// address</label>
+            <input type="password" name="bunkerUri" id="bunkerUri" autocomplete="off" placeholder="bunker://…" />
+            <button class="secondary" type="submit" ${this.busy ? "disabled" : ""}>
+              ${this.busy ? '<span class="spinner"></span>Contacting your signer…' : "Connect"}
+            </button>
+          </form>
+          <button class="link" data-action="goto-welcome">Back</button>
+        `;
+      }
+
+      case "bunker-confirm":
+        return `
+          <h2>Remote signer connected</h2>
+          <p class="sub">Your signer reports this identity:</p>
+          <div class="credential-box">${escapeHtml(this.pendingBunker?.npub ?? "")}</div>
+          <p class="small">Check this is the profile you expect. Your private key stays in your signer — each signature is requested over relays, and your signer can require approval or be disconnected at any time. This session lasts until you log out or leave the page; BitLogin account features (wallet connections, password rotation, recovery) stay with BitLogin accounts.</p>
+          ${this.renderError()}
+          <button class="primary" type="button" data-action="bunker-continue">This is me — continue</button>
           <button class="link" data-action="goto-welcome">Back</button>
         `;
 
@@ -1433,13 +1619,19 @@ export class BitLoginAuthElement extends HTMLElement {
       }
 
       case "dashboard": {
-        // Extension sessions are signer-only (§LM7): the account actions below the
-        // divider are all worker-backed (vault, rotation, export) and have no meaning
-        // without a BitLogin account, so they are omitted rather than left to fail.
-        const isExtensionSession = this.session?.method === "nip07";
-        const accountActions = isExtensionSession
-          ? `<p class="small">Signed in through your Nostr extension. Wallet connections, password rotation, and identity export are features of BitLogin accounts — create one to get your settings on every device.</p>`
-          : `
+        // Alternative-method sessions are signer-only (§LM7): the account actions
+        // below the divider are all account-backed (vault, rotation, export) and have
+        // no meaning without a BitLogin account, so they are omitted rather than left
+        // to fail.
+        const method = this.session?.method ?? "bitlogin";
+        const altNote =
+          method === "nip07"
+            ? "Signed in through your Nostr extension."
+            : "Signed in through your remote signer — each signature is requested from it over relays.";
+        const accountActions =
+          method !== "bitlogin"
+            ? `<p class="small">${altNote} Wallet connections, password rotation, and identity export are features of BitLogin accounts — create one to get your settings on every device.</p>`
+            : `
           <button class="secondary" type="button" data-action="goto-vault-manage">Wallet connections</button>
           <button class="secondary" type="button" data-action="goto-change-password">Rotate password</button>
           <button class="secondary" type="button" data-action="goto-export">Export identity</button>`;

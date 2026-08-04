@@ -235,6 +235,39 @@ export interface VaultOfferCheckResult {
   connection?: VaultConnectionSummary;
 }
 
+// ---- NIP-46 remote-signer session (docs/login-methods.md §LM5) ----
+// Memory-only: the ephemeral client key and Nip46Client live in the worker
+// (§LM5.4) and vanish with it. Nothing below touches account/vault state.
+
+export interface Nip46ConnectPayload {
+  /** A bunker:// URI pasted by the user. */
+  uri: string;
+}
+export interface Nip46ConnectResult {
+  userPubkey: string;
+}
+export interface Nip46NostrconnectStartPayload {
+  appName?: string;
+}
+export interface Nip46NostrconnectStartResult {
+  /** The nostrconnect:// URI to show as a QR / copyable string. */
+  uri: string;
+}
+export interface Nip46NostrconnectAwaitResult {
+  userPubkey: string;
+}
+
+/**
+ * Unsolicited worker -> main-thread frame. Distinguished from WorkerResponse
+ * by having `notify` and no `id`; used where a request/response pair cannot
+ * carry the information -- the signer's interactive-approval URL arrives in
+ * the middle of a still-pending connect call.
+ */
+export interface WorkerNotification {
+  notify: "nip46-auth-url";
+  url: string;
+}
+
 export type WorkerActionMap = {
   configure: [ConfigurePayload, Record<string, never>];
   register: [RegisterPayload, RegisterResult];
@@ -264,6 +297,15 @@ export type WorkerActionMap = {
   vaultSetBinding: [VaultSetBindingPayload, VaultConnectionSummary];
   vaultDelete: [VaultDeletePayload, Record<string, never>];
   vaultOfferCheck: [VaultOfferCheckPayload, VaultOfferCheckResult];
+  nip46Connect: [Nip46ConnectPayload, Nip46ConnectResult];
+  nip46NostrconnectStart: [Nip46NostrconnectStartPayload, Nip46NostrconnectStartResult];
+  nip46NostrconnectAwait: [Record<string, never>, Nip46NostrconnectAwaitResult];
+  nip46SignEvent: [SignEventPayload, NostrEvent];
+  nip46Nip44Encrypt: [Nip44EncryptPayload, { ciphertext: string }];
+  nip46Nip44Decrypt: [Nip44DecryptPayload, { plaintext: string }];
+  nip46Nip04Encrypt: [Nip04EncryptPayload, { ciphertext: string }];
+  nip46Nip04Decrypt: [Nip04DecryptPayload, { plaintext: string }];
+  nip46Disconnect: [Record<string, never>, Record<string, never>];
 };
 
 export type WorkerAction = keyof WorkerActionMap;

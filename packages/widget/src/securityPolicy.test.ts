@@ -40,13 +40,36 @@ describe("widget security policy", () => {
     expect(passwordSignIn).toBeLessThan(extensionSlot);
   });
 
+  it("keeps alternative methods below the password path on the welcome screen", () => {
+    // Same owner decision as the extension pin above, applied to NIP-46: the
+    // remote-signer option renders after the primary sign-in button.
+    const passwordSignIn = widgetSource.indexOf('data-action="goto-login">Sign in</button>');
+    const bunkerOption = widgetSource.indexOf('data-action="goto-bunker">Use a remote signer');
+    expect(passwordSignIn).toBeGreaterThan(-1);
+    expect(bunkerOption).toBeGreaterThan(-1);
+    expect(passwordSignIn).toBeLessThan(bunkerOption);
+  });
+
+  it("treats the bunker URI as a secret and keeps the element storage-free", () => {
+    // A bunker:// URI carries a connection token; it gets a password input
+    // (no shoulder-surfing, no autofill heuristics), and the element itself
+    // must never touch web storage -- alternative-method sessions are
+    // memory-only by design (§LM5, §LM7), and the ONLY persistence in the
+    // widget lives behind the worker's session cache.
+    expect(widgetSource).toContain('type="password" name="bunkerUri"');
+    expect(widgetSource).not.toContain("localStorage");
+    expect(widgetSource).not.toContain("sessionStorage");
+  });
+
   it("extension sessions never claim window.nostr and never persist", () => {
     // §LM4: NIP-07 mode delegates to the extension's provider; fighting it for the
     // window.nostr slot is reserved for BitLogin-account sessions. There must be no
     // claimSigner() call in the extension confirm path, and no storage write.
     const confirmBody = widgetSource.slice(
       widgetSource.indexOf("private handleExtensionConfirm"),
-      widgetSource.indexOf("private async tryRestoreSession"),
+      // Ends where the NIP-46 handlers begin -- those claim the slot
+      // legitimately (§LM5: the routed provider IS that session's backend).
+      widgetSource.indexOf("private async startNostrconnect"),
     );
     expect(confirmBody.length).toBeGreaterThan(0);
     expect(confirmBody).not.toContain("claimSigner");

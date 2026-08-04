@@ -5,6 +5,7 @@ export const KIND_DELETION_REQUEST = 5; // NIP-09
 export const KIND_RELAY_LIST = 10002; // NIP-65
 export const KIND_DM_RELAY_LIST = 10050; // NIP-17
 export const KIND_AUTH = 22242; // NIP-42
+export const KIND_NOSTR_CONNECT = 24133; // NIP-46 remote signing
 export const KIND_GIFT_WRAP = 1059; // NIP-59 (Phase 2 messaging, not wired up by this MVP)
 export const KIND_APP_DATA = 30078; // NIP-78
 

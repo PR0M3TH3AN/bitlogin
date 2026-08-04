@@ -56,7 +56,14 @@ export class RelayConnection {
   private connectPromise: Promise<void> | null = null;
   private subs = new Map<
     string,
-    { events: NostrEvent[]; filter: NostrFilter; onEose: () => void }
+    {
+      events: NostrEvent[];
+      filter: NostrFilter;
+      onEose: () => void;
+      /** Present on live subscriptions (subscribeLive): each verified,
+       *  filter-matching event is delivered here instead of buffered. */
+      onEvent?: (event: NostrEvent) => void;
+    }
   >();
   private pendingPublishes = new Map<string, (result: PublishResult) => void>();
   private readonly authPrivateKey?: Uint8Array;
@@ -86,6 +93,13 @@ export class RelayConnection {
 
       socket.addEventListener("open", () => {
         clearTimeout(timer);
+        // Re-issue REQ for every subscription that predates this (re)connection.
+        // A socket that dropped and reopened lost its server-side subscriptions;
+        // without this, a live subscription (subscribeLive) would appear open
+        // client-side while the relay no longer delivers anything to it.
+        for (const [subId, sub] of this.subs) {
+          socket.send(JSON.stringify(["REQ", subId, sub.filter]));
+        }
         resolve();
       });
       socket.addEventListener("error", () => {
@@ -136,8 +150,10 @@ export class RelayConnection {
         sub &&
         verifyNostrEvent(event) &&
         matchesNostrFilter(event, sub.filter)
-      )
-        sub.events.push(event);
+      ) {
+        if (sub.onEvent) sub.onEvent(event);
+        else sub.events.push(event);
+      }
       return;
     }
     if (type === "EOSE") {
@@ -205,6 +221,33 @@ export class RelayConnection {
       });
       this.send(["EVENT", event]);
     });
+  }
+
+  /**
+   * Opens a subscription that stays live past EOSE: every verified,
+   * filter-matching event is delivered to `onEvent` as it arrives, until the
+   * returned handle is closed. Survives socket drops -- connect() re-issues
+   * REQ for all open subscriptions on reopen -- though events published while
+   * the socket was down are only seen if the relay replays them on the new REQ.
+   */
+  async subscribeLive(
+    filter: NostrFilter,
+    onEvent: (event: NostrEvent) => void,
+  ): Promise<{ close: () => void }> {
+    await this.connect();
+    const subId = bytesToHex(randomBytes(8));
+    this.subs.set(subId, { events: [], filter, onEose: () => {}, onEvent });
+    this.send(["REQ", subId, filter]);
+    return {
+      close: () => {
+        if (!this.subs.delete(subId)) return;
+        try {
+          this.send(["CLOSE", subId]);
+        } catch {
+          // Socket already gone; the relay-side subscription died with it.
+        }
+      },
+    };
   }
 
   async queryOnce(

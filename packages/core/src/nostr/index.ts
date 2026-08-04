@@ -6,3 +6,4 @@ export * from "./relayUrl.js";
 export * from "./pool.js";
 export * from "./bootstrap.js";
 export * from "./nip19.js";
+export * from "./nip46.js";

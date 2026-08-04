@@ -30,12 +30,16 @@ deployment above.
   password rotation.
 - One login surface, several methods: if the visitor's browser has a NIP-07
   signer extension, the welcome screen offers "Use your Nostr extension
-  instead" below the primary username/password path, and the element routes
-  `getPublicKey`/`signEvent`/`nip44*`/`nip04*` through the extension for that
-  session. Extension sessions are signer-only: no vault
-  (`requestNwcConnection` resolves null), no persistence (a reload ends the
-  session), and `window.nostr` is left to the extension. `bitlogin-login`'s
-  `detail.method` (`'bitlogin' | 'nip07'`) and `detail.capabilities`
+  instead" below the primary username/password path, and every visitor gets
+  "Use a remote signer (bunker)" -- a NIP-46 connect screen with a scannable
+  nostrconnect QR for phone signers (Amber, nsec.app, ...) and a bunker://
+  paste box. The element routes `getPublicKey`/`signEvent`/`nip44*`/`nip04*`
+  through whichever signer backs the session. Alternative-method sessions are
+  signer-only: no vault (`requestNwcConnection` resolves null), no
+  persistence (a reload ends the session). NIP-07 sessions leave
+  `window.nostr` to the extension; NIP-46 sessions claim it, backed by the
+  worker-held remote-signer client. `bitlogin-login`'s `detail.method`
+  (`'bitlogin' | 'nip07' | 'nip46'`) and `detail.capabilities`
   (`{ nip44, nip04, getRelays }`) tell your app which backend is active and
   what it supports.
 - A `window.nostr` provider shaped like the de facto NIP-07 interface

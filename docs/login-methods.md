@@ -1,10 +1,14 @@
 # BitLogin as the Single Login Surface — NIP-07 and NIP-46 Methods
 
-**Document version:** 0.2
-**Status:** §LM4 (NIP-07) is **implemented** (2026-08-04): `signers/` in
-`@bitlogin/widget`, thin sessions per §LM7, password-first presentation per
-§LM9.1. §LM5 (NIP-46) remains a proposal. §LM6 records a settled rejection
-(nsec paste as a login method), kept on the record.
+**Document version:** 0.3
+**Status:** §LM4 (NIP-07) and §LM5 (NIP-46, memory-only phase) are
+**implemented** (2026-08-04): `signers/` in `@bitlogin/widget`, the NIP-46
+client in `@bitlogin/core`'s `nostr/nip46.ts` with the ephemeral key held in
+the crypto worker, both `bunker://` paste and the nostrconnect QR (rendered
+as dot-style inline SVG), thin sessions per §LM7, password-first per §LM9.1.
+NIP-46 *persistence* (§LM5.3 phase two) remains gated on the external vault
+review. §LM6 records a settled rejection (nsec paste as a login method),
+kept on the record.
 **Depends on:** `docs/spec.md` (§ references point there unless marked §LM or
 §SF), `docs/second-factor.md` §SF10 (imported identities, implemented)
 
@@ -214,9 +218,11 @@ not propose.
 
 1. **NIP-07** — smallest increment: detection, delegation, capability
    probing, arbitration inversion. No new secrets, no relay traffic, no
-   review gate touched.
-2. **NIP-46, memory-only** — connect ceremony, pending/timeout UX, typed
-   errors. Still nothing persisted.
+   review gate touched. **Shipped 2026-08-04.**
+2. **NIP-46, memory-only** — connect ceremony (bunker:// paste and a
+   nostrconnect QR), pending/timeout UX, typed errors. Still nothing
+   persisted. **Shipped 2026-08-04.** Transport is NIP-44 only, per the
+   current NIP-46 spec; legacy NIP-04-only bunkers are not supported.
 3. **NIP-46 persistence as a vault profile** — after the external security
    review the vault is already gated on.
 

@@ -22,7 +22,10 @@ import type {
   VaultRevealNwcPayload,
   VaultSetBindingPayload,
   VaultDeletePayload,
-  VaultOfferCheckPayload
+  VaultOfferCheckPayload,
+  Nip46ConnectPayload,
+  Nip46NostrconnectStartPayload,
+  WorkerNotification
 } from "./protocol.js";
 
 /**
@@ -32,6 +35,16 @@ import type {
  */
 const CALL_TIMEOUT_MS = 60_000;
 
+/**
+ * NIP-46 calls wait on a HUMAN approving a prompt on another device, on top of
+ * relay round trips -- the worker-side deadlines (120s per signer request,
+ * 180s for the nostrconnect listen) are the real limits; these exist only so
+ * a dead worker still rejects. Kept above the worst worker-side sum so the
+ * worker's own, better-worded timeout error is the one callers see.
+ */
+const NIP46_CALL_TIMEOUT_MS = 260_000;
+const NIP46_AWAIT_TIMEOUT_MS = 320_000;
+
 export class WorkerClient {
   private readonly worker: Worker;
   private readonly pending = new Map<
@@ -40,6 +53,8 @@ export class WorkerClient {
   >();
   private counter = 0;
   private dead = false;
+  /** Set by the element to receive unsolicited worker frames (auth_url). */
+  onNotification: ((notification: WorkerNotification) => void) | null = null;
 
   constructor() {
     // Deliberately NOT the literal `new Worker(new URL("./x.js", import.meta.url))` shape: Vite
@@ -55,7 +70,15 @@ export class WorkerClient {
       const msg = event.data;
       // Shape-check before trusting: a malformed frame used to throw inside
       // this listener, which posts no response and hangs the caller forever.
-      if (!msg || typeof msg !== "object" || typeof (msg as WorkerResponse).id !== "string") return;
+      if (!msg || typeof msg !== "object") return;
+      // Unsolicited notification frames (no id) -- currently only the NIP-46
+      // auth_url, which arrives mid-call and cannot ride a response.
+      const maybeNotification = msg as unknown as Partial<WorkerNotification>;
+      if (maybeNotification.notify === "nip46-auth-url" && typeof maybeNotification.url === "string") {
+        this.onNotification?.(maybeNotification as WorkerNotification);
+        return;
+      }
+      if (typeof (msg as WorkerResponse).id !== "string") return;
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       this.pending.delete(msg.id);
@@ -91,7 +114,11 @@ export class WorkerClient {
     }
   }
 
-  private call<A extends WorkerAction>(action: A, payload: WorkerActionMap[A][0]): Promise<WorkerActionMap[A][1]> {
+  private call<A extends WorkerAction>(
+    action: A,
+    payload: WorkerActionMap[A][0],
+    timeoutMs = CALL_TIMEOUT_MS
+  ): Promise<WorkerActionMap[A][1]> {
     if (this.dead) {
       return Promise.reject(new Error("This BitLogin session was torn down; reload the page to sign in again."));
     }
@@ -100,7 +127,7 @@ export class WorkerClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`BitLogin's ${action} call timed out.`));
-      }, CALL_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       const request: WorkerRequest = { id, action, payload };
       this.worker.postMessage(request);
@@ -187,6 +214,35 @@ export class WorkerClient {
   }
   vaultOfferCheck(payload: VaultOfferCheckPayload) {
     return this.call("vaultOfferCheck", payload);
+  }
+
+  // ---- NIP-46 remote-signer session (§LM5) ----
+  nip46Connect(payload: Nip46ConnectPayload) {
+    return this.call("nip46Connect", payload, NIP46_CALL_TIMEOUT_MS);
+  }
+  nip46NostrconnectStart(payload: Nip46NostrconnectStartPayload) {
+    return this.call("nip46NostrconnectStart", payload);
+  }
+  nip46NostrconnectAwait() {
+    return this.call("nip46NostrconnectAwait", {}, NIP46_AWAIT_TIMEOUT_MS);
+  }
+  nip46SignEvent(payload: SignEventPayload) {
+    return this.call("nip46SignEvent", payload, NIP46_CALL_TIMEOUT_MS);
+  }
+  nip46Nip44Encrypt(payload: Nip44EncryptPayload) {
+    return this.call("nip46Nip44Encrypt", payload, NIP46_CALL_TIMEOUT_MS);
+  }
+  nip46Nip44Decrypt(payload: Nip44DecryptPayload) {
+    return this.call("nip46Nip44Decrypt", payload, NIP46_CALL_TIMEOUT_MS);
+  }
+  nip46Nip04Encrypt(payload: Nip04EncryptPayload) {
+    return this.call("nip46Nip04Encrypt", payload, NIP46_CALL_TIMEOUT_MS);
+  }
+  nip46Nip04Decrypt(payload: Nip04DecryptPayload) {
+    return this.call("nip46Nip04Decrypt", payload, NIP46_CALL_TIMEOUT_MS);
+  }
+  nip46Disconnect() {
+    return this.call("nip46Disconnect", {});
   }
   logout() {
     return this.call("logout", {});

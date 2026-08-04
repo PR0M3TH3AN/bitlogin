@@ -34,6 +34,50 @@ export interface Nip07Provider {
   readonly _bitlogin: true;
 }
 
+/** The signing surface a <bitlogin-auth> element exposes; the routed provider
+ *  below delegates to it so window.nostr always follows the ACTIVE signer. */
+export interface ElementSignerApi {
+  getPublicKey(): Promise<string>;
+  signEvent(event: UnsignedEventForSigning): Promise<NostrEvent>;
+  nip44Encrypt(peerPublicKey: string, plaintext: string): Promise<string>;
+  nip44Decrypt(peerPublicKey: string, payload: string): Promise<string>;
+  nip04Encrypt(peerPublicKey: string, plaintext: string): Promise<string>;
+  nip04Decrypt(peerPublicKey: string, payload: string): Promise<string>;
+}
+
+/**
+ * A window.nostr provider that routes through the element rather than binding
+ * the worker directly. The element dispatches each call to whichever signer
+ * backs the current session -- the crypto worker for a BitLogin account, the
+ * worker-held NIP-46 client for a remote-signer session (§LM3, §LM5) -- so a
+ * host page reading window.nostr gets the right backend without caring which
+ * method the user picked. (NIP-07 sessions never claim the slot at all; the
+ * extension that IS the backend already owns it, §LM4.)
+ */
+export function createElementRoutedProvider(
+  element: ElementSignerApi,
+  configuredRelays: () => string[]
+): Nip07Provider {
+  return {
+    getPublicKey: () => element.getPublicKey(),
+    signEvent: (event) => element.signEvent(event),
+    async getRelays(): Promise<Record<string, { read: boolean; write: boolean }>> {
+      const out: Record<string, { read: boolean; write: boolean }> = {};
+      for (const url of configuredRelays()) out[url] = { read: true, write: true };
+      return out;
+    },
+    nip44: {
+      encrypt: (peerPublicKey, plaintext) => element.nip44Encrypt(peerPublicKey, plaintext),
+      decrypt: (peerPublicKey, payload) => element.nip44Decrypt(peerPublicKey, payload)
+    },
+    nip04: {
+      encrypt: (peerPublicKey, plaintext) => element.nip04Encrypt(peerPublicKey, plaintext),
+      decrypt: (peerPublicKey, payload) => element.nip04Decrypt(peerPublicKey, payload)
+    },
+    _bitlogin: true
+  };
+}
+
 const NOT_UNLOCKED_MESSAGE =
   "BitLogin: no identity is unlocked yet. Add <bitlogin-auth> to the page and let the user sign in, or call it programmatically before invoking window.nostr.";
 
