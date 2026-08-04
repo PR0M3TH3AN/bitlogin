@@ -77,8 +77,26 @@ describe("widget security policy", () => {
     expect(widgetSource).toContain("manages your sign-in</span>");
     // One rendering site (the onrampRows template) + one onClick case.
     expect(widgetSource.split('"onramp-signin"').length - 1).toBe(2);
+    // Same for the serverless Google row (§CO3.3), whose sub-label states the
+    // stronger custody fact: the credential lives in the user's own Drive.
+    expect(menu).toContain("${googleRow}");
+    expect(widgetSource).toContain("Your sign-in key stays in your own Google Drive");
+    expect(widgetSource.split('"google-signin"').length - 1).toBe(2);
     // The group heading is the owner-chosen wording.
     expect(menu).toContain(">Use an account you already have</div>");
+  });
+
+  it("keeps all network I/O out of the element", () => {
+    // The element orchestrates; every network call lives in an auditable
+    // module (worker RPC, onramp.ts, driveOnramp.ts) where its destination
+    // is constrained -- Drive tokens and passwords must never ride an
+    // ad-hoc fetch added to UI code.
+    expect(widgetSource).not.toContain("fetch(");
+    const driveSource = readFileSync(new URL("./driveOnramp.ts", import.meta.url), "utf8");
+    // Drive I/O only ever targets the two Google API base constants.
+    expect(driveSource).toContain('GOOGLE_DRIVE_API = "https://www.googleapis.com/drive/v3"');
+    expect(driveSource.match(/fetchImpl\(`\$\{GOOGLE_DRIVE(?:_UPLOAD)?_API\}/gu)!.length).toBe(3);
+    expect(driveSource.match(/fetchImpl\(/gu)!.length).toBe(3);
   });
 
   it("treats the bunker URI as a secret and keeps the element storage-free", () => {

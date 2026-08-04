@@ -28,6 +28,17 @@ import {
   validateOnrampMessage,
   type OnrampConfig
 } from "./onramp.js";
+import {
+  buildGoogleAuthUrl,
+  buildGoogleTokenMessage,
+  currentRedirectUri,
+  findDriveCredential,
+  newGoogleOnrampState,
+  parseGoogleCallbackFragment,
+  storeDriveCredential,
+  validateGoogleTokenMessage,
+  type GoogleOnrampConfig
+} from "./driveOnramp.js";
 import { randomBytes, bytesToHex } from "@bitlogin/core/crypto";
 
 type Screen =
@@ -133,10 +144,22 @@ export class BitLoginAuthElement extends HTMLElement {
   // in memory this session, the ceremony deferred behind a dashboard card.
   private onramp: OnrampConfig | undefined;
   private onrampAttempt: { state: string; provider: string; popup: Window | null } | null = null;
-  private onrampRegistration: { registrationToken: string; provider: string; suggestedLoginName?: string } | null = null;
+  private onrampRegistration:
+    | { kind: "service"; registrationToken: string; provider: string; suggestedLoginName?: string }
+    | { kind: "google"; accessToken: string; provider: string }
+    | null = null;
   private onrampSession = false;
+  /** Which rail manages the credential: an external service or the user's own
+   *  Google Drive (§CO3.3). Drives the dashboard's custody copy. */
+  private onrampKind: "service" | "google" | null = null;
   private securePhrasePending = false;
+
+  // Serverless Google on-ramp (§CO3.3): no third party -- the popup is this
+  // site's own page, which relays Google's token fragment back here.
+  private onrampGoogle: GoogleOnrampConfig | undefined;
+  private googleAttempt: { state: string; popup: Window | null } | null = null;
   private readonly onWindowMessage = (event: MessageEvent): void => {
+    if (this.handleGoogleTokenMessage(event)) return;
     const attempt = this.onrampAttempt;
     if (!attempt || !this.onramp) return;
     const result = validateOnrampMessage(
@@ -154,16 +177,46 @@ export class BitLoginAuthElement extends HTMLElement {
       // Returning user: the service is simply the password manager -- this is
       // the ordinary password login from here on.
       this.onrampSession = true;
+      this.onrampKind = "service";
       void this.attemptLogin(result.loginName, result.password);
       return;
     }
     this.onrampRegistration = {
+      kind: "service",
       registrationToken: result.registrationToken,
       provider: attempt.provider,
       suggestedLoginName: result.suggestedLoginName
     };
     this.goto("onramp-create");
   };
+
+  /** Serverless Google leg (§CO3.3): the popup (this site's own page) relayed
+   *  Google's token. Same-origin plus the exact state nonce, or ignored. */
+  private handleGoogleTokenMessage(event: MessageEvent): boolean {
+    const attempt = this.googleAttempt;
+    if (!attempt) return false;
+    const result = validateGoogleTokenMessage(
+      { origin: event.origin, data: event.data },
+      { origin: window.location.origin, state: attempt.state }
+    );
+    if (!result) return false;
+    this.googleAttempt = null;
+    try {
+      attempt.popup?.close();
+    } catch {
+      // The popup closes itself regardless.
+    }
+    if ("error" in result) {
+      this.errorMessage =
+        result.error === "access_denied"
+          ? "Google sign-in was cancelled."
+          : `Google sign-in failed (${result.error}).`;
+      this.render();
+      return true;
+    }
+    void this.runDriveUnlock(result.accessToken);
+    return true;
+  }
   private sessionWarnings: string[] = [];
   private lastSignedEventJson = "";
   private exportedNsec = "";
@@ -243,7 +296,22 @@ export class BitLoginAuthElement extends HTMLElement {
     this.vaultRelayUrls = config.vaultRelayUrls ?? [];
     this.discoveryRelayUrls = config.discoveryRelayUrls ?? [];
     this.onramp = config.onramp;
+    this.onrampGoogle = config.onrampGoogle;
     window.addEventListener("message", this.onWindowMessage);
+
+    // Serverless-Google callback relay (§CO3.3): when this page IS the OAuth
+    // popup, Google put a token in the fragment. Relay it to the opener
+    // (same-origin) and close -- the widget in the opener does everything else.
+    if (this.onrampGoogle && window.opener) {
+      const parsed = parseGoogleCallbackFragment(window.location.hash);
+      if (parsed) {
+        (window.opener as Window).postMessage(buildGoogleTokenMessage(parsed), window.location.origin);
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+        window.close();
+        // If the browser refuses to close the popup, the widget simply renders
+        // its welcome screen here; the opener has what it needs either way.
+      }
+    }
     void this.worker
       .configure({ vaultRelayUrls: this.vaultRelayUrls, discoveryRelayUrls: this.discoveryRelayUrls })
       .then(() => this.tryRestoreSession());
@@ -327,6 +395,7 @@ export class BitLoginAuthElement extends HTMLElement {
       this.altSigner = null;
       this.session = null;
       this.onrampSession = false;
+      this.onrampKind = null;
       this.securePhrasePending = false;
       clearActiveSession(this);
       this.releaseSigner();
@@ -337,6 +406,7 @@ export class BitLoginAuthElement extends HTMLElement {
     await this.worker.logout();
     this.session = null;
     this.onrampSession = false;
+    this.onrampKind = null;
     this.securePhrasePending = false;
     clearActiveSession(this);
     this.releaseSigner();
@@ -831,6 +901,7 @@ export class BitLoginAuthElement extends HTMLElement {
         this.pendingExtensionSigner = null;
         this.onrampAttempt = null;
         this.onrampRegistration = null;
+        this.googleAttempt = null;
         // Backing out of an unfinished bunker connect abandons the worker-side
         // attempt -- but never a live session (altSigner) that's merely
         // navigating around.
@@ -848,6 +919,9 @@ export class BitLoginAuthElement extends HTMLElement {
         return;
       case "onramp-signin":
         this.startOnramp(target.dataset.provider ?? "");
+        return;
+      case "google-signin":
+        this.startGoogleOnramp();
         return;
       case "onramp-new":
         this.importKey = "";
@@ -1059,6 +1133,42 @@ export class BitLoginAuthElement extends HTMLElement {
     this.goto("create-name");
   }
 
+  /** Opens the serverless Google popup for one attempt (§CO3.3). */
+  private startGoogleOnramp(): void {
+    if (!this.onrampGoogle) return;
+    const state = newGoogleOnrampState();
+    const url = buildGoogleAuthUrl(this.onrampGoogle, currentRedirectUri(window.location), state);
+    const popup = window.open(url, "bitlogin-onramp-google", "popup,width=480,height=640");
+    if (!popup) {
+      this.errorMessage = "Your browser blocked the sign-in window. Allow pop-ups for this site and try again.";
+      this.render();
+      return;
+    }
+    this.googleAttempt = { state, popup };
+    this.errorMessage = undefined;
+    this.render();
+  }
+
+  /** Google answered with a Drive token: read the credential from the user's
+   *  own app data and sign in, or start first-time setup (§CO3.3). */
+  private async runDriveUnlock(accessToken: string): Promise<void> {
+    this.setBusy(true);
+    try {
+      const credential = await findDriveCredential(accessToken);
+      this.busy = false;
+      if (credential) {
+        this.onrampSession = true;
+        this.onrampKind = "google";
+        await this.attemptLogin(credential.loginName, credential.password);
+        return;
+      }
+      this.onrampRegistration = { kind: "google", accessToken, provider: "google" };
+      this.goto("onramp-create");
+    } catch (err) {
+      this.fail(err);
+    }
+  }
+
   /** Opens the on-ramp's OAuth popup for one attempt (§CO5). */
   private startOnramp(provider: string): void {
     if (!this.onramp) return;
@@ -1085,11 +1195,12 @@ export class BitLoginAuthElement extends HTMLElement {
    */
   private async runOnrampRegistration(): Promise<void> {
     const registration = this.onrampRegistration;
-    const onramp = this.onramp;
-    if (!registration || !onramp) return;
+    if (!registration) return;
+    if (registration.kind === "service" && !this.onramp) return;
     this.setBusy(true);
     try {
-      const suggested = registration.suggestedLoginName?.trim().toLowerCase() ?? "";
+      const suggested =
+        registration.kind === "service" ? (registration.suggestedLoginName?.trim().toLowerCase() ?? "") : "";
       const loginName = isValidLoginName(suggested) ? suggested : `nostr-${bytesToHex(randomBytes(4))}`;
       const password = generatePassphrase().secret;
       const result = await this.worker.register({
@@ -1118,16 +1229,21 @@ export class BitLoginAuthElement extends HTMLElement {
         dmRelays: this.vaultRelayUrls
       });
       try {
-        await storeOnrampCredential(onramp, {
-          registrationToken: registration.registrationToken,
-          loginName,
-          password
-        });
+        if (registration.kind === "google") {
+          await storeDriveCredential(registration.accessToken, { loginName, password });
+        } else {
+          await storeOnrampCredential(this.onramp!, {
+            registrationToken: registration.registrationToken,
+            loginName,
+            password
+          });
+        }
       } catch (storeErr) {
-        // The account is real and live on relays, but the service is not
-        // holding its credential -- the phrase ceremony happens NOW.
+        // The account is real and live on relays, but nobody is holding its
+        // credential -- the phrase ceremony happens NOW (the no-orphan rule).
         this.busy = false;
         this.onrampSession = false;
+        this.onrampKind = null;
         this.securePhrasePending = false;
         this.errorMessage = storeErr instanceof Error ? storeErr.message : String(storeErr);
         this.noteSignerClaim(this.claimSigner());
@@ -1137,6 +1253,7 @@ export class BitLoginAuthElement extends HTMLElement {
       }
       this.busy = false;
       this.onrampSession = true;
+      this.onrampKind = registration.kind;
       this.securePhrasePending = true;
       this.noteSignerClaim(this.claimSigner());
       this.dispatchLogin();
@@ -1226,6 +1343,7 @@ export class BitLoginAuthElement extends HTMLElement {
     const loginName = this.field("loginName").trim().toLowerCase();
     const password = this.field("password");
     this.onrampSession = false; // typed credentials: the user is their own password manager here
+    this.onrampKind = null;
     await this.attemptLogin(loginName, password);
   }
 
@@ -1629,8 +1747,22 @@ export class BitLoginAuthElement extends HTMLElement {
           </button>`;
           })
           .join("");
-        const onrampWaiting = this.onrampAttempt
-          ? `<div class="notice info">Finish signing in with ${escapeHtml(onrampProviderLabel(this.onrampAttempt.provider))} in the window that opened, then return here.</div>`
+        // Serverless Google (§CO3.3): no third party at all -- the sub-label
+        // says where the credential actually lives.
+        const googleRow = this.onrampGoogle
+          ? `
+          <button class="option-row" type="button" data-action="google-signin">
+            <span class="option-icon">${OPTION_ICONS.onramp}</span>
+            <span class="option-text"><span>Continue with Google</span><span class="option-sub">Your sign-in key stays in your own Google Drive</span></span>
+          </button>`
+          : "";
+        const waitingProvider = this.googleAttempt
+          ? "Google"
+          : this.onrampAttempt
+            ? onrampProviderLabel(this.onrampAttempt.provider)
+            : null;
+        const onrampWaiting = waitingProvider
+          ? `<div class="notice info">Finish signing in with ${escapeHtml(waitingProvider)} in the window that opened, then return here.</div>`
           : "";
         const optionsMenu = this.moreOptionsOpen
           ? `<div class="option-menu">
@@ -1638,6 +1770,7 @@ export class BitLoginAuthElement extends HTMLElement {
               ${extensionRow}
               ${optionRow("goto-bunker", OPTION_ICONS.remote, "Remote signer", "Scan a code with Amber or another signer app")}
               ${optionRow("goto-import", OPTION_ICONS.importKey, "Import a Nostr key", "Wrap an existing identity in a login name and password")}
+              ${googleRow}
               ${onrampRows}
               ${optionRow("goto-recover", OPTION_ICONS.recover, "Recover account", "Sign back in with your 12-word recovery phrase")}
             </div>`
@@ -1657,14 +1790,16 @@ export class BitLoginAuthElement extends HTMLElement {
       }
 
       case "onramp-create": {
-        const providerLabel = this.onrampRegistration
-          ? onrampProviderLabel(this.onrampRegistration.provider)
-          : "";
+        const registration = this.onrampRegistration;
+        const custodyLine =
+          registration?.kind === "google"
+            ? "Your sign-in will be kept in your own Google Drive — no one else holds it."
+            : `${escapeHtml(this.onramp?.name ?? "The sign-in service")} will manage your sign-in${
+                registration ? ` through ${escapeHtml(onrampProviderLabel(registration.provider))}` : ""
+              }.`;
         return `
           ${this.renderScreenHead("Almost there")}
-          <p class="sub">${escapeHtml(this.onramp?.name ?? "The sign-in service")} will manage your sign-in${
-            providerLabel ? ` through ${escapeHtml(providerLabel)}` : ""
-          }. Your account itself lives on the open Nostr network — choose how to set up its identity:</p>
+          <p class="sub">${custodyLine} Your account itself lives on the open Nostr network — choose how to set up its identity:</p>
           ${this.renderError()}
           <button class="primary" type="button" data-action="onramp-new" ${this.busy ? "disabled" : ""}>
             ${this.busy ? '<span class="spinner"></span>Creating your account…' : "Create a fresh identity"}
@@ -1905,12 +2040,16 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="secondary" type="button" data-action="goto-export">Export identity</button>`;
         // Tier B2 (§CO4): the phrase exists only in this session's memory
         // until the user claims it -- the one nudge that stays until acted on.
+        const custodian =
+          this.onrampKind === "google" ? "your Google account" : (this.onramp?.name ?? "the sign-in service");
         const securePhraseCard = this.securePhrasePending
-          ? `<div class="notice warn">Secure your account: your recovery phrase is available <strong>only during this session</strong>. Save it now and your account stays yours even without ${escapeHtml(this.onramp?.name ?? "the sign-in service")}.
+          ? `<div class="notice warn">Secure your account: your recovery phrase is available <strong>only during this session</strong>. Save it now and your account stays yours even without ${escapeHtml(custodian)}.
                <button class="link-inline" type="button" data-action="goto-confirm-phrase">View and save it</button></div>`
           : "";
         const onrampStanding = this.onrampSession
-          ? `<p class="small">Signed in via ${escapeHtml(this.onramp?.name ?? "a sign-in service")} — they manage your sign-in; your identity lives on the open Nostr network.</p>`
+          ? this.onrampKind === "google"
+            ? `<p class="small">Signed in with Google — your sign-in key is stored in your own Google Drive; your identity lives on the open Nostr network.</p>`
+            : `<p class="small">Signed in via ${escapeHtml(this.onramp?.name ?? "a sign-in service")} — they manage your sign-in; your identity lives on the open Nostr network.</p>`
           : "";
         return `
           <h2>Signed in</h2>
@@ -2047,6 +2186,13 @@ export class BitLoginAuthElement extends HTMLElement {
       case "change-password":
         return `
           <h2>Rotate password</h2>
+          ${
+            this.onrampSession
+              ? `<div class="notice info">This takes over from ${
+                  this.onrampKind === "google" ? "Google sign-in" : "your managed sign-in"
+                }: the stored copy of your old password stops working, and from then on you sign in with the new password below — you hold it, nobody else. This is the graduation step.</div>`
+              : ""
+          }
           <p class="sub">Your old password's capsule will be tombstoned and a deletion request issued. This does not erase copies an attacker may already have downloaded, and a relay that hasn't processed the deletion may keep serving the old password's capsule until a device that has already seen the new generation refuses it.</p>
           <div class="credential-box" id="credential-box">${escapeHtml(this.changePasswordNewCredential)}</div>
           <button class="secondary" type="button" data-action="copy-credential">Copy generated password</button>

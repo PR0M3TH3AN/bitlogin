@@ -28,10 +28,18 @@ deployment above.
 - A `<bitlogin-auth>` custom element (Shadow DOM, no CSS collisions) handling
   create account, sign in, forgot-password recovery via a 12-word phrase, and
   password rotation.
-- Optional centralized on-ramps ("Continue with Google/GitHub/..."): a host
-  may point the widget at an OAuth unlock service via `onramp-url`,
-  `onramp-name`, and `onramp-providers` attributes -- nothing centralized
-  ships by default. The service acts as the password manager for a REAL
+- Serverless "Continue with Google" (`onramp-google-client-id` attribute):
+  NO server anywhere -- the credential of a standard capsule account lives
+  in the user's own Google Drive app data, readable only through the host's
+  OAuth client ID. The host registers the widget page's exact URL as the
+  OAuth redirect URI (the page relays the token to its opener itself; no
+  callback artifact) and adds https://www.googleapis.com to connect-src.
+  Scope is drive.appdata only. Rotating the password is the graduation
+  step: the Drive copy goes stale and the user holds the credential.
+- Optional centralized on-ramps ("Continue with GitHub/Facebook/..." via an
+  external service): a host may point the widget at an OAuth unlock service
+  via `onramp-url`, `onramp-name`, and `onramp-providers` attributes --
+  nothing centralized ships by default. The service acts as the password manager for a REAL
   capsule account (it holds the unlock secret, never the key); rows render
   under "Use an account you already have" with the custody statement
   ("<Service> manages your sign-in") as the sub-label, new users can create

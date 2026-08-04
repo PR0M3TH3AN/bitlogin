@@ -1,7 +1,10 @@
 # Centralized On-Ramps — OAuth Sign-In as a Journey Toward Self-Custody
 
-**Document version:** 0.2
-**Status:** The **widget side of §CO5 is implemented** (2026-08-04):
+**Document version:** 0.3
+**Status:** **§CO3.3 (serverless Google, provider storage) is implemented
+end to end** — it needs no service, so nothing remains to build for it
+beyond a host registering an OAuth client ID. The **widget side of §CO5 is
+implemented** (2026-08-04):
 `onramp-url` / `onramp-name` / `onramp-providers` attributes, the popup
 handshake below, "Continue with <Provider>" rows under the "Use an account
 you already have" group (§CO11.1 resolved: that heading covers the whole
@@ -89,6 +92,49 @@ NIP-46 support (§LM5) is the whole client.
 - **Role in this design:** the fastest possible proof point, and the
   compatibility answer for services that already exist. Not the recommended
   destination.
+
+## CO3.3 Architecture C — provider storage: no server anywhere (implemented)
+
+**Owner decision (2026-08-04): static only is the way.** Architecture B still
+assumes *someone* runs the unlock service. For providers that expose
+user-owned storage to pure browser clients, even that party disappears: the
+credential of a standard capsule account lives in **the user's own cloud
+storage**, readable only through the host's OAuth client ID. Google
+authenticates the user; Google stores the user's own secret; the static
+widget does everything else. Nobody else exists to trust, pay, or lose.
+
+Implemented for Google (`onramp-google-client-id` attribute):
+
+1. The "Continue with Google" row opens a popup on Google's OAuth endpoint —
+   plain implicit grant, `response_type=token`, no external script, so a
+   strict `script-src 'self'` CSP survives. Scope is `drive.appdata` only:
+   no identity claims, no email, minimum disclosure.
+2. The registered redirect URI is **the widget page itself** — no callback
+   artifact to deploy. The widget instance in the popup recognizes the token
+   fragment, relays it to the opener (same-origin, exact state nonce),
+   scrubs the URL, and closes.
+3. The opener reads `bitlogin-credential-v1.json` from the Drive app-data
+   folder: present → ordinary password login (§16); absent → first-time
+   setup (fresh identity or §SF10 import), client-side registration, then
+   the credential is uploaded. An upload failure triggers the no-orphan
+   rule: the phrase ceremony runs immediately.
+
+Threat model: Google-account compromise = password compromise, exactly the
+spec's §14 analysis; there is no second party to compromise. The app-data
+file is plaintext by necessity — any encryption key would have to come from
+the same OAuth gate it would be protecting against. Deployment notes: the
+host registers its own OAuth client ID and the widget page's exact URL, and
+adds `https://www.googleapis.com` to `connect-src`. Known dependency: the
+implicit grant is legacy at Google; if it is ever sunset, the fallback is
+Google Identity Services, which requires relaxing the CSP for one external
+script — recorded here so that trade arrives as a decision, not a surprise.
+The same pattern extends to Dropbox and Microsoft OneDrive (PKCE browser
+flows with app-scoped storage); GitHub and Facebook offer no equivalent and
+remain Architecture A/B territory.
+
+Password rotation while Google-managed is the graduation step (CO6 step 2):
+the Drive copy simply goes stale and dead, and the rotate screen says so
+before the user commits.
 
 ## CO3.2 Architecture B — OAuth as the password manager (recommended)
 
