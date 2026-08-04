@@ -91,6 +91,28 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
   });
 }
 
+/**
+ * Drives the mandatory recovery ceremony that every passkey registration now
+ * runs before a session exists: read the 12 words, answer the three-word quiz
+ * from them, submit. Returns the phrase.
+ */
+async function completeRecoveryCeremony(widget: {
+  locator: (selector: string) => any;
+}): Promise<string[]> {
+  await widget.locator(".phrase-word").first().waitFor({ timeout: 60_000 });
+  const cells: string[] = await widget.locator(".phrase-word").allTextContents();
+  const words = cells.map((cell) => cell.replace(/^\s*\d+\.\s*/u, "").trim());
+  await widget.locator('[data-action="goto-verify-phrase"]').click();
+  const inputs = widget.locator('form[data-form="verify-phrase"] input');
+  const count: number = await inputs.count();
+  for (let i = 0; i < count; i++) {
+    const name: string = await inputs.nth(i).getAttribute("name");
+    await inputs.nth(i).fill(words[Number(name.replace("confirm-", ""))]!);
+  }
+  await widget.locator('form[data-form="verify-phrase"] button[type="submit"]').click();
+  return words;
+}
+
 describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", () => {
   let relays: MockRelay[] = [];
   let server: Server;
@@ -158,8 +180,14 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
         await widget.locator('[data-action="passkey-new"]').click();
 
-        // Registration publishes capsules to the mock relay, then lands on the
-        // dashboard showing the npub.
+        // Recovery is MANDATORY for passkey accounts: registration lands on
+        // the phrase screens, and NO session exists until they're completed.
+        await widget.locator(".phrase-word").first().waitFor({ timeout: 60_000 });
+        expect(await page.evaluate(() => window.bitlogin?.activeMethod())).toBeNull();
+        const words = await completeRecoveryCeremony(widget);
+        expect(words).toHaveLength(12);
+
+        // Only now does the session exist and the dashboard appear.
         const pubkeyLine = widget.locator(".pubkey");
         await pubkeyLine.waitFor({ timeout: 60_000 });
         const firstNpub = (await pubkeyLine.textContent())?.trim() ?? "";
@@ -170,8 +198,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const capsuleKinds = relays.flatMap((r) => r.storedEventKinds());
         expect(capsuleKinds.filter((kind) => kind === 30078).length).toBeGreaterThan(0);
 
-        // Tier B2: the phrase card is offered in the first session.
-        expect(await widget.locator('[data-action="goto-confirm-phrase"]').count()).toBe(1);
+        // No deferred "secure it later" card exists any more -- recovery was
+        // completed before the session was granted.
+        expect(await widget.locator('[data-action="goto-confirm-phrase"]').count()).toBe(0);
 
         // The passkey session is reported to the host, method-aware.
         const session = await page.evaluate(() => window.bitlogin?.activeSession());
@@ -189,8 +218,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const secondNpub = (await pubkeyLine.textContent())?.trim() ?? "";
         expect(secondNpub).toBe(firstNpub);
 
-        // A returning session is NOT offered the first-session phrase card.
-        expect(await widget.locator('[data-action="goto-confirm-phrase"]').count()).toBe(0);
+        // A returning sign-in does not repeat the ceremony.
+        expect(await widget.locator(".phrase-word").count()).toBe(0);
 
         await page.screenshot({
           path: fileURLToPath(new URL("../../../../.e2e-passkey-dashboard.png", import.meta.url))
@@ -235,6 +264,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await widget.locator('[data-action="passkey-register"]').click();
           await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
           await widget.locator('[data-action="passkey-new"]').click();
+          await completeRecoveryCeremony(widget);
           const pubkey = widget.locator(".pubkey");
           await pubkey.waitFor({ timeout: 60_000 });
           npubs.push((await pubkey.textContent())?.trim() ?? "");

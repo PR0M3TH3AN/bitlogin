@@ -67,6 +67,21 @@ describe("widget security policy", () => {
     }
   });
 
+  it("passkey registration cannot grant a session before the recovery ceremony", () => {
+    // Owner decision 2026-08-04: a passkey account has no custodian, so the
+    // phrase ceremony is mandatory. runPasskeyRegistration must hand off to
+    // the phrase screens and must NOT dispatch a session itself; the deferred
+    // "secure it later" state is gone entirely.
+    const body = widgetSource.slice(
+      widgetSource.indexOf("private async runPasskeyRegistration"),
+      widgetSource.indexOf("private async handlePasskeySignInWith"),
+    );
+    expect(body).toContain('this.goto("confirm-phrase")');
+    expect(body).not.toContain("dispatchLogin");
+    expect(body).not.toContain("flashSuccess");
+    expect(widgetSource).not.toContain("securePhrasePending");
+  });
+
   it("the passkey row lives inside the menu with an honest custody label", () => {
     // docs/passkey-login.md: zero registration, zero servers -- and the
     // OAuth on-ramps that preceded it stay removed (owner decision

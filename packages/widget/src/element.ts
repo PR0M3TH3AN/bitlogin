@@ -129,11 +129,11 @@ export class BitLoginAuthElement extends HTMLElement {
   // passkey.ts), and the ordinary password flows do everything else.
   // `pendingPasskey` holds the derived credential between "the ceremony
   // succeeded" and the new user's fresh-vs-import choice. `passkeySession`
-  // marks the standing for dashboard labeling. `securePhrasePending` is the
-  // Tier B2 deferred phrase ceremony behind the dashboard card.
+  // marks the standing for dashboard labeling. There is deliberately NO
+  // deferred-phrase state: passkey registration runs the recovery ceremony
+  // before granting the session (see runPasskeyRegistration).
   private pendingPasskey: { loginName: string; password: string } | null = null;
   private passkeySession = false;
-  private securePhrasePending = false;
   private sessionWarnings: string[] = [];
   private lastSignedEventJson = "";
   private exportedNsec = "";
@@ -294,7 +294,6 @@ export class BitLoginAuthElement extends HTMLElement {
       this.altSigner = null;
       this.session = null;
       this.passkeySession = false;
-      this.securePhrasePending = false;
       clearActiveSession(this);
       this.releaseSigner();
       this.dispatchEvent(new CustomEvent("bitlogin-logout"));
@@ -304,7 +303,6 @@ export class BitLoginAuthElement extends HTMLElement {
     await this.worker.logout();
     this.session = null;
     this.passkeySession = false;
-    this.securePhrasePending = false;
     clearActiveSession(this);
     this.releaseSigner();
     this.dispatchEvent(new CustomEvent("bitlogin-logout"));
@@ -1161,10 +1159,15 @@ export class BitLoginAuthElement extends HTMLElement {
       });
       this.busy = false;
       this.passkeySession = true;
-      this.securePhrasePending = true;
-      this.noteSignerClaim(this.claimSigner());
-      this.dispatchLogin();
-      this.flashSuccess("dashboard", "Account created");
+      // MANDATORY recovery ceremony, exactly as password signup does it
+      // (owner decision 2026-08-04). A passkey account has NO custodian: lose
+      // the passkey -- platform account gone, or this site's domain changed,
+      // which changes the WebAuthn RP id -- and the phrase is the only way
+      // back. The deferred "secure it later" card this replaced came from the
+      // OAuth on-ramp design, where a service still held a copy; nothing
+      // holds a copy here. Sign-in is dispatched only once the phrase is
+      // verified, in handleVerifyPhraseSubmit.
+      this.goto("confirm-phrase");
     } catch (err) {
       if (err instanceof Error && err.name === "AccountAlreadyExistsError") {
         // This passkey already has an account here (an earlier setup finished
@@ -1244,14 +1247,6 @@ export class BitLoginAuthElement extends HTMLElement {
         this.render();
         return;
       }
-    }
-    if (this.securePhrasePending) {
-      // Tier B2 deferred ceremony (§CO4): the session already exists and
-      // bitlogin-login already fired at registration -- this just retires
-      // the "Secure your account" card.
-      this.securePhrasePending = false;
-      this.flashSuccess("dashboard", "Recovery phrase secured");
-      return;
     }
     this.sessionWarnings = [];
     this.noteSignerClaim(this.claimSigner());
@@ -1708,7 +1703,7 @@ export class BitLoginAuthElement extends HTMLElement {
             ${this.busy ? '<span class="spinner"></span>Creating your account…' : "Create a fresh identity"}
           </button>
           <button class="secondary" type="button" data-action="passkey-import" ${this.busy ? "disabled" : ""}>I already have a Nostr key</button>
-          <p class="small">Either way you can later take full control of the account — or leave for any other Nostr app — without losing your identity.</p>
+          <p class="small">Next you'll save a 12-word recovery phrase. It's the only way back if you ever lose the passkey, so it isn't optional — and it's the same phrase that lets you take full control of this account, or leave for any other Nostr app, without losing your identity.</p>
         `;
 
       case "extension-confirm":
@@ -1949,18 +1944,11 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="secondary" type="button" data-action="goto-vault-manage">Wallet connections</button>
           <button class="secondary" type="button" data-action="goto-change-password">Rotate password</button>
           <button class="secondary" type="button" data-action="goto-export">Export identity</button>`;
-        // Tier B2 (§CO4): the phrase exists only in this session's memory
-        // until the user claims it -- the one nudge that stays until acted on.
-        const securePhraseCard = this.securePhrasePending
-          ? `<div class="notice warn">Secure your account: your recovery phrase is available <strong>only during this session</strong>. Save it now and your account stays yours even if you lose your passkey.
-               <button class="link-inline" type="button" data-action="goto-confirm-phrase">View and save it</button></div>`
-          : "";
         const passkeyStanding = this.passkeySession
-          ? `<p class="small">Signed in with a passkey — it unlocks this account from your device's password manager; your identity lives on the open Nostr network.</p>`
+          ? `<p class="small">Signed in with a passkey — it unlocks this account from your device's password manager; your identity lives on the open Nostr network. Your recovery phrase works even if the passkey is lost.</p>`
           : "";
         return `
           <h2>Signed in</h2>
-          ${securePhraseCard}
           ${this.renderWarnings()}
           <p class="pubkey">${escapeHtml(this.session?.npub ?? "")}</p>
           ${passkeyStanding}

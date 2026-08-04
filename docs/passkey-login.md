@@ -58,12 +58,20 @@ leave:
   remembered password, which dies with the memory, and better than the
   removed Drive rail, which died with a client ID.
 - **Lost platform account (Google/Apple ban or lockout), or a device-bound
-  key that's gone: the passkey is gone.** Recourse, in order: the **12-word
-  recovery phrase** (the dashboard's "Secure your account" card exists
-  precisely for this — Tier B2 of the on-ramps design, retained); or a
-  previously done password graduation (PK4). A user who claimed neither
-  and lost the platform account has lost access — the same honest bottom
-  line as every rail, which is why the phrase card is load-bearing.
+  key that's gone: the passkey is gone.** Recourse: the **12-word recovery
+  phrase**, which every passkey account has, because the ceremony is
+  **mandatory at registration** (owner decision 2026-08-04) — the session
+  is not granted until the user has seen the phrase and answered the
+  three-word quiz, exactly as password signup works. The deferred "secure
+  your account later" card this replaced was inherited from the OAuth
+  on-ramp design, where a service still held a copy of the credential;
+  nothing holds a copy here, so deferring the only recovery path was
+  strictly worse than the design it was borrowed from.
+- **Lost site domain.** Worth stating because it surprises people: the
+  passkey is bound to the site's WebAuthn RP id, so if a deployment changes
+  domain, its users' passkeys no longer unlock anything there. The account
+  is untouched on relays and the phrase (or password) still works — another
+  reason the ceremony is not optional.
 - **One passkey = one account.** PRF output is per-credential, so a second
   passkey derives a *different* account — there is no "add a backup
   passkey" for the same account. The backup for the account is the phrase
@@ -91,8 +99,12 @@ account at setup.
   passkey." Sign-in with a passkey that has no account on this site routes
   into first-time setup *with the credential it already derived* — fresh
   identity or import — rather than erroring.
-- Setup skips the upfront phrase ceremony (Tier B2): the dashboard card
-  holds the phrase for the first session and nudges until claimed.
+- Setup runs the recovery ceremony before granting a session: phrase shown,
+  three words verified, then the dashboard. The setup screen says so up
+  front ("Next you'll save a 12-word recovery phrase… it isn't optional"),
+  so it reads as part of the flow rather than an interruption. Net secret
+  count is still lower than password signup — one phrase, versus a password
+  *and* a phrase — and daily sign-in is a biometric tap.
 - Re-creating setup against a passkey whose account already exists simply
   signs in (`AccountAlreadyExistsError` → login with the same derived
   credential); a passkey sign-in against no account offers setup

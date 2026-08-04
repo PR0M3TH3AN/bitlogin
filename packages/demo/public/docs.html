@@ -165,9 +165,10 @@ if (uri) payWith(uri); // full nostr+walletconnect:// URI, or null if declined</
       <p>That includes <strong>"Continue with a passkey"</strong> — zero setup on your side, no OAuth client to
       register, no server, no CSP changes. A PRF-capable passkey (synced for most users by their Google or Apple
       account) deterministically derives the credential of a real, portable Nostr account; nothing is stored
-      anywhere but the user's own authenticator. Users can bring an existing Nostr key at signup and are nudged
-      toward claiming their recovery phrase; rotating the password later "graduates" the account to fully
-      self-held. See <code>docs/passkey-login.md</code> in the repo for the derivation contract and loss/recovery
+      anywhere but the user's own authenticator. Users can bring an existing Nostr key at signup, and every passkey
+      account completes the 12-word recovery ceremony before its first session — it is mandatory, so a lost
+      passkey, a lost Google/Apple account, or a changed site domain can never trap anyone. Rotating the
+      password later "graduates" the account to fully self-held. See <code>docs/passkey-login.md</code> in the repo for the derivation contract and loss/recovery
       model.</p>
       <p>Two different questions have two different APIs, and conflating them is the classic integration bug:</p>
       <p><strong>"Is someone signed in through BitLogin?"</strong> — use <code>window.bitlogin.activeMethod()</code>

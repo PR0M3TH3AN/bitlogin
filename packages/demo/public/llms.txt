@@ -35,8 +35,10 @@ deployment above.
   account (frozen v1 contract in the widget's passkey.ts); the ordinary
   password flows do the rest, and nothing is stored outside the user's own
   authenticator. Synced passkeys survive device loss; losing the PLATFORM
-  account is recovered by the 12-word phrase, which the dashboard nudges
-  users to claim right after signup. One passkey = one account (PRF is
+  account (or the site changing domain, which changes the WebAuthn RP id)
+  is recovered by the 12-word phrase, whose ceremony is MANDATORY at
+  signup -- no session is granted until it is completed, because a passkey
+  account has no custodian who could help later. One passkey = one account (PRF is
   per-credential); passkeys are per-site (rpId) -- cross-site portability
   is the capsule account's job. Rotating the password is the graduation
   step to fully self-held. Requires a PRF-capable browser/authenticator;
