@@ -12,6 +12,9 @@ for compatible applications.
 
 - [`spec.md`](./spec.md) — canonical BitLogin protocol specification
 - [`second-factor.md`](./second-factor.md) — second-factor design notes
+- [`login-methods.md`](./login-methods.md) — proposal: the widget as the single
+  login surface, adding NIP-07 and NIP-46 sign-in behind the existing
+  provider facade (nsec-paste login rejected on the record)
 
 ## Portable account layer
 
