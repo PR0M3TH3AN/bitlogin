@@ -69,6 +69,26 @@ function verifyBudgetFor(filter: NostrFilter): number {
   return Math.max(50, cap * 3);
 }
 
+/** Live-subscription protections (BL-25): a bounded already-seen id cache
+ *  (replaying one retained valid event must cost one verification and one
+ *  delivery, ever) and a fixed-window verification rate budget (a relay
+ *  spraying DISTINCT events gets quarantined for the rest of the window
+ *  rather than burning CPU). Legitimate NIP-46 traffic -- responses to our
+ *  own requests plus the odd auth_url -- sits orders of magnitude below
+ *  the budget. */
+const LIVE_SEEN_CAP = 2048;
+const LIVE_WINDOW_MS = 10_000;
+const LIVE_VERIFIES_PER_WINDOW = 100;
+
+function rememberSeen(seenIds: Set<string>, id: string): void {
+  if (seenIds.size >= LIVE_SEEN_CAP) {
+    // Sets iterate in insertion order; evict the oldest.
+    const oldest = seenIds.values().next().value;
+    if (oldest !== undefined) seenIds.delete(oldest);
+  }
+  seenIds.add(id);
+}
+
 export class RelayConnection {
   readonly url: string;
   private ws: WebSocketLike | null = null;
@@ -82,6 +102,9 @@ export class RelayConnection {
       /** Remaining signature verifications this subscription will pay for;
        *  Infinity for live subscriptions (BL-21). */
       verifyBudget: number;
+      /** Fixed-window verification rate state for live subscriptions (BL-25). */
+      liveWindowStart: number;
+      liveVerifies: number;
       filter: NostrFilter;
       onEose: () => void;
       /** Present on live subscriptions (subscribeLive): each verified,
@@ -176,17 +199,30 @@ export class RelayConnection {
       // Relays are untrusted and are not entitled to define the result set.
       // Verify both the event and the full requested NIP-01 filter centrally;
       // callers may still re-check security-sensitive identity constraints.
-      if (sub.onEvent) {
-        if (verifyNostrEvent(event) && matchesNostrFilter(event, sub.filter)) sub.onEvent(event);
-        return;
-      }
-      // Buffered query: every CHEAP check runs before Schnorr verification,
-      // so replayed or over-limit spam cannot buy signature checks (BL-21).
-      // Replayed copies of an accepted id cost one Set lookup; events past
-      // capacity cost nothing; and a hostile relay spraying distinct invalid
-      // events runs out of verification budget rather than our CPU.
+      // Every CHEAP check runs before Schnorr verification, so replayed or
+      // over-limit spam cannot buy signature checks (BL-21, BL-25).
       const claimedId = (event as { id?: unknown } | null | undefined)?.id;
       if (typeof claimedId !== "string" || sub.seenIds.has(claimedId)) return;
+      if (sub.onEvent) {
+        // Live subscription: bounded dedup plus a rate-limited verification
+        // window (BL-25). Exceeding the window quarantines further delivery
+        // from this relay until it rolls over.
+        const now = Date.now();
+        if (now - sub.liveWindowStart >= LIVE_WINDOW_MS) {
+          sub.liveWindowStart = now;
+          sub.liveVerifies = 0;
+        }
+        if (sub.liveVerifies >= LIVE_VERIFIES_PER_WINDOW) return;
+        sub.liveVerifies++;
+        if (!verifyNostrEvent(event) || !matchesNostrFilter(event, sub.filter)) return;
+        rememberSeen(sub.seenIds, event.id);
+        sub.onEvent(event);
+        return;
+      }
+      // Buffered query: replayed copies of an accepted id cost one Set
+      // lookup; events past capacity cost nothing; and a hostile relay
+      // spraying distinct invalid events runs out of verification budget
+      // rather than our CPU.
       const cap = Math.min(sub.filter.limit ?? MAX_BUFFERED_EVENTS, MAX_BUFFERED_EVENTS);
       if (sub.events.length >= cap) return;
       if (sub.verifyBudget <= 0) return;
@@ -276,7 +312,16 @@ export class RelayConnection {
   ): Promise<{ close: () => void }> {
     await this.connect();
     const subId = bytesToHex(randomBytes(8));
-    this.subs.set(subId, { events: [], seenIds: new Set(), verifyBudget: Number.POSITIVE_INFINITY, filter, onEose: () => {}, onEvent });
+    this.subs.set(subId, {
+      events: [],
+      seenIds: new Set(),
+      verifyBudget: Number.POSITIVE_INFINITY,
+      liveWindowStart: Date.now(),
+      liveVerifies: 0,
+      filter,
+      onEose: () => {},
+      onEvent
+    });
     this.send(["REQ", subId, filter]);
     return {
       close: () => {
@@ -333,7 +378,15 @@ export class RelayConnection {
           ),
         timeoutMs,
       );
-      this.subs.set(subId, { events, seenIds: new Set(), verifyBudget: verifyBudgetFor(filter), filter, onEose: () => settle() });
+      this.subs.set(subId, {
+        events,
+        seenIds: new Set(),
+        verifyBudget: verifyBudgetFor(filter),
+        liveWindowStart: 0,
+        liveVerifies: 0,
+        filter,
+        onEose: () => settle()
+      });
       this.send(["REQ", subId, filter]);
     });
   }

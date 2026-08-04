@@ -36,10 +36,24 @@ describe("parseBunkerUri", () => {
   });
 
   it("caps and deduplicates relays from a crafted URI (audit BL-21)", () => {
-    const relays = Array.from({ length: 5000 }, (_, i) => `relay=wss://r${i % 20}.example`).join("&");
+    const relays = Array.from({ length: 120 }, (_, i) => `relay=wss://r${i % 20}.example`).join("&");
     const parsed = parseBunkerUri(`bunker://${SIGNER_HEX}?${relays}`);
     expect(parsed.relayUrls.length).toBe(8);
     expect(new Set(parsed.relayUrls).size).toBe(8);
+  });
+
+  it("bounds the URI, secret, and per-relay lengths (audit round 3)", () => {
+    expect(() => parseBunkerUri(`bunker://${SIGNER_HEX}?relay=wss://r.example&x=${"a".repeat(5000)}`)).toThrow(
+      /unreasonably long/
+    );
+    expect(() =>
+      parseBunkerUri(`bunker://${SIGNER_HEX}?relay=wss://r.example&secret=${"s".repeat(300)}`)
+    ).toThrow(/secret is unreasonably long/);
+    // An oversized relay URL is filtered out rather than opening a socket.
+    const parsed = parseBunkerUri(
+      `bunker://${SIGNER_HEX}?relay=wss://${"r".repeat(600)}.example&relay=wss://ok.example`
+    );
+    expect(parsed.relayUrls).toEqual(["wss://ok.example"]);
   });
 
   it("rejects wrong schemes, bad pubkeys, and relay-less URIs", () => {
@@ -323,6 +337,22 @@ describe("Nip46Client against a fake bunker", () => {
     ).rejects.toThrow(/different event/);
   });
 
+  it("close() rejects in-flight requests immediately -- nothing resolves after logout begins (audit BL-26)", async () => {
+    bunker = new FakeBunker(relay.url);
+    bunker.handle = () => []; // a signer that never answers
+    await bunker.start();
+    const c = makeClient(undefined, 60_000);
+    const pending = c.getUserPublicKey();
+    pending.catch(() => {}); // observed below; avoid unhandled-rejection noise
+    await new Promise((resolve) => setTimeout(resolve, 100)); // let the request go out
+    const farewell = c.buildLogoutEvent();
+    const start = Date.now();
+    c.close();
+    await expect(pending).rejects.toThrow(/connection was closed/);
+    expect(Date.now() - start).toBeLessThan(1_000);
+    expect(farewell).not.toBeNull();
+  });
+
   it("times out with a typed error when the signer never answers", async () => {
     bunker = new FakeBunker(relay.url);
     bunker.handle = () => []; // listens, never replies
@@ -441,8 +471,11 @@ describe("courtesy logout", () => {
       requestTimeoutMs: 5000
     });
     await client.connect();
-    await client.logout();
+    // Local revocation first (BL-26): pre-sign, close immediately, deliver after.
+    const farewell = client.buildLogoutEvent();
     client.close();
+    expect(farewell).not.toBeNull();
+    await client.publishCourtesy(farewell!);
     // FakeBunker records every decrypted request it receives; its processing
     // is asynchronous relative to the publish OK, so poll briefly.
     const deadline = Date.now() + 2000;

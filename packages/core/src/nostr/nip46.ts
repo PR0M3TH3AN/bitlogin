@@ -36,6 +36,13 @@ const HEX64 = /^[0-9a-f]{64}$/u;
 /** Ceiling on relays taken from a bunker:// URI (BL-21). */
 const MAX_BUNKER_RELAYS = 8;
 
+/** Input bounds on the bunker URI as a whole and its parts. Legitimate URIs
+ *  are a few hundred characters; these stop memory amplification from
+ *  crafted multi-megabyte inputs before any further processing. */
+const MAX_BUNKER_URI_CHARS = 4096;
+const MAX_BUNKER_SECRET_CHARS = 256;
+const MAX_BUNKER_RELAY_URL_CHARS = 512;
+
 export interface BunkerPointer {
   signerPubkey: string;
   relayUrls: string[];
@@ -81,6 +88,9 @@ export function sanitizeAuthUrl(candidate: string): string | null {
 }
 
 export function parseBunkerUri(uri: string): BunkerPointer {
+  if (uri.length > MAX_BUNKER_URI_CHARS) {
+    throw new BunkerUriParseError("That bunker URI is unreasonably long.");
+  }
   let url: URL;
   try {
     url = new URL(uri.trim());
@@ -104,7 +114,7 @@ export function parseBunkerUri(uri: string): BunkerPointer {
       url.searchParams
         .getAll("relay")
         .map((value) => value.trim())
-        .filter(Boolean)
+        .filter((value) => value.length > 0 && value.length <= MAX_BUNKER_RELAY_URL_CHARS)
     )
   ].slice(0, MAX_BUNKER_RELAYS);
   if (relayUrls.length === 0) {
@@ -113,6 +123,9 @@ export function parseBunkerUri(uri: string): BunkerPointer {
     );
   }
   const secret = url.searchParams.get("secret") ?? undefined;
+  if (secret && secret.length > MAX_BUNKER_SECRET_CHARS) {
+    throw new BunkerUriParseError("The bunker URI's secret is unreasonably long.");
+  }
   return { signerPubkey, relayUrls, secret: secret || undefined };
 }
 
@@ -359,19 +372,21 @@ export class Nip46Client {
   }
 
   /**
-   * Courtesy logout per current NIP-46 -- explicitly not a security boundary
-   * (the signer revokes authorization on its own side); best-effort, bounded,
-   * and never allowed to block or fail teardown. Call before close().
+   * Pre-signs the courtesy protocol logout event (current NIP-46 defines
+   * logout as exactly that -- a courtesy, never a security boundary). Must
+   * run BEFORE close(), while the keys still exist; the caller then closes
+   * IMMEDIATELY (local revocation must not wait on the network, BL-26) and
+   * delivers the pre-signed event afterward via publishCourtesy().
    */
-  async logout(timeoutMs = 2000): Promise<void> {
-    if (this.closed) return;
+  buildLogoutEvent(): NostrEvent | null {
+    if (this.closed) return null;
     try {
       const id = bytesToHex(randomBytes(8));
       const content = nip44Encrypt(
         this.conversationKey,
         JSON.stringify({ id, method: "logout", params: [] })
       );
-      const event = signNostrEvent(
+      return signNostrEvent(
         {
           pubkey: this.clientPubkey,
           created_at: Math.floor(Date.now() / 1000),
@@ -381,12 +396,26 @@ export class Nip46Client {
         },
         this.clientSecretKey
       );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Best-effort, bounded delivery of a pre-signed event. Safe (and intended)
+   * to run AFTER close(): it needs no key material, and RelayConnection
+   * reconnects transiently to publish. Never throws.
+   */
+  async publishCourtesy(event: NostrEvent, timeoutMs = 2000): Promise<void> {
+    try {
       await Promise.race([
         Promise.allSettled(this.conns.map((conn) => conn.publish(event))),
         new Promise((resolve) => setTimeout(resolve, timeoutMs))
       ]);
     } catch {
       // Courtesy only.
+    } finally {
+      for (const conn of this.conns) conn.close();
     }
   }
 

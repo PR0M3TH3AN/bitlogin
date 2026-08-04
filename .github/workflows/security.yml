@@ -22,7 +22,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Run build, typecheck, tests, dependency audit, and registry signature verification
+      - name: Install pinned Semgrep (security:ci runs the custom rules)
+        run: pipx install semgrep==1.171.0
+      - name: Run build, typecheck, tests, dependency audit, and static-analysis gate
         run: npm run security:ci
       - name: Generate checksums and CycloneDX SBOM
         shell: bash

@@ -116,6 +116,39 @@ describe("relay hardening", () => {
     expect(events.length).toBeLessThanOrEqual(1);
   });
 
+  it("BL-25: live subscriptions dedupe replayed events -- one delivery, ever", async () => {
+    const key = generatePrivateKey();
+    const note = signedNote(key, "live");
+    relay.unsolicitedQueryEvents = Array.from({ length: 2000 }, () => note);
+    const delivered: string[] = [];
+    const start = Date.now();
+    const handle = await conn.subscribeLive({ kinds: [1], authors: [getPublicKeyHex(key)] }, (event) =>
+      delivered.push(event.id)
+    );
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    handle.close();
+    expect(delivered).toHaveLength(1);
+    // 2,000 replayed frames cost one verification plus Set lookups.
+    expect(Date.now() - start).toBeLessThan(3_000);
+  });
+
+  it("BL-25: live subscriptions rate-limit verification of distinct events per window", async () => {
+    const key = generatePrivateKey();
+    relay.unsolicitedQueryEvents = Array.from({ length: 300 }, (_, i) =>
+      signedNote(key, `distinct-${i}`, 1_700_000_000 + i)
+    );
+    const delivered: string[] = [];
+    const handle = await conn.subscribeLive({ kinds: [1], authors: [getPublicKeyHex(key)] }, (event) =>
+      delivered.push(event.id)
+    );
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    handle.close();
+    // The fixed window admits at most 100 verifications; the rest of the
+    // spray is quarantined until the window rolls over.
+    expect(delivered.length).toBeGreaterThan(0);
+    expect(delivered.length).toBeLessThanOrEqual(100);
+  });
+
   it("BL-19: distinct events beyond the requested limit are not buffered", async () => {
     const key = generatePrivateKey();
     relay.unsolicitedQueryEvents = Array.from({ length: 10 }, (_, i) =>

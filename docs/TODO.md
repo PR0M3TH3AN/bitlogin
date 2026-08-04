@@ -41,6 +41,22 @@ explicitly not a security boundary) is now sent on teardown; this corrects
 the earlier "no stable method name" note. Still deferred, interop only:
 `switch_relays`.
 
+Third-pass response (same day): BL-25 — live subscriptions now carry a
+bounded already-seen id cache (2048, FIFO eviction; a replayed retained
+event costs one verification and one delivery, ever) and a fixed-window
+verification budget (100 per 10s; distinct-event spray is quarantined for
+the window). BL-26 — teardown order inverted: the courtesy logout event is
+pre-signed, then close() IMMEDIATELY rejects every in-flight request and
+wipes keys, then the pre-signed event is delivered asynchronously and
+bounded — nothing can resolve after logout begins (regression-tested).
+BL-27 — a nostrconnect listen failing naturally (timeout, unreachable
+relays) now discards the pending ephemeral key in a guarded catch instead
+of orphaning it. BL-28 — the hosted verify job installs the pinned Semgrep
+before running security:ci (it was red at the previous HEAD, skipping SBOM
+and checksums). Informational — bunker URIs are bounded: 4096 chars total,
+256-char secret, 512-char relay URLs (oversized relays filtered, oversized
+URI/secret rejected).
+
 Owner action items:
 
 1. **Live-fire the NIP-46 QR with Amber** on bitlogin.network (flow was

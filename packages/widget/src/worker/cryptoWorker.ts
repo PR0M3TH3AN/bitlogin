@@ -277,14 +277,16 @@ function discardNostrconnectPending(): void {
   nostrconnectPending = null;
 }
 
-/** Retires a previous session with the courtesy protocol logout (current
- *  NIP-46 defines it as exactly that -- not a security boundary), then
- *  closes it, which wipes its keys. */
+/** Retires a session with local revocation FIRST (BL-26): the logout event
+ *  is pre-signed while the key exists, then close() immediately rejects
+ *  every pending request and wipes keys -- nothing can resolve after logout
+ *  begins -- and only then is the courtesy event delivered, asynchronously
+ *  and bounded. Current NIP-46 defines logout as a courtesy, never a
+ *  security boundary, so its delivery is allowed to fail silently. */
 function retireNip46Client(client: Nip46Client): void {
-  void client
-    .logout()
-    .catch(() => {})
-    .finally(() => client.close());
+  const farewell = client.buildLogoutEvent();
+  client.close();
+  if (farewell) void client.publishCourtesy(farewell);
 }
 
 function adoptNip46Client(client: Nip46Client, userPubkey: string): void {
@@ -343,13 +345,23 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "nip46NostrconnectAwait": {
       const pending = nostrconnectPending;
       if (!pending) throw new Error("No signer-connection attempt is in progress.");
-      const { signerPubkey } = await listenForNostrconnect({
-        clientSecretKey: pending.clientSecretKey,
-        relayUrls: pending.relayUrls,
-        secret: pending.secret,
-        timeoutMs: 180_000,
-        signal: pending.abort.signal
-      });
+      let signerPubkey: string;
+      try {
+        ({ signerPubkey } = await listenForNostrconnect({
+          clientSecretKey: pending.clientSecretKey,
+          relayUrls: pending.relayUrls,
+          secret: pending.secret,
+          timeoutMs: 180_000,
+          signal: pending.abort.signal
+        }));
+      } catch (err) {
+        // Natural failure (timeout, unreachable relays) must not orphan the
+        // ephemeral key in worker memory (BL-27) -- but only if this attempt
+        // still owns the pending slot; a superseding attempt already
+        // discarded it.
+        if (nostrconnectPending === pending) discardNostrconnectPending();
+        throw err;
+      }
       if (nostrconnectPending !== pending) throw new Error("This signer-connection attempt was superseded.");
       // Ownership of the ephemeral key transfers into the client below --
       // dereference only; discardNostrconnectPending would wipe it.
