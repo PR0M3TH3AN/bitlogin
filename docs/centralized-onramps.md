@@ -136,6 +136,24 @@ Password rotation while Google-managed is the graduation step (CO6 step 2):
 the Drive copy simply goes stale and dead, and the rotate screen says so
 before the user commits.
 
+**Scoping and blast radius (recorded 2026-08-04).** Drive app data is siloed
+per OAuth client ID, so the Google rail is a per-site (or per-site-family)
+convenience: a credential stored via Site A's client ID is invisible to
+Site B, whose "Continue with Google" would offer to create a NEW account.
+Cross-site portability is the underlying capsule account's job — password or
+phrase work on every BitLogin site. If a HOST'S Google project is banned or
+deleted, no Nostr account is lost (capsules live on public relays), but
+ungraduated users are locked out in practice: their credential file sits in
+their own Drive, readable only through an app bearing the dead client ID.
+Graduated users lose nothing but a button. This is why the Tier B2 phrase
+card is load-bearing, not decorative. A shared ecosystem-wide client ID
+behind a static relay hub on bitlogin.network was considered and rejected:
+it would make one domain and one Google project a chokepoint for every
+deployment, and a shared client ID lets any federated site read the user's
+credential file — worse centralization than the per-site silo it would fix.
+`drive.appdata` is a Google "sensitive" scope: hosts should expect Google's
+app-verification review before serving more than ~100 users.
+
 ## CO3.2 Architecture B — OAuth as the password manager (recommended)
 
 The insight: a BitLogin account requires a high-entropy password, but the
