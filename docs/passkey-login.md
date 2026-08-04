@@ -100,9 +100,29 @@ account at setup.
 
 # PK6. Support boundaries
 
-PRF requires a modern authenticator stack (Chrome/Android and Google
-Password Manager, recent Safari/iOS, hardware keys with hmac-secret).
-Support cannot be feature-detected without running a ceremony, so an
-unsupported combination surfaces as an honest in-flow message pointing at
-the other methods. The password path remains the universal fallback — and
-the primary method, per the standing password-first decision (§LM9.1).
+PRF requires a modern authenticator stack, and support is **genuinely
+uneven across password managers today** — this is the method's real
+limitation, not a rounding error. Support cannot be feature-detected
+without running a ceremony (the widget asks for `prf` in the ceremony and
+inspects the result), so an unsupported combination surfaces as an honest
+in-flow message pointing at the other methods rather than a mystery
+failure or a half-created account. The password path remains the universal
+fallback — and the primary method, per the standing password-first
+decision (§LM9.1).
+
+Known provider status, as observed 2026-08-04. Treat as a snapshot: this
+landscape moves, and only the ceremony is authoritative.
+
+| Provider | PRF | Notes |
+| --- | --- | --- |
+| Chrome / Android + Google Password Manager | Yes | The mainstream path; passkeys sync with the platform account. |
+| Safari / iOS + iCloud Keychain (recent versions) | Yes | Same shape on Apple platforms. |
+| Bitwarden browser extension | Yes | Uses PRF itself for passkey vault unlock; open source, self-hostable via Vaultwarden — the practical choice on Linux desktops. |
+| Hardware keys with hmac-secret (YubiKey 5, Nitrokey 3, SoloKeys v2) | Yes | PRF rides on CTAP2 hmac-secret. |
+| KeePassXC 2.7.12 | **No** | Stores and manages passkeys (`credProps` present) but ships no `prf`/`hmac-secret` support — verified by binary inspection on 2.7.12, and PRF evaluation must happen inside the authenticator, so the browser extension cannot supply it. Users see the unsupported message. |
+| de-Googled Android (/e/OS, GrapheneOS without Play Services) | Not reliably | Browser ceremonies typically route through Play Services' FIDO2 API; third-party credential-provider coverage is still patchy. Such users are well served by the NIP-46 remote-signer rail instead (§LM5), which needs no platform account at all. |
+
+For a deployment, the practical reading: offer passkeys, expect a
+meaningful minority to fall back, and never make the passkey the only
+route to an account — which the graduation ladder (§PK4) already
+guarantees.
