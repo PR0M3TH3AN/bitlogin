@@ -63,11 +63,25 @@
 
 bl.addEventListener('bitlogin-login', (e) => {
   console.log('signed in as', e.detail.publicKey);
+  console.log('via', e.detail.method); // 'bitlogin' | 'nip07'
+  console.log('supports', e.detail.capabilities); // { nip44, nip04, getRelays }
 });
 
 bl.addEventListener('bitlogin-logout', () => {
   console.log('signed out');
 });</code></pre>
+      <div class="callout">
+        <strong>One login surface, several methods.</strong> If the visitor's browser has a NIP-07 signer
+        extension (Alby, nos2x, …), the widget's welcome screen offers "Use your Nostr extension instead"
+        below the primary username/password sign-in — you embed one element and both kinds of users are
+        covered. <code>detail.method</code> tells you which way the user came in, and
+        <code>detail.capabilities</code> what the active signer supports (some extensions lack
+        <code>nip44</code>). Extension sessions are signer-only: signing and encryption work through the
+        element exactly the same, but BitLogin account features — wallet connections, password rotation,
+        identity export, cross-device persistence — belong to BitLogin accounts, and
+        <code>requestNwcConnection()</code> resolves <code>null</code>. A page reload ends an extension
+        session; the extension is simply asked again next visit.
+      </div>
     </li>
     <li>
       <h3>Sign events from anywhere on the page</h3>
@@ -171,6 +185,10 @@ if (window.bitlogin?.isActiveSigner()) {
         (as this demo does).
       </div>
       <h4 style="margin-top:20px">Letting a user switch away from BitLogin without reloading</h4>
+      <p>One exception first: when a user signs in <em>through</em> a NIP-07 extension from the widget's own
+      welcome screen, BitLogin deliberately leaves <code>window.nostr</code> alone — the extension already owns
+      the slot and is the session's actual backend, so there is nothing to claim or release. Everything below
+      concerns BitLogin-account sessions, where the widget's own provider competes for the slot.</p>
       <p>By default, once <code>&lt;bitlogin-auth&gt;</code> mounts it claims <code>window.nostr</code> and keeps it —
       even after the user logs out of BitLogin, since they might just be about to log back in with the same widget.
       If your site offers a signer picker and the user switches to a different method, call

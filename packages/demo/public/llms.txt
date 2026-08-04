@@ -28,6 +28,16 @@ deployment above.
 - A `<bitlogin-auth>` custom element (Shadow DOM, no CSS collisions) handling
   create account, sign in, forgot-password recovery via a 12-word phrase, and
   password rotation.
+- One login surface, several methods: if the visitor's browser has a NIP-07
+  signer extension, the welcome screen offers "Use your Nostr extension
+  instead" below the primary username/password path, and the element routes
+  `getPublicKey`/`signEvent`/`nip44*`/`nip04*` through the extension for that
+  session. Extension sessions are signer-only: no vault
+  (`requestNwcConnection` resolves null), no persistence (a reload ends the
+  session), and `window.nostr` is left to the extension. `bitlogin-login`'s
+  `detail.method` (`'bitlogin' | 'nip07'`) and `detail.capabilities`
+  (`{ nip44, nip04, getRelays }`) tell your app which backend is active and
+  what it supports.
 - A `window.nostr` provider shaped like the de facto NIP-07 interface
   (`getPublicKey`, `signEvent`, `getRelays`, `nip44.encrypt`/`decrypt`) —
   existing Nostr app code that already calls `window.nostr` works unmodified,
@@ -62,7 +72,8 @@ deployment above.
   'saved' | 'declined' | 'already-saved' (same wallet+secret exists; origin
   binding refreshed, no UI) | 'unavailable' (no session/vault — treat as
   no-op). Safe to fire after every successful connect.
-- Events on the element: `bitlogin-login` (`detail.publicKey`),
+- Events on the element: `bitlogin-login` (`detail.publicKey`,
+  `detail.method`, `detail.capabilities`),
   `bitlogin-logout`, `bitlogin-signer-claimed`, `bitlogin-signer-released`
   (the last also fires on `window` when triggered via
   `window.bitlogin.releaseSigner()`), `bitlogin-connection-granted`
