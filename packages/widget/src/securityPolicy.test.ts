@@ -29,6 +29,31 @@ describe("widget security policy", () => {
     expect(widgetSource).not.toContain("entropyBits");
   });
 
+  it("keeps username/password primary; the extension method is a secondary affordance", () => {
+    // Owner decision 2026-08-04 (login-methods.md §LM9.1): alternative methods must
+    // not displace the password path. The welcome screen's primary sign-in button has
+    // to appear before the extension option in the rendered template.
+    const passwordSignIn = widgetSource.indexOf('data-action="goto-login">Sign in</button>');
+    const extensionSlot = widgetSource.indexOf("${extensionOption}");
+    expect(passwordSignIn).toBeGreaterThan(-1);
+    expect(extensionSlot).toBeGreaterThan(-1);
+    expect(passwordSignIn).toBeLessThan(extensionSlot);
+  });
+
+  it("extension sessions never claim window.nostr and never persist", () => {
+    // §LM4: NIP-07 mode delegates to the extension's provider; fighting it for the
+    // window.nostr slot is reserved for BitLogin-account sessions. There must be no
+    // claimSigner() call in the extension confirm path, and no storage write.
+    const confirmBody = widgetSource.slice(
+      widgetSource.indexOf("private handleExtensionConfirm"),
+      widgetSource.indexOf("private async tryRestoreSession"),
+    );
+    expect(confirmBody.length).toBeGreaterThan(0);
+    expect(confirmBody).not.toContain("claimSigner");
+    expect(confirmBody).not.toContain("localStorage");
+    expect(confirmBody).not.toContain("sessionCache");
+  });
+
   it("renders vault integrity warnings on the management screen", () => {
     expect(widgetSource).toContain("buildVaultIntegrityWarnings(listed)");
     expect(widgetSource).toContain("this.vaultIntegrityWarnings.map");

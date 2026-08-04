@@ -1,8 +1,10 @@
 # BitLogin as the Single Login Surface — NIP-07 and NIP-46 Methods
 
-**Document version:** 0.1 (design proposal)
-**Status:** Proposal only — nothing here is implemented. §LM6 records a settled
-rejection (nsec paste as a login method), kept on the record.
+**Document version:** 0.2
+**Status:** §LM4 (NIP-07) is **implemented** (2026-08-04): `signers/` in
+`@bitlogin/widget`, thin sessions per §LM7, password-first presentation per
+§LM9.1. §LM5 (NIP-46) remains a proposal. §LM6 records a settled rejection
+(nsec paste as a login method), kept on the record.
 **Depends on:** `docs/spec.md` (§ references point there unless marked §LM or
 §SF), `docs/second-factor.md` §SF10 (imported identities, implemented)
 
@@ -222,9 +224,10 @@ Each step ships independently; the login UI grows one option at a time.
 
 # LM9. Open questions
 
-1. Method presentation: is password-first with an "other ways to sign in"
-   expander the right default, or should extension detection promote NIP-07
-   when present?
+1. **Resolved 2026-08-04 (owner decision):** username/password stays the
+   primary presentation; alternative methods appear as secondary affordances
+   below it, never promoted above the password path even when an extension is
+   detected. Pinned by `securityPolicy.test.ts`.
 2. Should a NIP-07 session survive reload by silently re-asking the
    extension, or require an explicit click each visit (extension prompt
    fatigue vs. surprise sessions)?

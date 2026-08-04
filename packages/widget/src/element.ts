@@ -15,9 +15,12 @@ import { WIDGET_STYLES } from "./styles.js";
 import { chooseWalletViaBitcoinConnect } from "./vault/bitcoinConnect.js";
 import type { VaultConnectionSummary } from "./worker/protocol.js";
 import { buildVaultIntegrityWarnings } from "./vault/integrityWarnings.js";
+import { detectForeignNip07Provider, Nip07Signer } from "./signers/nip07.js";
+import type { SignerCapabilities, SignerMethod } from "./signers/types.js";
 
 type Screen =
   | "welcome"
+  | "extension-confirm"
   | "import-key"
   | "create-name"
   | "create-credential"
@@ -70,7 +73,17 @@ export class BitLoginAuthElement extends HTMLElement {
   private offlineExportFile: RecoveryExportFile | null = null;
   private offlineExportFileNotice: string | undefined;
 
-  private session: { publicKey: string; npub: string; accountId?: string } | null = null;
+  private session: { publicKey: string; npub: string; accountId?: string; method: SignerMethod } | null = null;
+
+  // ---- NIP-07 extension sessions (docs/login-methods.md §LM4, §LM7) ----
+  // `pending` holds the signer between "the extension answered getPublicKey" and the
+  // user confirming that npub is theirs; only `active` routes the public API. Thin by
+  // design: no capsule, no vault, no persistence -- a reload simply signs the user out,
+  // and the extension is asked again next visit.
+  private pendingExtensionSigner: Nip07Signer | null = null;
+  private activeExtensionSigner: Nip07Signer | null = null;
+  private extensionPreviewNpub = "";
+  private extensionPreviewPubkey = "";
   private sessionWarnings: string[] = [];
   private lastSignedEventJson = "";
   private exportedNsec = "";
@@ -170,10 +183,15 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   // ---- Public API mirroring window.nostr, scoped to this element instance ----
+  // Routed through the active signer: the worker for BitLogin-account sessions (as
+  // always), the extension's provider for a NIP-07 session (§LM3). Hosts holding a
+  // reference to this element get the right backend either way.
   async getPublicKey(): Promise<string> {
+    if (this.activeExtensionSigner) return this.activeExtensionSigner.getPublicKey();
     return (await this.worker.getPublicKey()).publicKey;
   }
   async signEvent(event: { kind: number; tags?: string[][]; content: string; created_at?: number }) {
+    if (this.activeExtensionSigner) return this.activeExtensionSigner.signEvent(event);
     return this.worker.signEvent(event);
   }
   /**
@@ -185,9 +203,11 @@ export class BitLoginAuthElement extends HTMLElement {
    * racing other providers for that slot.
    */
   async nip44Encrypt(peerPublicKey: string, plaintext: string): Promise<string> {
+    if (this.activeExtensionSigner) return this.activeExtensionSigner.nip44Encrypt(peerPublicKey, plaintext);
     return (await this.worker.nip44Encrypt({ peerPublicKey, plaintext })).ciphertext;
   }
   async nip44Decrypt(peerPublicKey: string, payload: string): Promise<string> {
+    if (this.activeExtensionSigner) return this.activeExtensionSigner.nip44Decrypt(peerPublicKey, payload);
     return (await this.worker.nip44Decrypt({ peerPublicKey, payload })).plaintext;
   }
   /**
@@ -196,12 +216,23 @@ export class BitLoginAuthElement extends HTMLElement {
    * (or their older DM code paths) that still expect NIP-04 rather than NIP-44.
    */
   async nip04Encrypt(peerPublicKey: string, plaintext: string): Promise<string> {
+    if (this.activeExtensionSigner) return this.activeExtensionSigner.nip04Encrypt(peerPublicKey, plaintext);
     return (await this.worker.nip04Encrypt({ peerPublicKey, plaintext })).ciphertext;
   }
   async nip04Decrypt(peerPublicKey: string, payload: string): Promise<string> {
+    if (this.activeExtensionSigner) return this.activeExtensionSigner.nip04Decrypt(peerPublicKey, payload);
     return (await this.worker.nip04Decrypt({ peerPublicKey, payload })).plaintext;
   }
   async logout(): Promise<void> {
+    if (this.activeExtensionSigner) {
+      // Nothing to tear down beyond our own reference: the session held no worker
+      // state, persisted nothing, and never claimed window.nostr (§LM4).
+      this.activeExtensionSigner = null;
+      this.session = null;
+      this.dispatchEvent(new CustomEvent("bitlogin-logout"));
+      this.goto("welcome");
+      return;
+    }
     await this.worker.logout();
     this.session = null;
     this.releaseSigner();
@@ -226,6 +257,9 @@ export class BitLoginAuthElement extends HTMLElement {
    */
   async requestNwcConnection(options: { appName?: string; reason?: string } = {}): Promise<string | null> {
     if (this.vaultRequest) throw new Error("A wallet connection request is already in progress.");
+    // Extension sessions are signer-only (§LM7): no vault, and prompting a password
+    // sign-in over an active session would be worse than an honest decline.
+    if (this.activeExtensionSigner) return null;
     const origin = window.location.origin;
     const appName = options.appName?.trim() || window.location.hostname || "This app";
     return new Promise<string | null>((resolve) => {
@@ -507,6 +541,26 @@ export class BitLoginAuthElement extends HTMLElement {
    * relay-disagreement warnings -- so a user isn't left wondering why some other app still
    * seems to be using a different signer.
    */
+  /** Single dispatch point for bitlogin-login so every sign-in path reports the same
+   * detail shape: which method granted the session and what it can do (§LM3). The
+   * pre-existing `publicKey` field is unchanged for hosts written before `method`. */
+  private dispatchLogin(): void {
+    const capabilities: SignerCapabilities = this.activeExtensionSigner?.capabilities ?? {
+      nip44: true,
+      nip04: true,
+      getRelays: true
+    };
+    this.dispatchEvent(
+      new CustomEvent("bitlogin-login", {
+        detail: {
+          publicKey: this.session?.publicKey,
+          method: this.session?.method ?? "bitlogin",
+          capabilities
+        }
+      })
+    );
+  }
+
   private noteSignerClaim(claimed: boolean): void {
     if (claimed) return;
     this.sessionWarnings = [
@@ -661,7 +715,13 @@ export class BitLoginAuthElement extends HTMLElement {
         return;
       case "goto-welcome":
         this.pendingRollback = null;
+        this.pendingExtensionSigner = null;
         this.goto("welcome");
+        return;
+      case "extension-signin":
+        return this.handleExtensionSignIn();
+      case "extension-continue":
+        this.handleExtensionConfirm();
         return;
       case "goto-dashboard":
         this.goto("dashboard");
@@ -857,7 +917,7 @@ export class BitLoginAuthElement extends HTMLElement {
     const words = this.recoveryPhrase.split(" ");
     const indices = pickRandomIndices(words.length, 3);
     this.confirmSlots = indices.map((index) => ({ index, value: "" }));
-    this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId };
+    this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId, method: "bitlogin" };
     this.busy = false;
     this.goto("confirm-phrase");
     // §15.8/§19.6 — publish relay preferences immediately after successful registration,
@@ -885,7 +945,7 @@ export class BitLoginAuthElement extends HTMLElement {
     }
     this.sessionWarnings = [];
     this.noteSignerClaim(this.claimSigner());
-    this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: this.session?.publicKey } }));
+    this.dispatchLogin();
     this.flashSuccess("dashboard", "Account created");
   }
 
@@ -893,6 +953,56 @@ export class BitLoginAuthElement extends HTMLElement {
     const loginName = this.field("loginName").trim().toLowerCase();
     const password = this.field("password");
     await this.attemptLogin(loginName, password);
+  }
+
+  /**
+   * "Use your Nostr extension instead" (§LM4) -- asks the detected extension for its
+   * public key, then shows it for the user to confirm before any session exists. The
+   * provider reference is snapshotted here so a later change of window.nostr occupant
+   * can never swap the backend mid-session.
+   */
+  private async handleExtensionSignIn(): Promise<void> {
+    if (this.busy) return;
+    const provider = detectForeignNip07Provider();
+    if (!provider) {
+      this.errorMessage = "No Nostr signer extension was found in this browser.";
+      this.render();
+      return;
+    }
+    this.setBusy(true);
+    try {
+      const signer = new Nip07Signer(provider);
+      const publicKey = await signer.getPublicKey();
+      this.pendingExtensionSigner = signer;
+      this.extensionPreviewPubkey = publicKey;
+      this.extensionPreviewNpub = encodeNpub(publicKey);
+      this.busy = false;
+      this.goto("extension-confirm");
+    } catch (err) {
+      this.pendingExtensionSigner = null;
+      this.fail(err);
+    }
+  }
+
+  /** The user confirmed the npub the extension reported is theirs; grant the thin
+   * session (§LM7). Deliberately no claimSigner(): the extension owns window.nostr
+   * and this session's whole point is to use it, not replace it (§LM4). */
+  private handleExtensionConfirm(): void {
+    const signer = this.pendingExtensionSigner;
+    if (!signer || !this.extensionPreviewPubkey) {
+      this.goto("welcome");
+      return;
+    }
+    this.pendingExtensionSigner = null;
+    this.activeExtensionSigner = signer;
+    this.session = { publicKey: this.extensionPreviewPubkey, npub: this.extensionPreviewNpub, method: "nip07" };
+    this.sessionWarnings = [];
+    // A wallet request that was waiting on sign-in expected a BitLogin account; an
+    // extension session has no vault, so settle it honestly instead of letting the
+    // dashboard hook run it into worker calls that cannot succeed (§LM7).
+    if (this.vaultRequest) this.finishVaultRequest(null);
+    this.dispatchLogin();
+    this.flashSuccess("dashboard", "Signed in");
   }
 
   /**
@@ -912,10 +1022,11 @@ export class BitLoginAuthElement extends HTMLElement {
       this.session = {
         publicKey: result.everydayPublicKey,
         npub: encodeNpub(result.everydayPublicKey),
-        accountId: result.accountId
+        accountId: result.accountId,
+        method: "bitlogin"
       };
       this.noteSignerClaim(this.claimSigner());
-      this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: result.everydayPublicKey } }));
+      this.dispatchLogin();
       this.goto("dashboard");
     } catch {
       // No cached session, or the worker/IndexedDB isn't available -- fall
@@ -933,11 +1044,11 @@ export class BitLoginAuthElement extends HTMLElement {
     try {
       const result = await this.worker.login({ loginName, password, acknowledgeRollback });
       this.loginName = loginName;
-      this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId };
+      this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId, method: "bitlogin" };
       this.sessionWarnings = [result.rollbackWarning, result.relayDisagreementWarning].filter((w): w is string => !!w);
       this.busy = false;
       this.noteSignerClaim(this.claimSigner());
-      this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: result.everydayPublicKey } }));
+      this.dispatchLogin();
       this.flashSuccess("dashboard", "Signed in");
       void this.offerToSaveCredential(loginName, password);
     } catch (err) {
@@ -976,7 +1087,7 @@ export class BitLoginAuthElement extends HTMLElement {
       dmRelaysCount: result.dmRelays.length,
       chainWarning: result.chainWarning
     };
-    this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId };
+    this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId, method: "bitlogin" };
     this.newCredentialAfterRecovery = generatePassphrase().secret;
     this.busy = false;
     this.goto("recover-new-credentials");
@@ -996,7 +1107,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.busy = false;
     this.sessionWarnings = [];
     this.noteSignerClaim(this.claimSigner());
-    this.dispatchEvent(new CustomEvent("bitlogin-login", { detail: { publicKey: this.session?.publicKey } }));
+    this.dispatchLogin();
     this.flashSuccess("dashboard", "Account recovered");
     void this.offerToSaveCredential(newLoginName, newPassword);
   }
@@ -1046,9 +1157,15 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   private async handleSignTestEvent(): Promise<void> {
-    const event = await this.worker.signEvent({ kind: 1, content: `Hello from BitLogin at ${new Date().toISOString()}` });
-    this.lastSignedEventJson = JSON.stringify(event, null, 2);
-    this.render();
+    // this.signEvent, not this.worker.signEvent: routes to the extension for a NIP-07 session.
+    try {
+      const event = await this.signEvent({ kind: 1, content: `Hello from BitLogin at ${new Date().toISOString()}` });
+      this.lastSignedEventJson = JSON.stringify(event, null, 2);
+      this.render();
+    } catch (err) {
+      // An extension can decline or time out where the worker path couldn't (§LM4).
+      this.fail(err);
+    }
   }
 
   private async handleRevealNsec(): Promise<void> {
@@ -1119,7 +1236,14 @@ export class BitLoginAuthElement extends HTMLElement {
 
   private renderScreen(): string {
     switch (this.screen) {
-      case "welcome":
+      case "welcome": {
+        // Username/password is the primary method; a detected extension appears as a
+        // secondary affordance only (§LM9.1, resolved: password-first).
+        const extensionOption = detectForeignNip07Provider()
+          ? `<button class="link" data-action="extension-signin" ${this.busy ? "disabled" : ""}>${
+              this.busy ? '<span class="spinner"></span>Asking your extension…' : "Use your Nostr extension instead"
+            }</button>`
+          : "";
         return `
           ${this.renderBrandLockup()}
           <p class="sub">A portable Nostr identity with a familiar login name and password.</p>
@@ -1128,6 +1252,19 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="secondary" data-action="goto-create">Create account</button>
           <button class="link" data-action="goto-import">Import an existing Nostr key</button>
           <button class="link" data-action="goto-recover">Forgot password? Recover with phrase</button>
+          ${extensionOption}
+        `;
+      }
+
+      case "extension-confirm":
+        return `
+          <h2>Sign in with your extension</h2>
+          <p class="sub">Your Nostr signer extension reports this identity:</p>
+          <div class="credential-box">${escapeHtml(this.extensionPreviewNpub)}</div>
+          <p class="small">Check this is the profile you expect — extensions can hold more than one. BitLogin never sees this identity's private key; your extension signs on its behalf. This session lasts until you log out or leave the page, and BitLogin account features (wallet connections, password rotation, recovery) stay with BitLogin accounts.</p>
+          ${this.renderError()}
+          <button class="primary" type="button" data-action="extension-continue">This is me — continue</button>
+          <button class="link" data-action="goto-welcome">Back</button>
         `;
 
       case "import-key": {
@@ -1295,7 +1432,17 @@ export class BitLoginAuthElement extends HTMLElement {
         `;
       }
 
-      case "dashboard":
+      case "dashboard": {
+        // Extension sessions are signer-only (§LM7): the account actions below the
+        // divider are all worker-backed (vault, rotation, export) and have no meaning
+        // without a BitLogin account, so they are omitted rather than left to fail.
+        const isExtensionSession = this.session?.method === "nip07";
+        const accountActions = isExtensionSession
+          ? `<p class="small">Signed in through your Nostr extension. Wallet connections, password rotation, and identity export are features of BitLogin accounts — create one to get your settings on every device.</p>`
+          : `
+          <button class="secondary" type="button" data-action="goto-vault-manage">Wallet connections</button>
+          <button class="secondary" type="button" data-action="goto-change-password">Rotate password</button>
+          <button class="secondary" type="button" data-action="goto-export">Export identity</button>`;
         return `
           <h2>Signed in</h2>
           ${this.renderWarnings()}
@@ -1308,11 +1455,10 @@ export class BitLoginAuthElement extends HTMLElement {
               : ""
           }
           <div class="divider"></div>
-          <button class="secondary" type="button" data-action="goto-vault-manage">Wallet connections</button>
-          <button class="secondary" type="button" data-action="goto-change-password">Rotate password</button>
-          <button class="secondary" type="button" data-action="goto-export">Export identity</button>
+          ${accountActions}
           <button class="secondary" type="button" data-action="logout">Log out</button>
         `;
+      }
 
       case "vault-consent": {
         const request = this.vaultRequest;
