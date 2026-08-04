@@ -156,12 +156,36 @@ ungraduated users are locked out in practice: their credential file sits in
 their own Drive, readable only through an app bearing the dead client ID.
 Graduated users lose nothing but a button. This is why the Tier B2 phrase
 card is load-bearing, not decorative. A shared ecosystem-wide client ID
-behind a static relay hub on bitlogin.network was considered and rejected:
-it would make one domain and one Google project a chokepoint for every
-deployment, and a shared client ID lets any federated site read the user's
-credential file — worse centralization than the per-site silo it would fix.
-`drive.appdata` is a Google "sensitive" scope: hosts should expect Google's
-app-verification review before serving more than ~100 users.
+behind a static **credential-relay** hub on bitlogin.network was considered
+and rejected: it would make one domain and one Google project a chokepoint
+for every deployment, and a hub that hands the credential *back to the
+calling site* lets any federated site read the user's unlock secret — worse
+centralization than the per-site silo it would fix.
+
+**Correction (2026-08-04, second look).** That rejection was written against
+the credential-relay variant and is too broad as stated. A different shape —
+a **hub that stays the signer** and exposes only NIP-07-shaped operations
+(`getPublicKey`, `signEvent`, NIP-44/04) over an exact-origin, nonce-bound
+`postMessage` channel, never releasing the credential, token, or nsec — is
+not refuted by that objection, and would give integrating developers
+"Continue with Google" with no provider registration of their own. Note what
+that architecture *is*, though: a remote origin holding key material and
+answering signing requests over an origin-bound channel is **a NIP-46
+bunker**, which BitLogin already supports as a shipped, audited rail (§LM5).
+The open question is therefore not "add a hub protocol" but "does someone
+run a Google-gated bunker" — an ops commitment, not a widget feature. Its
+residual cost is unchanged and severe: the hub's *served JavaScript* becomes
+the security of every user of every integrating site (one XSS or supply-chain
+compromise reaches everyone, where the per-site silo caps the blast radius at
+one site), and one Google project's suspension or policy state gates the
+whole ecosystem while seeing every site's login pattern in one place.
+
+`drive.appdata` was described here as a Google "sensitive" scope requiring
+app-verification review before ~100 users. Per Google's current Drive API
+scope documentation it is classified **non-sensitive** (it is the
+recommended narrow alternative to full-Drive scopes) and needs only basic
+OAuth app verification — corrected on the record; not independently
+re-verified here.
 
 ## CO3.2 Architecture B — OAuth as the password manager (recommended)
 
