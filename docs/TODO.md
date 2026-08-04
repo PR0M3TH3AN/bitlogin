@@ -1,6 +1,32 @@
 # BitLogin — open items
 
-Updated: 2026-07-31
+Updated: 2026-08-04
+
+## Login-surface expansion (2026-08-04) — shipped, with owner follow-ups
+
+One login surface, four methods (`login-methods.md`, `passkey-login.md`):
+password (primary), NIP-07 extension, NIP-46 remote signer (memory-only),
+and passkey via WebAuthn PRF. OAuth on-ramps were built, then removed the
+same day for requiring per-site provider registration
+(`centralized-onramps.md`, superseded, kept on the record). Also shipped:
+the deployment-CSP `'wasm-unsafe-eval'` fix (live password flows were
+broken since 2026-07-31), the service-worker `cache: "reload"` precache
+fix, `window.bitlogin.activeMethod()/activeSession()`, and welcome/sign-in
+UI polish.
+
+Owner action items:
+
+1. **Live-fire the NIP-46 QR with Amber** on bitlogin.network (flow was
+   verified against a fake bunker in tests, not yet against a real phone
+   signer end-to-end).
+2. **Live-fire passkey sign-in on a real device** (Chrome + Google Password
+   Manager, and once on iOS Safari). PRF cannot be exercised in CI; the
+   ceremony paths are untested against real authenticators.
+3. **Passkey derivation is a new compatibility contract** —
+   `packages/widget/src/passkey.test.ts` known-answer vectors carry the
+   same never-update-the-expected-value rule as `knownAnswer.test.ts`.
+4. NIP-46 credential *persistence* (vault record) stays gated on the
+   external security review, as before.
 
 ## Entropy audit (2026-07-31)
 

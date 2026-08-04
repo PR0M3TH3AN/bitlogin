@@ -57,9 +57,23 @@ must be deployed side by side — the main script resolves the worker's URL at
 runtime relative to its own location, so this works from any path, not just
 the site root.
 
+The widget is a complete login surface, not just the password flow: behind
+"More sign-in options" it also offers a NIP-07 signer extension (when one is
+detected), a NIP-46 remote signer (bunker:// paste or a scannable
+nostrconnect QR for phone signers like Amber), a passkey (WebAuthn PRF —
+zero site setup, the passkey deterministically derives the account
+credential), §SF10 key import, and phrase recovery. The `bitlogin-login`
+event reports `detail.method` (`'bitlogin' | 'nip07' | 'nip46'`) and
+`detail.capabilities`, and `window.bitlogin.activeMethod()` /
+`activeSession()` answer session state for every method. See
+`docs/login-methods.md` and `docs/passkey-login.md`.
+
 Once a user signs in, `window.nostr` is installed with the de facto NIP-07
 shape (`getPublicKey`, `signEvent`, `getRelays`, `nip44.encrypt/decrypt`), so
-existing Nostr web apps work against it unmodified. Private keys are held in
+existing Nostr web apps work against it unmodified — routed to whichever
+signer backs the session (the worker for password/passkey accounts, the
+worker-held NIP-46 client for remote-signer sessions; NIP-07 sessions leave
+the slot to the extension that owns it). Private keys are held in
 the worker and are not handed to the main thread by the signing APIs — those
 return public keys, signed events, and ciphertext only.
 
@@ -358,8 +372,10 @@ HKDF, ScalarExpand, AES-256-GCM, JCS, fixed padding buckets).
 
 - Phase 2 messaging (NIP-17 inbox/compose) — the NIP-44 primitive is built
   and tested, but no conversation UI is wired up.
-- Phase 3 application redirect-auth flow (§26.3) and NIP-46/NIP-07 browser
-  extension interop beyond the `window.nostr` shim.
+- Phase 3 application redirect-auth flow (§26.3). (NIP-07 and NIP-46
+  sign-in, anticipated by §26.4, shipped 2026-08-04 — see
+  `docs/login-methods.md`; NIP-46 credential *persistence* stays gated on
+  the external vault review.)
 - NIP-49 `ncryptsec` export (§28.2) — deliberately left out rather than
   shipped unverified against official test vectors; plain `nsec`/`npub`
   (NIP-19) export is implemented instead.

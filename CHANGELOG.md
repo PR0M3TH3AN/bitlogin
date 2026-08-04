@@ -6,6 +6,36 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-08-04
+
+- **CSP fix every self-hosting site needs: add `'wasm-unsafe-eval'` to
+  `script-src`.** Argon2id (hash-wasm) compiles a WASM module in the crypto
+  worker; a `script-src 'self'` policy without that keyword blocks
+  `WebAssembly.compile` and breaks every password flow. The keyword permits
+  WASM compilation only — JS `eval` stays banned. Related: if your service
+  worker precaches the widget, fetch with `cache: "reload"` during install —
+  an asset revalidating to a 304 keeps its OLD stored headers, and a worker
+  script cached with a stale CSP runs under that stale policy (this shipped
+  once; see the demo's `sw.js` for the pattern).
+- **One login surface, four methods.** Behind a collapsed "More sign-in
+  options" menu (password stays primary): NIP-07 extension delegation,
+  NIP-46 remote signers (bunker:// paste + a dot-style nostrconnect QR;
+  NIP-44 transport only; memory-only sessions), and passkey sign-in
+  (WebAuthn PRF derives the account credential under a frozen contract —
+  zero site setup). Alternative-method sessions are signer-only: no vault
+  (`requestNwcConnection` resolves null), no persistence.
+- **Host API additions.** `bitlogin-login` now carries `detail.method` and
+  `detail.capabilities` (existing `detail.publicKey` unchanged);
+  `window.bitlogin` gains `activeMethod()` / `activeSession()` — use these
+  for session state, NOT `isActiveSigner()`, which stays a window.nostr
+  ownership check and is deliberately false during NIP-07 sessions.
+  `window.nostr` is now an element-routed provider that follows the active
+  signer.
+- **UI polish.** Screen headers with icon back buttons, right-aligned
+  "Forgot password?", icon+description option rows with 56px touch targets.
+- New widget dependency bundled in: `qrcode-generator` (QR for
+  nostrconnect). File count and deployment layout unchanged.
+
 ## 2026-07-30
 
 - **Widget: `requestNwcConnection()` — the Connection Vault authorization

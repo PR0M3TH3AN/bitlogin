@@ -40,14 +40,7 @@ deployment above.
   per-credential); passkeys are per-site (rpId) -- cross-site portability
   is the capsule account's job. Rotating the password is the graduation
   step to fully self-held. Requires a PRF-capable browser/authenticator;
-  the widget shows an honest fallback message otherwise. The service acts as the password manager for a REAL
-  capsule account (it holds the unlock secret, never the key); rows render
-  under "Use an account you already have" with the custody statement
-  ("<Service> manages your sign-in") as the sub-label, new users can create
-  a fresh identity or import an existing nsec, and the dashboard nudges
-  toward claiming the recovery phrase ("Secure your account"). Hosts must
-  add the service origin to CSP connect-src. Contract and threat model:
-  docs/centralized-onramps.md.
+  the widget shows an honest fallback message otherwise.
 - One login surface, several methods: if the visitor's browser has a NIP-07
   signer extension, the welcome screen offers "Use your Nostr extension
   instead" below the primary username/password path, and every visitor gets
