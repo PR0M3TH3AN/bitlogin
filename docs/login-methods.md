@@ -59,6 +59,11 @@ never needs a login UI other than BitLogin, and BitLogin's security story —
 *no method ever puts a root key on the page* — holds across every method it
 offers (§LM6).
 
+A fourth family of methods — clearly labeled centralized OAuth on-ramps
+(Google, GitHub, …) that manage the credential while the account stays a
+standard capsule account — is designed separately in
+[`centralized-onramps.md`](./centralized-onramps.md).
+
 # LM3. Architecture: one facade, pluggable signers
 
 The widget already exposes a NIP-07-shaped provider — installed as

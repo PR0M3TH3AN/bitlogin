@@ -12,9 +12,13 @@ for compatible applications.
 
 - [`spec.md`](./spec.md) — canonical BitLogin protocol specification
 - [`second-factor.md`](./second-factor.md) — second-factor design notes
-- [`login-methods.md`](./login-methods.md) — proposal: the widget as the single
-  login surface, adding NIP-07 and NIP-46 sign-in behind the existing
-  provider facade (nsec-paste login rejected on the record)
+- [`login-methods.md`](./login-methods.md) — the widget as the single login
+  surface: NIP-07 and NIP-46 sign-in behind the existing provider facade
+  (implemented; nsec-paste login rejected on the record)
+- [`centralized-onramps.md`](./centralized-onramps.md) — proposal: clearly
+  labeled OAuth sign-in (Google, GitHub, …) as a fourth method, with OAuth as
+  a password manager for a real capsule account and a graduation ladder to
+  self-custody that keeps the same npub
 
 ## Portable account layer
 
