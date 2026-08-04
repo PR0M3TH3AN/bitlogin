@@ -67,36 +67,28 @@ describe("widget security policy", () => {
     }
   });
 
-  it("centralized on-ramp rows carry the custody label and live inside the menu", () => {
-    // §CO7: the sub-label IS the custody statement, rendered from the
-    // host-configured service name -- and the rows exist nowhere else.
+  it("the passkey row lives inside the menu with an honest custody label", () => {
+    // docs/passkey-login.md: zero registration, zero servers -- and the
+    // OAuth on-ramps that preceded it stay removed (owner decision
+    // 2026-08-04: static only, no per-site provider registration).
     const menuStart = widgetSource.indexOf('`<div class="option-menu">');
     const menuEnd = widgetSource.indexOf("</div>`", menuStart);
     const menu = widgetSource.slice(menuStart, menuEnd);
-    expect(menu).toContain("${onrampRows}");
-    expect(widgetSource).toContain("manages your sign-in</span>");
-    // One rendering site (the onrampRows template) + one onClick case.
-    expect(widgetSource.split('"onramp-signin"').length - 1).toBe(2);
-    // Same for the serverless Google row (§CO3.3), whose sub-label states the
-    // stronger custody fact: the credential lives in the user's own Drive.
-    expect(menu).toContain("${googleRow}");
-    expect(widgetSource).toContain("Your sign-in key stays in your own Google Drive");
-    expect(widgetSource.split('"google-signin"').length - 1).toBe(2);
-    // The group heading is the owner-chosen wording.
+    expect(menu).toContain("${passkeyRow}");
+    expect(widgetSource).toContain("Kept in your phone or browser's password manager");
     expect(menu).toContain(">Use an account you already have</div>");
+    for (const removed of ["onramp-signin", "google-signin", "onramp-url", "googleapis"]) {
+      expect(widgetSource).not.toContain(removed);
+    }
   });
 
   it("keeps all network I/O out of the element", () => {
-    // The element orchestrates; every network call lives in an auditable
-    // module (worker RPC, onramp.ts, driveOnramp.ts) where its destination
-    // is constrained -- Drive tokens and passwords must never ride an
-    // ad-hoc fetch added to UI code.
+    // The element orchestrates; network lives behind the worker RPC where
+    // destinations are constrained. The passkey rail needs NO network of its
+    // own -- the credential is derived, not fetched.
     expect(widgetSource).not.toContain("fetch(");
-    const driveSource = readFileSync(new URL("./driveOnramp.ts", import.meta.url), "utf8");
-    // Drive I/O only ever targets the two Google API base constants.
-    expect(driveSource).toContain('GOOGLE_DRIVE_API = "https://www.googleapis.com/drive/v3"');
-    expect(driveSource.match(/fetchImpl\(`\$\{GOOGLE_DRIVE(?:_UPLOAD)?_API\}/gu)!.length).toBe(3);
-    expect(driveSource.match(/fetchImpl\(/gu)!.length).toBe(3);
+    const passkeySource = readFileSync(new URL("./passkey.ts", import.meta.url), "utf8");
+    expect(passkeySource).not.toContain("fetch");
   });
 
   it("treats the bunker URI as a secret and keeps the element storage-free", () => {

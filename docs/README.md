@@ -15,10 +15,13 @@ for compatible applications.
 - [`login-methods.md`](./login-methods.md) — the widget as the single login
   surface: NIP-07 and NIP-46 sign-in behind the existing provider facade
   (implemented; nsec-paste login rejected on the record)
-- [`centralized-onramps.md`](./centralized-onramps.md) — proposal: clearly
-  labeled OAuth sign-in (Google, GitHub, …) as a fourth method, with OAuth as
-  a password manager for a real capsule account and a graduation ladder to
-  self-custody that keeps the same npub
+- [`passkey-login.md`](./passkey-login.md) — passkey sign-in via the WebAuthn
+  PRF extension (implemented): zero registration, zero servers, a frozen
+  derivation contract, and the graduation ladder to self-custody
+- [`centralized-onramps.md`](./centralized-onramps.md) — superseded, kept on
+  the record: the OAuth on-ramp designs (external service, serverless Google
+  Drive) and the analysis of why OAuth cannot be static without per-site
+  provider registration — the requirement that led to the passkey rail
 
 ## Portable account layer
 

@@ -28,18 +28,19 @@ deployment above.
 - A `<bitlogin-auth>` custom element (Shadow DOM, no CSS collisions) handling
   create account, sign in, forgot-password recovery via a 12-word phrase, and
   password rotation.
-- Serverless "Continue with Google" (`onramp-google-client-id` attribute):
-  NO server anywhere -- the credential of a standard capsule account lives
-  in the user's own Google Drive app data, readable only through the host's
-  OAuth client ID. The host registers the widget page's exact URL as the
-  OAuth redirect URI (the page relays the token to its opener itself; no
-  callback artifact) and adds https://www.googleapis.com to connect-src.
-  Scope is drive.appdata only. Rotating the password is the graduation
-  step: the Drive copy goes stale and the user holds the credential.
-- Optional centralized on-ramps ("Continue with GitHub/Facebook/..." via an
-  external service): a host may point the widget at an OAuth unlock service
-  via `onramp-url`, `onramp-name`, and `onramp-providers` attributes --
-  nothing centralized ships by default. The service acts as the password manager for a REAL
+- "Continue with a passkey": zero site setup, zero servers, zero
+  registration with any provider. A WebAuthn PRF-capable passkey (synced
+  for most users by Google Password Manager or iCloud Keychain)
+  deterministically derives the login name + password of a standard capsule
+  account (frozen v1 contract in the widget's passkey.ts); the ordinary
+  password flows do the rest, and nothing is stored outside the user's own
+  authenticator. Synced passkeys survive device loss; losing the PLATFORM
+  account is recovered by the 12-word phrase, which the dashboard nudges
+  users to claim right after signup. One passkey = one account (PRF is
+  per-credential); passkeys are per-site (rpId) -- cross-site portability
+  is the capsule account's job. Rotating the password is the graduation
+  step to fully self-held. Requires a PRF-capable browser/authenticator;
+  the widget shows an honest fallback message otherwise. The service acts as the password manager for a REAL
   capsule account (it holds the unlock secret, never the key); rows render
   under "Use an account you already have" with the custody statement
   ("<Service> manages your sign-in") as the sub-label, new users can create

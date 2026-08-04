@@ -59,9 +59,11 @@ never needs a login UI other than BitLogin, and BitLogin's security story —
 *no method ever puts a root key on the page* — holds across every method it
 offers (§LM6).
 
-A fourth family of methods — clearly labeled centralized OAuth on-ramps
-(Google, GitHub, …) that manage the credential while the account stays a
-standard capsule account — is designed separately in
+A fourth method — passkey sign-in, where a WebAuthn PRF-capable passkey
+(synced by the user's Google/Apple account) deterministically derives the
+credential of a standard capsule account with zero site setup and zero
+servers — is designed in [`passkey-login.md`](./passkey-login.md). The OAuth
+on-ramps considered before it are superseded and kept on the record in
 [`centralized-onramps.md`](./centralized-onramps.md).
 
 # LM3. Architecture: one facade, pluggable signers

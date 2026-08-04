@@ -1,10 +1,19 @@
 # Centralized On-Ramps — OAuth Sign-In as a Journey Toward Self-Custody
 
-**Document version:** 0.3
-**Status:** **§CO3.3 (serverless Google, provider storage) is implemented
-end to end** — it needs no service, so nothing remains to build for it
-beyond a host registering an OAuth client ID. The **widget side of §CO5 is
-implemented** (2026-08-04):
+**Document version:** 0.4
+**Status:** **SUPERSEDED — kept on the record.** All OAuth on-ramp
+implementations described below (the §CO5 service handshake and the §CO3.3
+serverless Google Drive rail) were **removed on 2026-08-04**, the same day
+they shipped, by owner decision: every OAuth path requires per-site
+provider registration (and for GitHub/Facebook, a server), which fails the
+"static only, zero setup" requirement. The replacement is
+[`passkey-login.md`](./passkey-login.md) — zero registration, zero servers,
+custody still landing in the user's Google/Apple account via passkey sync.
+What survives from this document: the journey framing (§CO6 graduation,
+§CO7 honesty contract, Tier B2 phrase handling) all carried over to the
+passkey rail, and the architecture analysis below remains the reference for
+why OAuth cannot be done statically without a registered client.
+Historical status at removal: the widget side of §CO5 was implemented
 `onramp-url` / `onramp-name` / `onramp-providers` attributes, the popup
 handshake below, "Continue with <Provider>" rows under the "Use an account
 you already have" group (§CO11.1 resolved: that heading covers the whole
