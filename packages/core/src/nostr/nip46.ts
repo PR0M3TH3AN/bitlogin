@@ -33,6 +33,9 @@ import { wipe } from "../crypto/memory.js";
 
 const HEX64 = /^[0-9a-f]{64}$/u;
 
+/** Ceiling on relays taken from a bunker:// URI (BL-21). */
+const MAX_BUNKER_RELAYS = 8;
+
 export interface BunkerPointer {
   signerPubkey: string;
   relayUrls: string[];
@@ -93,10 +96,17 @@ export function parseBunkerUri(uri: string): BunkerPointer {
   if (!HEX64.test(signerPubkey)) {
     throw new BunkerUriParseError("The bunker URI does not name a valid signer public key.");
   }
-  const relayUrls = url.searchParams
-    .getAll("relay")
-    .map((value) => value.trim())
-    .filter(Boolean);
+  // Deduplicate and CAP: the URI is untrusted input, and each relay becomes
+  // a live WebSocket -- a crafted 5,000-relay URI must not become 5,000
+  // sockets (BL-21). Nobody legitimate needs more than a handful.
+  const relayUrls = [
+    ...new Set(
+      url.searchParams
+        .getAll("relay")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+  ].slice(0, MAX_BUNKER_RELAYS);
   if (relayUrls.length === 0) {
     throw new BunkerUriParseError(
       "The bunker URI names no relays -- without at least one relay= parameter there is no way to reach the signer."
@@ -348,6 +358,38 @@ export class Nip46Client {
     return this.rpc("nip04_decrypt", [peerPublicKey, payload]);
   }
 
+  /**
+   * Courtesy logout per current NIP-46 -- explicitly not a security boundary
+   * (the signer revokes authorization on its own side); best-effort, bounded,
+   * and never allowed to block or fail teardown. Call before close().
+   */
+  async logout(timeoutMs = 2000): Promise<void> {
+    if (this.closed) return;
+    try {
+      const id = bytesToHex(randomBytes(8));
+      const content = nip44Encrypt(
+        this.conversationKey,
+        JSON.stringify({ id, method: "logout", params: [] })
+      );
+      const event = signNostrEvent(
+        {
+          pubkey: this.clientPubkey,
+          created_at: Math.floor(Date.now() / 1000),
+          kind: KIND_NOSTR_CONNECT,
+          tags: [["p", this.pointer.signerPubkey]],
+          content
+        },
+        this.clientSecretKey
+      );
+      await Promise.race([
+        Promise.allSettled(this.conns.map((conn) => conn.publish(event))),
+        new Promise((resolve) => setTimeout(resolve, timeoutMs))
+      ]);
+    } catch {
+      // Courtesy only.
+    }
+  }
+
   close(): void {
     this.closed = true;
     for (const sub of this.subs) sub.close();
@@ -378,6 +420,10 @@ export async function listenForNostrconnect(options: {
   relayUrls: string[];
   secret: string;
   timeoutMs?: number;
+  /** Cancels the listen (superseded attempt, user backed out, disconnect):
+   *  connections close and the promise rejects promptly instead of running
+   *  out its full window (BL-22). */
+  signal?: AbortSignal;
 }): Promise<{ signerPubkey: string }> {
   const clientPubkey = getPublicKeyHex(options.clientSecretKey);
   const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
@@ -390,10 +436,12 @@ export async function listenForNostrconnect(options: {
 
   return new Promise<{ signerPubkey: string }>((resolve, reject) => {
     let settled = false;
+    const onAbort = () => settle(new Error("The signer-connection attempt was cancelled."));
     const settle = (outcome: { signerPubkey: string } | Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
       closeAll();
       if (outcome instanceof Error) reject(outcome);
       else resolve(outcome);
@@ -407,17 +455,26 @@ export async function listenForNostrconnect(options: {
         ),
       timeoutMs
     );
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    options.signal?.addEventListener("abort", onAbort, { once: true });
 
     const filter = { kinds: [KIND_NOSTR_CONNECT], "#p": [clientPubkey] };
     const onEvent = (event: NostrEvent) => {
       // The sender is unknown until the secret verifies, so the conversation
-      // key is derived per candidate event.
+      // key is derived per candidate event -- and wiped per candidate, not
+      // left to garbage collection (§11.10, BL-22).
       let payload: { result?: unknown };
+      let conversationKey: Uint8Array | null = null;
       try {
-        const conversationKey = getConversationKey(options.clientSecretKey, event.pubkey);
+        conversationKey = getConversationKey(options.clientSecretKey, event.pubkey);
         payload = JSON.parse(nip44Decrypt(conversationKey, event.content)) as typeof payload;
       } catch {
         return;
+      } finally {
+        if (conversationKey) wipe(conversationKey);
       }
       if (payload.result === options.secret) settle({ signerPubkey: event.pubkey });
     };

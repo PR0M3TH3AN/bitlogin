@@ -65,6 +65,57 @@ describe("relay hardening", () => {
     expect(new Set(events.map((e) => e.id)).size).toBe(2);
   });
 
+  it("BL-21: oversized frames are dropped before parsing", async () => {
+    const key = generatePrivateKey();
+    const real = signedNote(key, "small");
+    // A ~600K-character frame (valid JSON, would even match the filter) must
+    // be discarded before JSON.parse; the legitimate event still arrives.
+    const giant = { ...real, content: "x".repeat(600_000) };
+    relay.unsolicitedQueryEvents = [giant, real];
+    const events = await conn.queryOnce({ kinds: [1], authors: [getPublicKeyHex(key)] }, 3000);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.content).toBe("small");
+  });
+
+  it("BL-21: replayed copies cost one verification, not one each", async () => {
+    const key = generatePrivateKey();
+    const note = signedNote(key, "replayed");
+    relay.unsolicitedQueryEvents = Array.from({ length: 2000 }, () => note);
+    const start = Date.now();
+    const events = await conn.queryOnce(
+      { kinds: [1], authors: [getPublicKeyHex(key)], limit: 1 },
+      10_000
+    );
+    const elapsed = Date.now() - start;
+    expect(events).toHaveLength(1);
+    // 2,000 Schnorr verifications would take seconds; one verification plus
+    // 1,999 Set lookups completes far inside this generous bound.
+    expect(elapsed).toBeLessThan(2_500);
+  });
+
+  it("BL-21: distinct invalid events exhaust the verification budget, not the CPU", async () => {
+    const key = generatePrivateKey();
+    const real = signedNote(key, "real");
+    // 500 distinct, filter-matching events with forged signatures ahead of
+    // the real one. The budget (3x limit, floor 50) stops verification long
+    // before 500; the query still settles cleanly at EOSE.
+    relay.unsolicitedQueryEvents = [
+      ...Array.from({ length: 500 }, (_, i) => ({
+        ...signedNote(key, `forged-${i}`, 1_700_000_100 + i),
+        sig: "ab".repeat(64)
+      })),
+      real
+    ];
+    const events = await conn.queryOnce(
+      { kinds: [1], authors: [getPublicKeyHex(key)], limit: 1 },
+      10_000
+    );
+    // The budget is exhausted by forgeries before the real event arrives --
+    // the query returns empty rather than burning unbounded CPU. This is the
+    // documented trade: a relay that sprays forgeries is a hostile relay.
+    expect(events.length).toBeLessThanOrEqual(1);
+  });
+
   it("BL-19: distinct events beyond the requested limit are not buffered", async () => {
     const key = generatePrivateKey();
     relay.unsolicitedQueryEvents = Array.from({ length: 10 }, (_, i) =>

@@ -35,6 +35,13 @@ describe("parseBunkerUri", () => {
     expect(parsed.secret).toBeUndefined();
   });
 
+  it("caps and deduplicates relays from a crafted URI (audit BL-21)", () => {
+    const relays = Array.from({ length: 5000 }, (_, i) => `relay=wss://r${i % 20}.example`).join("&");
+    const parsed = parseBunkerUri(`bunker://${SIGNER_HEX}?${relays}`);
+    expect(parsed.relayUrls.length).toBe(8);
+    expect(new Set(parsed.relayUrls).size).toBe(8);
+  });
+
   it("rejects wrong schemes, bad pubkeys, and relay-less URIs", () => {
     expect(() => parseBunkerUri(`nostrconnect://${SIGNER_HEX}?relay=wss://x.example`)).toThrow(
       /bunker:\/\//
@@ -405,5 +412,45 @@ describe("listenForNostrconnect", () => {
         timeoutMs: 300
       })
     ).rejects.toThrow(/No signer connected/);
+  });
+
+  it("an AbortSignal cancels the listen promptly (audit BL-22)", async () => {
+    const controller = new AbortController();
+    const pending = listenForNostrconnect({
+      clientSecretKey: generatePrivateKey(),
+      relayUrls: [relay.url],
+      secret: "s",
+      timeoutMs: 60_000,
+      signal: controller.signal
+    });
+    setTimeout(() => controller.abort(), 100);
+    const start = Date.now();
+    await expect(pending).rejects.toThrow(/cancelled/);
+    expect(Date.now() - start).toBeLessThan(5_000);
+  });
+});
+
+describe("courtesy logout", () => {
+  it("sends the protocol logout to the signer on teardown (audit BL-24)", async () => {
+    const relay = await MockRelay.start();
+    const bunker = new FakeBunker(relay.url);
+    await bunker.start();
+    const client = new Nip46Client({
+      clientSecretKey: generatePrivateKey(),
+      pointer: { signerPubkey: bunker.signerPubkey, relayUrls: [relay.url] },
+      requestTimeoutMs: 5000
+    });
+    await client.connect();
+    await client.logout();
+    client.close();
+    // FakeBunker records every decrypted request it receives; its processing
+    // is asynchronous relative to the publish OK, so poll briefly.
+    const deadline = Date.now() + 2000;
+    while (!bunker.seen.some((r) => r.method === "logout") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(bunker.seen.some((r) => r.method === "logout")).toBe(true);
+    bunker.close();
+    await relay.close();
   });
 });

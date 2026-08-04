@@ -56,6 +56,19 @@ export interface RelayConnectionOptions {
  *  are single-digit result sets). */
 const MAX_BUFFERED_EVENTS = 1000;
 
+/** Frame-size ceiling (UTF-16 code units) applied before JSON.parse. The
+ *  largest legitimate BitLogin events (padded capsules, recovery payloads)
+ *  sit far below this. */
+const MAX_MESSAGE_CHARS = 262_144;
+
+/** How many signature verifications one buffered query will pay for before
+ *  writing the relay off as hostile. Scales with the requested limit; the
+ *  floor covers replaceable-event churn on tiny queries. */
+function verifyBudgetFor(filter: NostrFilter): number {
+  const cap = Math.min(filter.limit ?? MAX_BUFFERED_EVENTS, MAX_BUFFERED_EVENTS);
+  return Math.max(50, cap * 3);
+}
+
 export class RelayConnection {
   readonly url: string;
   private ws: WebSocketLike | null = null;
@@ -66,6 +79,9 @@ export class RelayConnection {
       events: NostrEvent[];
       /** Ids already buffered, for replay dedup (buffered queries only). */
       seenIds: Set<string>;
+      /** Remaining signature verifications this subscription will pay for;
+       *  Infinity for live subscriptions (BL-21). */
+      verifyBudget: number;
       filter: NostrFilter;
       onEose: () => void;
       /** Present on live subscriptions (subscribeLive): each verified,
@@ -138,6 +154,11 @@ export class RelayConnection {
   }
 
   private handleMessage(raw: string): void {
+    // Size ceiling BEFORE parsing: an adversarial relay must not buy a large
+    // JSON.parse (let alone verification) with an oversized frame (BL-21).
+    // Generously above the largest legitimate BitLogin event; relays
+    // themselves commonly cap frames well below this.
+    if (raw.length > MAX_MESSAGE_CHARS) return;
     let msg: unknown;
     try {
       msg = JSON.parse(raw);
@@ -151,27 +172,28 @@ export class RelayConnection {
       const [subId, event] = rest;
       if (typeof subId !== "string") return;
       const sub = this.subs.get(subId);
+      if (!sub) return;
       // Relays are untrusted and are not entitled to define the result set.
       // Verify both the event and the full requested NIP-01 filter centrally;
       // callers may still re-check security-sensitive identity constraints.
-      if (
-        sub &&
-        verifyNostrEvent(event) &&
-        matchesNostrFilter(event, sub.filter)
-      ) {
-        if (sub.onEvent) {
-          sub.onEvent(event);
-        } else {
-          // Relays are untrusted: enforce the requested limit and a global
-          // ceiling LOCALLY, and drop replayed duplicates, so an adversarial
-          // relay cannot amplify memory/CPU by spraying copies before EOSE.
-          if (sub.seenIds.has(event.id)) return;
-          const cap = Math.min(sub.filter.limit ?? MAX_BUFFERED_EVENTS, MAX_BUFFERED_EVENTS);
-          if (sub.events.length >= cap) return;
-          sub.seenIds.add(event.id);
-          sub.events.push(event);
-        }
+      if (sub.onEvent) {
+        if (verifyNostrEvent(event) && matchesNostrFilter(event, sub.filter)) sub.onEvent(event);
+        return;
       }
+      // Buffered query: every CHEAP check runs before Schnorr verification,
+      // so replayed or over-limit spam cannot buy signature checks (BL-21).
+      // Replayed copies of an accepted id cost one Set lookup; events past
+      // capacity cost nothing; and a hostile relay spraying distinct invalid
+      // events runs out of verification budget rather than our CPU.
+      const claimedId = (event as { id?: unknown } | null | undefined)?.id;
+      if (typeof claimedId !== "string" || sub.seenIds.has(claimedId)) return;
+      const cap = Math.min(sub.filter.limit ?? MAX_BUFFERED_EVENTS, MAX_BUFFERED_EVENTS);
+      if (sub.events.length >= cap) return;
+      if (sub.verifyBudget <= 0) return;
+      sub.verifyBudget--;
+      if (!verifyNostrEvent(event) || !matchesNostrFilter(event, sub.filter)) return;
+      sub.seenIds.add(event.id);
+      sub.events.push(event);
       return;
     }
     if (type === "EOSE") {
@@ -254,7 +276,7 @@ export class RelayConnection {
   ): Promise<{ close: () => void }> {
     await this.connect();
     const subId = bytesToHex(randomBytes(8));
-    this.subs.set(subId, { events: [], seenIds: new Set(), filter, onEose: () => {}, onEvent });
+    this.subs.set(subId, { events: [], seenIds: new Set(), verifyBudget: Number.POSITIVE_INFINITY, filter, onEose: () => {}, onEvent });
     this.send(["REQ", subId, filter]);
     return {
       close: () => {
@@ -311,7 +333,7 @@ export class RelayConnection {
           ),
         timeoutMs,
       );
-      this.subs.set(subId, { events, seenIds: new Set(), filter, onEose: () => settle() });
+      this.subs.set(subId, { events, seenIds: new Set(), verifyBudget: verifyBudgetFor(filter), filter, onEose: () => settle() });
       this.send(["REQ", subId, filter]);
     });
   }

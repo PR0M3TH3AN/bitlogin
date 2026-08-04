@@ -250,7 +250,12 @@ async function findConnection(connectionId: string): Promise<{
 // no vault, and nothing persisted. The ephemeral client key never leaves this
 // worker (§LM5.4); close() ends everything.
 let nip46: { client: Nip46Client; userPubkey: string } | null = null;
-let nostrconnectPending: { clientSecretKey: Uint8Array; relayUrls: string[]; secret: string } | null = null;
+let nostrconnectPending: {
+  clientSecretKey: Uint8Array;
+  relayUrls: string[];
+  secret: string;
+  abort: AbortController;
+} | null = null;
 
 function postAuthUrlNotification(url: string): void {
   (self as unknown as Worker).postMessage({ notify: "nip46-auth-url", url });
@@ -261,8 +266,29 @@ function requireNip46(): { client: Nip46Client; userPubkey: string } {
   return nip46;
 }
 
+/** Ends a superseded or abandoned nostrconnect attempt for real (BL-22):
+ *  the active listener is cancelled and the pending ephemeral key wiped --
+ *  never merely dereferenced. NOT used when the key's ownership transfers
+ *  into an adopted Nip46Client. */
+function discardNostrconnectPending(): void {
+  if (!nostrconnectPending) return;
+  nostrconnectPending.abort.abort();
+  wipe(nostrconnectPending.clientSecretKey);
+  nostrconnectPending = null;
+}
+
+/** Retires a previous session with the courtesy protocol logout (current
+ *  NIP-46 defines it as exactly that -- not a security boundary), then
+ *  closes it, which wipes its keys. */
+function retireNip46Client(client: Nip46Client): void {
+  void client
+    .logout()
+    .catch(() => {})
+    .finally(() => client.close());
+}
+
 function adoptNip46Client(client: Nip46Client, userPubkey: string): void {
-  nip46?.client.close();
+  if (nip46) retireNip46Client(nip46.client);
   nip46 = { client, userPubkey };
 }
 
@@ -280,6 +306,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         await client.connect();
         const userPubkey = await client.getUserPublicKey();
         adoptNip46Client(client, userPubkey);
+        // The paste leg won; a QR listener still waiting is superseded.
+        discardNostrconnectPending();
         return { userPubkey };
       } catch (err) {
         client.close();
@@ -294,11 +322,14 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       // harder for a phone camera to lock onto. NIP-46 needs one shared
       // relay; the second is the redundancy.
       const relayUrls = vaultRelayUrls.slice(0, 2);
+      // A fresh attempt supersedes any prior one: cancel its listener and
+      // wipe its key rather than orphaning them (BL-22).
+      discardNostrconnectPending();
       const clientSecretKey = generatePrivateKey();
       // The secret is the proof-of-scan: whoever echoes it back becomes this
       // session's signer, so it gets real entropy, not a friendly string.
       const secret = bytesToHex(randomBytes(16));
-      nostrconnectPending = { clientSecretKey, relayUrls, secret };
+      nostrconnectPending = { clientSecretKey, relayUrls, secret, abort: new AbortController() };
       const uri = buildNostrconnectUri({
         clientPubkey: getPublicKeyHex(clientSecretKey),
         relayUrls,
@@ -316,9 +347,12 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         clientSecretKey: pending.clientSecretKey,
         relayUrls: pending.relayUrls,
         secret: pending.secret,
-        timeoutMs: 180_000
+        timeoutMs: 180_000,
+        signal: pending.abort.signal
       });
       if (nostrconnectPending !== pending) throw new Error("This signer-connection attempt was superseded.");
+      // Ownership of the ephemeral key transfers into the client below --
+      // dereference only; discardNostrconnectPending would wipe it.
       nostrconnectPending = null;
       const client = new Nip46Client({
         clientSecretKey: pending.clientSecretKey,
@@ -368,9 +402,10 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "nip46Disconnect": {
-      nip46?.client.close();
+      const active = nip46;
       nip46 = null;
-      nostrconnectPending = null;
+      discardNostrconnectPending();
+      if (active) retireNip46Client(active.client);
       return {};
     }
 

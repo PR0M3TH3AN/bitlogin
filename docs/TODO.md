@@ -28,9 +28,18 @@ signed events against the request (signature, identity, field equality);
 `Nip46Client.close()` wipes the client and conversation keys; passkey
 labels are distinguishable; postcss ≥8.5.25; Actions pinned to commit SHAs.
 
-Deferred from the audit, non-security interop items: NIP-46 protocol-level
-logout on teardown (no stable method name across deployed signers) and the
-recommended `switch_relays` request.
+Second-pass response (same day): BL-21 — bunker relays capped at 8 and
+deduplicated; relay frames over 256K chars dropped before JSON.parse; all
+cheap checks (id dedup, capacity) run before Schnorr verification, plus a
+per-query verification budget. BL-22 — superseded/abandoned nostrconnect
+attempts are cancelled via AbortSignal and their ephemeral keys wiped
+(ownership transfers, not dangles, on success); per-candidate conversation
+keys wiped in a finally. BL-23 — `security:ci` now runs the custom Semgrep
+rules (`security:semgrep`; requires a local semgrep install, same pin as
+CI). BL-24 — the courtesy protocol `logout` (current NIP-46 defines it,
+explicitly not a security boundary) is now sent on teardown; this corrects
+the earlier "no stable method name" note. Still deferred, interop only:
+`switch_relays`.
 
 Owner action items:
 
