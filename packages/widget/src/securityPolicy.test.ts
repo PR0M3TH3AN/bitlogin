@@ -79,6 +79,16 @@ describe("widget security policy", () => {
     expect(headers.get("Content-Security-Policy")).toContain(
       "frame-ancestors 'none'",
     );
+    // Argon2id (hash-wasm) compiles a WASM module inside the crypto worker;
+    // script-src without 'wasm-unsafe-eval' blocks WebAssembly.compile and
+    // breaks every password flow on the deployed site. The keyword permits
+    // WASM compilation ONLY -- plain 'unsafe-eval' (JS eval) must stay out.
+    expect(headers.get("Content-Security-Policy")).toContain(
+      "script-src 'self' 'wasm-unsafe-eval'",
+    );
+    expect(headers.get("Content-Security-Policy")).not.toContain(
+      " 'unsafe-eval'",
+    );
     for (const required of [
       "X-Content-Type-Options",
       "Referrer-Policy",
