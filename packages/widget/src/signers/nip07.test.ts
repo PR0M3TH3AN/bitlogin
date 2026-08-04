@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { signNostrEvent } from "@bitlogin/core/nostr";
+import { generatePrivateKey, getPublicKeyHex } from "@bitlogin/core/crypto";
 import { detectForeignNip07Provider, Nip07Signer, type ForeignNip07Provider } from "./nip07.js";
 import { SignerTimeoutError, SignerUnsupportedError } from "./types.js";
 
-const PUBKEY = "a".repeat(64);
+// A real key: the signer now VERIFIES what the "extension" returns, so the
+// fake must produce genuinely signed events.
+const EXTENSION_KEY = generatePrivateKey();
+const PUBKEY = getPublicKeyHex(EXTENSION_KEY);
 
 function fullProvider(overrides: Partial<ForeignNip07Provider> = {}): ForeignNip07Provider {
   return {
     getPublicKey: async () => PUBKEY,
-    signEvent: async (event) => ({
-      ...event,
-      id: "e".repeat(64),
-      pubkey: PUBKEY,
-      sig: "f".repeat(128)
-    }),
+    signEvent: async (event) => signNostrEvent({ ...event, pubkey: PUBKEY }, EXTENSION_KEY),
     getRelays: async () => ({}),
     nip44: {
       encrypt: async (peer, plaintext) => `nip44(${peer.slice(0, 4)},${plaintext})`,
@@ -90,7 +90,7 @@ describe("Nip07Signer delegation", () => {
       fullProvider({
         signEvent: async (event) => {
           seen = event;
-          return { ...event, id: "e".repeat(64), pubkey: PUBKEY, sig: "f".repeat(128) };
+          return signNostrEvent({ ...event, pubkey: PUBKEY }, EXTENSION_KEY);
         }
       })
     );
@@ -101,6 +101,32 @@ describe("Nip07Signer delegation", () => {
     await signer.signEvent({ kind: 1, content: "hello", tags: [["t", "x"]], created_at: 1234 });
     expect(seen!.tags).toEqual([["t", "x"]]);
     expect(seen!.created_at).toBe(1234);
+  });
+
+  it("rejects a returned event whose fields differ from the request", async () => {
+    const signer = new Nip07Signer(
+      fullProvider({
+        signEvent: async (event) =>
+          signNostrEvent({ ...event, pubkey: PUBKEY, content: "tampered" }, EXTENSION_KEY)
+      })
+    );
+    await expect(signer.signEvent({ kind: 1, content: "original" })).rejects.toThrow(
+      /different event/
+    );
+  });
+
+  it("rejects an event signed by a different identity than the session's", async () => {
+    const otherKey = generatePrivateKey();
+    const signer = new Nip07Signer(
+      fullProvider({
+        signEvent: async (event) =>
+          signNostrEvent({ ...event, pubkey: getPublicKeyHex(otherKey) }, otherKey)
+      })
+    );
+    await signer.getPublicKey(); // pins the session identity
+    await expect(signer.signEvent({ kind: 1, content: "x" })).rejects.toThrow(
+      /different identity/
+    );
   });
 
   it("passes nip44/nip04 calls through and surfaces the extension's own rejections", async () => {

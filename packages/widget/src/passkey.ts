@@ -59,8 +59,14 @@ export function passkeySupported(w: { PublicKeyCredential?: unknown } = window):
 }
 
 /** Options for the sign-in ceremony: discoverable credential, user
- *  verification required, PRF evaluated in the same step. */
-export function buildPasskeyGetOptions(rpId?: string): CredentialRequestOptions {
+ *  verification required, PRF evaluated in the same step.
+ *
+ *  `allowCredentialId` pins the assertion to ONE specific credential. It is
+ *  required for the post-creation PRF fallback: an unrestricted discovery
+ *  there would let the browser's account sheet offer OLDER passkeys, and a
+ *  user picking one would silently bind a different account than the passkey
+ *  they just created (audit BL-17). */
+export function buildPasskeyGetOptions(rpId?: string, allowCredentialId?: ArrayBuffer): CredentialRequestOptions {
   return {
     publicKey: {
       // The challenge protects sign-count/liveness in server-verified
@@ -68,6 +74,9 @@ export function buildPasskeyGetOptions(rpId?: string): CredentialRequestOptions 
       // is whether the derived credential opens the capsule. Random anyway.
       challenge: asBufferSource(randomBytes(32)),
       ...(rpId ? { rpId } : {}),
+      ...(allowCredentialId
+        ? { allowCredentials: [{ type: "public-key" as const, id: allowCredentialId }] }
+        : {}),
       userVerification: "required",
       extensions: { prf: { eval: { first: PASSKEY_PRF_SALT } } } as AuthenticationExtensionsClientInputs
     }
@@ -77,6 +86,10 @@ export function buildPasskeyGetOptions(rpId?: string): CredentialRequestOptions 
 /** Options for creating the passkey. Discoverable + user-verified, so later
  *  sign-ins need no username at all. */
 export function buildPasskeyCreateOptions(rpName: string, rpId?: string): CredentialCreationOptions {
+  // A short suffix so several BitLogin passkeys in one password manager are
+  // tellable apart (audit follow-up: identical names made multiple
+  // passkey-derived accounts indistinguishable in the credential sheet).
+  const label = `${rpName} (${bytesToHex(randomBytes(2))})`;
   return {
     publicKey: {
       challenge: asBufferSource(randomBytes(32)),
@@ -85,8 +98,8 @@ export function buildPasskeyCreateOptions(rpName: string, rpId?: string): Creden
         // Opaque handle; the account identity is DERIVED from the PRF, not
         // from this. Random so re-creates don't silently overwrite.
         id: asBufferSource(randomBytes(16)),
-        name: rpName,
-        displayName: rpName
+        name: label,
+        displayName: label
       },
       pubKeyCredParams: [
         { type: "public-key", alg: -7 }, // ES256

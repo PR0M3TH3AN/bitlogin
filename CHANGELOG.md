@@ -6,6 +6,18 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-08-04 (security-audit response, same day)
+
+- **External signers are now verified, not trusted.** NIP-07 and NIP-46
+  `signEvent` results are checked for a valid signature, the session's
+  identity, and field-for-field equality with the requested event; NIP-46
+  `auth_url` is surfaced only as a validated https URL with its hostname
+  shown. Relay queries enforce `filter.limit` locally, drop replayed
+  duplicates, cap buffering, and can no longer be stranded by a relay dying
+  mid-query. Passkey PRF fallback assertions are pinned to the
+  just-created credential. If your integration relied on an extension
+  returning altered events, that now errors — by design.
+
 ## 2026-08-04
 
 - **CSP fix every self-hosting site needs: add `'wasm-unsafe-eval'` to

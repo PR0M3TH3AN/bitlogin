@@ -9,7 +9,8 @@ import {
   Nip46Client,
   Nip46ErrorResponse,
   Nip46RequestTimeoutError,
-  parseBunkerUri
+  parseBunkerUri,
+  sanitizeAuthUrl
 } from "./nip46.js";
 import { getConversationKey, nip44Decrypt, nip44Encrypt } from "../crypto/nip44.js";
 import { generatePrivateKey, getPublicKeyHex } from "../crypto/secp256k1.js";
@@ -57,6 +58,32 @@ describe("buildNostrconnectUri", () => {
     expect(url.searchParams.getAll("relay")).toEqual(["wss://one.example", "wss://two.example"]);
     expect(url.searchParams.get("secret")).toBe("s3cret");
     expect(url.searchParams.get("name")).toBe("BitLogin");
+  });
+});
+
+describe("sanitizeAuthUrl", () => {
+  it("passes https and loopback-http, normalized", () => {
+    expect(sanitizeAuthUrl("https://approve.example/req?id=1")).toBe("https://approve.example/req?id=1");
+    expect(sanitizeAuthUrl("  https://approve.example ")).toBe("https://approve.example/");
+    expect(sanitizeAuthUrl("http://localhost:8080/ok")).toBe("http://localhost:8080/ok");
+    expect(sanitizeAuthUrl("http://127.0.0.1/ok")).toBe("http://127.0.0.1/ok");
+  });
+
+  it("rejects every active or non-https scheme and garbage", () => {
+    // eslint-disable-next-line no-script-url -- hostile input under test
+    for (const hostile of [
+      "javascript:alert(document.domain)",
+      "data:text/html,<script>alert(1)</script>",
+      "blob:https://x.example/abc",
+      "vbscript:msgbox(1)",
+      "file:///etc/passwd",
+      "http://evil.example/not-loopback",
+      "nostr:nevent1...",
+      "//protocol-relative.example",
+      "not a url"
+    ]) {
+      expect(sanitizeAuthUrl(hostile)).toBeNull();
+    }
   });
 });
 
@@ -231,6 +258,62 @@ describe("Nip46Client against a fake bunker", () => {
     });
     expect(await client.getUserPublicKey()).toBe(bunker.userPubkey);
     expect(authUrls).toEqual(["https://approve.example/req"]);
+  });
+
+  it("drops a hostile-scheme auth_url without consuming the surfacing slot", async () => {
+    bunker = new FakeBunker(relay.url);
+    const inner = bunker.handle.bind(bunker);
+    bunker.handle = (request) => {
+      if (request.method === "get_public_key") {
+        return [
+          // eslint-disable-next-line no-script-url -- hostile input under test
+          { id: request.id, result: "auth_url", error: "javascript:alert(document.domain)" },
+          { id: request.id, result: "auth_url", error: "https://approve.example/real" },
+          ...inner(request)
+        ];
+      }
+      return inner(request);
+    };
+    await bunker.start();
+
+    const authUrls: string[] = [];
+    client = new Nip46Client({
+      clientSecretKey: generatePrivateKey(),
+      pointer: { signerPubkey: bunker.signerPubkey, relayUrls: [relay.url] },
+      onAuthUrl: (url) => authUrls.push(url),
+      requestTimeoutMs: 5000
+    });
+    expect(await client.getUserPublicKey()).toBe(bunker.userPubkey);
+    // The javascript: URL never surfaced; the later https one did.
+    expect(authUrls).toEqual(["https://approve.example/real"]);
+  });
+
+  it("rejects a signed event whose fields differ from the request", async () => {
+    bunker = new FakeBunker(relay.url);
+    const inner = bunker.handle.bind(bunker);
+    bunker.handle = (request) => {
+      if (request.method === "sign_event") {
+        const unsigned = JSON.parse(request.params[0]!) as {
+          kind: number;
+          content: string;
+          tags: string[][];
+          created_at: number;
+        };
+        const signed = signNostrEvent(
+          { ...unsigned, pubkey: bunker.userPubkey, content: "tampered" },
+          bunker.userKey
+        );
+        return [{ id: request.id, result: JSON.stringify(signed) }];
+      }
+      return inner(request);
+    };
+    await bunker.start();
+    const c = makeClient();
+    await c.connect();
+    await c.getUserPublicKey();
+    await expect(
+      c.signEvent({ kind: 1, content: "original", tags: [], created_at: 1_700_000_000 })
+    ).rejects.toThrow(/different event/);
   });
 
   it("times out with a typed error when the signer never answers", async () => {

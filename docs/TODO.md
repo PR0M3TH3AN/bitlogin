@@ -14,6 +14,24 @@ broken since 2026-07-31), the service-worker `cache: "reload"` precache
 fix, `window.bitlogin.activeMethod()/activeSession()`, and welcome/sign-in
 UI polish.
 
+## Security audit response (2026-08-04, same day)
+
+All confirmed findings fixed and regression-tested: BL-16 (auth_url now
+https-only via `sanitizeAuthUrl`, hostname shown on the link, hostile-scheme
+tests), BL-17 (post-creation PRF fallback pinned via `allowCredentials` to
+the created credential), BL-18 (dead-socket CLOSE can no longer strand a
+query promise), BL-19 (local `filter.limit` enforcement + duplicate-id drop
++ 1000-event ceiling per buffered query), BL-20 (.semgrep.yml try/catch
+pattern was unparseable — fixed and verified firing on hostile code under
+the pinned Semgrep 1.171.0). Lows: NIP-07 and NIP-46 now verify returned
+signed events against the request (signature, identity, field equality);
+`Nip46Client.close()` wipes the client and conversation keys; passkey
+labels are distinguishable; postcss ≥8.5.25; Actions pinned to commit SHAs.
+
+Deferred from the audit, non-security interop items: NIP-46 protocol-level
+logout on teardown (no stable method name across deployed signers) and the
+recommended `switch_relays` request.
+
 Owner action items:
 
 1. **Live-fire the NIP-46 QR with Amber** on bitlogin.network (flow was

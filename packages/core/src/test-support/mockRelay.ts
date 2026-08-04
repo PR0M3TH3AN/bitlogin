@@ -41,6 +41,10 @@ export class MockRelay {
   /** Frames injected before normal query results, even when they do not match
    *  the requested filter. Models a malicious or buggy relay. */
   public unsolicitedQueryEvents: unknown[] = [];
+  /** When true, REQ subscriptions never receive EOSE -- models a relay that
+   *  goes silent (or dies) mid-query, leaving the client's timeout as the
+   *  only way out. */
+  public suppressEose = false;
   /** Addressable-event d tags whose publishes are refused. Lets ordering tests
    *  reject recovery writes while still accepting credential writes (or vice
    *  versa), independently of the signing identity. */
@@ -101,7 +105,7 @@ export class MockRelay {
         const matches = this.query(filters[0] ?? {});
         for (const event of this.unsolicitedQueryEvents) socket.send(JSON.stringify(["EVENT", subId, event]));
         for (const event of matches) socket.send(JSON.stringify(["EVENT", subId, event]));
-        socket.send(JSON.stringify(["EOSE", subId]));
+        if (!this.suppressEose) socket.send(JSON.stringify(["EOSE", subId]));
         let subsForSocket = this.liveSubs.get(socket);
         if (!subsForSocket) {
           subsForSocket = new Map();
@@ -176,6 +180,10 @@ export class MockRelay {
   }
 
   async close(): Promise<void> {
+    // Terminate live sockets first: wss.close() only stops listening and its
+    // callback waits for every client to leave -- a test closing the relay
+    // mid-query (the BL-18 scenario) would otherwise hang here forever.
+    for (const socket of this.wss.clients) socket.terminate();
     return new Promise((resolve) => {
       this.wss.close(() => resolve());
     });

@@ -29,6 +29,7 @@ import { getConversationKey, nip44Encrypt, nip44Decrypt } from "../crypto/nip44.
 import { getPublicKeyHex } from "../crypto/secp256k1.js";
 import { randomBytes } from "../crypto/random.js";
 import { bytesToHex } from "../crypto/encoding.js";
+import { wipe } from "../crypto/memory.js";
 
 const HEX64 = /^[0-9a-f]{64}$/u;
 
@@ -54,6 +55,26 @@ export class Nip46RequestTimeoutError extends Error {
 /** The signer answered, and the answer was a refusal or failure. */
 export class Nip46ErrorResponse extends Error {
   override name = "Nip46ErrorResponse";
+}
+
+/**
+ * Validates a signer-supplied auth_url before it may be shown as a link.
+ * Only https (or http to loopback, for local development signers) survives;
+ * anything else -- javascript:, data:, blob:, custom schemes, unparseable
+ * strings -- returns null and is never surfaced.
+ */
+export function sanitizeAuthUrl(candidate: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(candidate.trim());
+  } catch {
+    return null;
+  }
+  const isLoopback = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.protocol === "https:" || (url.protocol === "http:" && isLoopback)) {
+    return url.toString();
+  }
+  return null;
 }
 
 export function parseBunkerUri(uri: string): BunkerPointer {
@@ -197,10 +218,18 @@ export class Nip46Client {
     if (!request) return; // answered already by a faster relay, or stale
     if (payload.result === "auth_url") {
       // Interim, not an answer: the signer wants interactive approval at the
-      // URL (carried in `error`, per NIP-46). Surface once, keep waiting.
-      if (!request.authUrlSeen) {
-        request.authUrlSeen = true;
-        if (typeof payload.error === "string" && payload.error) this.onAuthUrl?.(payload.error);
+      // URL (carried in `error`, per NIP-46). The URL is REMOTE-SIGNER
+      // CONTROLLED input that UIs render as a clickable link, so only a
+      // validated https URL is ever surfaced (sanitizeAuthUrl) -- a hostile
+      // signer must not be able to hand the page a javascript:/data: href.
+      // An invalid URL is dropped without consuming the one surfacing slot,
+      // so a subsequent well-formed auth_url can still arrive.
+      if (!request.authUrlSeen && typeof payload.error === "string" && payload.error) {
+        const authUrl = sanitizeAuthUrl(payload.error);
+        if (authUrl) {
+          request.authUrlSeen = true;
+          this.onAuthUrl?.(authUrl);
+        }
       }
       return;
     }
@@ -289,6 +318,17 @@ export class Nip46Client {
     if (this.userPubkeyKnown && event.pubkey !== this.userPubkeyKnown) {
       throw new Error("The signer returned an event signed by a different identity.");
     }
+    // Signature and identity are necessary but not sufficient: the signer
+    // could sign a DIFFERENT event than the one requested. Enforce field
+    // equality so callers get exactly what they asked to have signed.
+    if (
+      event.kind !== unsigned.kind ||
+      event.content !== unsigned.content ||
+      event.created_at !== unsigned.created_at ||
+      JSON.stringify(event.tags) !== JSON.stringify(unsigned.tags)
+    ) {
+      throw new Error("The signer returned a different event than the one requested.");
+    }
     return event;
   }
 
@@ -318,6 +358,10 @@ export class Nip46Client {
       request.reject(new Error("The signer connection was closed."));
     }
     this.pending.clear();
+    // Shortest-practical-lifetime handling (§11.10): the ephemeral client
+    // key and the conversation key derived from it die with the session.
+    wipe(this.clientSecretKey);
+    wipe(this.conversationKey);
   }
 }
 

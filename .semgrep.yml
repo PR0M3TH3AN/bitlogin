@@ -36,7 +36,14 @@ rules:
           - pattern: $C.getRandomValues(...) ?? $FALLBACK
           - pattern: $C.getRandomValues(...) || $FALLBACK
           - pattern: |
-              try { ... $C.getRandomValues(...) ... } catch(...) { ... return $FALLBACK; ... }
+              try {
+                ...
+                $C.getRandomValues(...)
+                ...
+              } catch ($E) {
+                ...
+                return $FALLBACK;
+              }
 
   - id: bitlogin-no-time-or-id-seeded-secrets
     languages: [typescript, javascript]

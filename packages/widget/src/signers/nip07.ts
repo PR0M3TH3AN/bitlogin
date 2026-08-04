@@ -7,7 +7,7 @@
  * owns that slot, and fighting it (claimSigner) is reserved for BitLogin-account
  * sessions where the user explicitly chose BitLogin as their signer.
  */
-import type { NostrEvent } from "@bitlogin/core/nostr";
+import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
 import type { UnsignedEventForSigning } from "../provider.js";
 import {
   SignerTimeoutError,
@@ -96,12 +96,18 @@ export class Nip07Signer implements Signer {
     };
   }
 
+  /** Identity this extension reported; later signEvent results must come
+   *  from it -- a multi-profile extension switching accounts mid-session
+   *  must surface as an error, not as silently mixed authorship. */
+  private knownPublicKey: string | null = null;
+
   async getPublicKey(): Promise<string> {
     const raw = await withDeadline(this.provider.getPublicKey(), "getPublicKey", this.timeoutMs);
     const publicKey = typeof raw === "string" ? raw.toLowerCase() : "";
     if (!/^[0-9a-f]{64}$/.test(publicKey)) {
       throw new Error("The extension returned an invalid public key (expected 64 hex characters).");
     }
+    this.knownPublicKey = publicKey;
     return publicKey;
   }
 
@@ -115,7 +121,25 @@ export class Nip07Signer implements Signer {
       tags: (event.tags ?? []) as string[][],
       created_at: event.created_at ?? Math.floor(Date.now() / 1000)
     };
-    return withDeadline(this.provider.signEvent(normalized), "signEvent", this.timeoutMs);
+    const signed = await withDeadline(this.provider.signEvent(normalized), "signEvent", this.timeoutMs);
+    // The extension is an external signer: verify what came back before any
+    // caller treats it as the event they asked for. NIP-07's contract is
+    // "the supplied event plus id/pubkey/sig" -- enforce exactly that.
+    if (!verifyNostrEvent(signed)) {
+      throw new Error("The extension returned an event that does not verify.");
+    }
+    if (this.knownPublicKey && signed.pubkey !== this.knownPublicKey) {
+      throw new Error("The extension signed with a different identity than this session's.");
+    }
+    if (
+      signed.kind !== normalized.kind ||
+      signed.content !== normalized.content ||
+      signed.created_at !== normalized.created_at ||
+      JSON.stringify(signed.tags) !== JSON.stringify(normalized.tags)
+    ) {
+      throw new Error("The extension returned a different event than the one requested.");
+    }
+    return signed;
   }
 
   async nip44Encrypt(peerPublicKey: string, plaintext: string): Promise<string> {

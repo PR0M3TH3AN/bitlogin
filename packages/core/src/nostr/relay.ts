@@ -50,6 +50,12 @@ export interface RelayConnectionOptions {
   connectTimeoutMs?: number;
 }
 
+/** Hard ceiling on events buffered per query, regardless of the requested
+ *  limit -- the local backstop against an adversarial relay spraying events
+ *  before EOSE. Far above any legitimate BitLogin query (capsules and lists
+ *  are single-digit result sets). */
+const MAX_BUFFERED_EVENTS = 1000;
+
 export class RelayConnection {
   readonly url: string;
   private ws: WebSocketLike | null = null;
@@ -58,6 +64,8 @@ export class RelayConnection {
     string,
     {
       events: NostrEvent[];
+      /** Ids already buffered, for replay dedup (buffered queries only). */
+      seenIds: Set<string>;
       filter: NostrFilter;
       onEose: () => void;
       /** Present on live subscriptions (subscribeLive): each verified,
@@ -151,8 +159,18 @@ export class RelayConnection {
         verifyNostrEvent(event) &&
         matchesNostrFilter(event, sub.filter)
       ) {
-        if (sub.onEvent) sub.onEvent(event);
-        else sub.events.push(event);
+        if (sub.onEvent) {
+          sub.onEvent(event);
+        } else {
+          // Relays are untrusted: enforce the requested limit and a global
+          // ceiling LOCALLY, and drop replayed duplicates, so an adversarial
+          // relay cannot amplify memory/CPU by spraying copies before EOSE.
+          if (sub.seenIds.has(event.id)) return;
+          const cap = Math.min(sub.filter.limit ?? MAX_BUFFERED_EVENTS, MAX_BUFFERED_EVENTS);
+          if (sub.events.length >= cap) return;
+          sub.seenIds.add(event.id);
+          sub.events.push(event);
+        }
       }
       return;
     }
@@ -236,7 +254,7 @@ export class RelayConnection {
   ): Promise<{ close: () => void }> {
     await this.connect();
     const subId = bytesToHex(randomBytes(8));
-    this.subs.set(subId, { events: [], filter, onEose: () => {}, onEvent });
+    this.subs.set(subId, { events: [], seenIds: new Set(), filter, onEose: () => {}, onEvent });
     this.send(["REQ", subId, filter]);
     return {
       close: () => {
@@ -266,7 +284,14 @@ export class RelayConnection {
       const settle = (fail?: Error) => {
         clearTimeout(timer);
         this.subs.delete(subId);
-        this.send(["CLOSE", subId]);
+        try {
+          this.send(["CLOSE", subId]);
+        } catch {
+          // The socket died mid-query. The relay-side subscription died with
+          // it; what matters is settling the promise below REGARDLESS -- an
+          // unreliable relay must not strand a query (and with it everything
+          // queued behind the worker's serial queue) until reload.
+        }
         if (fail) reject(fail);
         else resolve(events);
       };
@@ -286,7 +311,7 @@ export class RelayConnection {
           ),
         timeoutMs,
       );
-      this.subs.set(subId, { events, filter, onEose: () => settle() });
+      this.subs.set(subId, { events, seenIds: new Set(), filter, onEose: () => settle() });
       this.send(["REQ", subId, filter]);
     });
   }

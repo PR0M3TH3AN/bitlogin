@@ -1045,8 +1045,13 @@ export class BitLoginAuthElement extends HTMLElement {
       let prf = extractPrfOutput(credential);
       if (!prf && kind === "create") {
         // Some authenticators only reveal PRF results during assertion; ask
-        // for one immediately against the passkey that was just created.
-        const assertion = (await navigator.credentials.get(buildPasskeyGetOptions())) as PublicKeyCredential | null;
+        // for one immediately, pinned via allowCredentials to EXACTLY the
+        // passkey that was just created -- an unrestricted discovery here
+        // would let the sheet offer an older passkey and silently bind a
+        // different account (audit BL-17).
+        const assertion = (await navigator.credentials.get(
+          buildPasskeyGetOptions(undefined, credential.rawId)
+        )) as PublicKeyCredential | null;
         prf = assertion ? extractPrfOutput(assertion) : null;
       }
       if (!prf) {
@@ -1717,10 +1722,19 @@ export class BitLoginAuthElement extends HTMLElement {
         `;
 
       case "bunker-connect": {
-        const authNotice = this.bunkerAuthUrl
-          ? `<div class="notice info">Your signer asks you to approve this connection first.
-               <a href="${escapeHtml(this.bunkerAuthUrl)}" target="_blank" rel="noopener noreferrer">Open the approval page</a>, then return here.</div>`
-          : "";
+        // The auth URL is validated https-only in core (sanitizeAuthUrl);
+        // parse defensively anyway and show the HOSTNAME so the user sees
+        // where the signer is sending them before they click.
+        let authNotice = "";
+        if (this.bunkerAuthUrl) {
+          try {
+            const authHost = new URL(this.bunkerAuthUrl).hostname;
+            authNotice = `<div class="notice info">Your signer asks you to approve this connection first.
+               <a href="${escapeHtml(this.bunkerAuthUrl)}" target="_blank" rel="noopener noreferrer">Open the approval page at ${escapeHtml(authHost)}</a>, then return here.</div>`;
+          } catch {
+            authNotice = "";
+          }
+        }
         const qrBlock = this.bunkerConnectUri
           ? `<div class="qr-wrap" aria-live="polite">${renderQrSvg(this.bunkerConnectUri, "Nostr Connect QR code")}</div>
              <button class="secondary" type="button" data-action="copy-bunker-uri">Copy connection code</button>

@@ -75,6 +75,22 @@ describe("ceremony options", () => {
     expect(buildPasskeyGetOptions("site.example").publicKey!.rpId).toBe("site.example");
     expect(buildPasskeyCreateOptions("BitLogin", "site.example").publicKey!.rp.id).toBe("site.example");
   });
+
+  it("pins the assertion to one credential when given (audit BL-17)", () => {
+    // The post-creation PRF fallback MUST scope discovery to the passkey
+    // just created; an open sheet could bind an older passkey's account.
+    const rawId = new Uint8Array(16).fill(3).buffer;
+    const options = buildPasskeyGetOptions(undefined, rawId).publicKey!;
+    expect(options.allowCredentials).toEqual([{ type: "public-key", id: rawId }]);
+  });
+
+  it("labels each created passkey distinguishably (audit follow-up)", () => {
+    const a = buildPasskeyCreateOptions("BitLogin").publicKey!;
+    const b = buildPasskeyCreateOptions("BitLogin").publicKey!;
+    expect(a.user.name).toMatch(/^BitLogin \([0-9a-f]{4}\)$/u);
+    expect(a.user.displayName).toBe(a.user.name);
+    expect(a.user.name).not.toBe(b.user.name);
+  });
 });
 
 describe("extractPrfOutput", () => {
