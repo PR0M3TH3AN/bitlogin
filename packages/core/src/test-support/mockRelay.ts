@@ -173,6 +173,12 @@ export class MockRelay {
     return results;
   }
 
+  /** Kinds of every event this relay accepted -- lets a test assert that a
+   *  flow really reached the protocol layer, not just the UI. */
+  storedEventKinds(): number[] {
+    return [...this.events.values(), ...this.plainEvents].map((event) => event.kind);
+  }
+
   /** Simulates total data loss for this relay (§19.4, §29.3 test scenarios). */
   wipeAllData(): void {
     this.events.clear();

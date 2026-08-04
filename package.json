@@ -15,12 +15,14 @@
     "dev:demo": "npm run dev -w @bitlogin/demo",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run packages/widget/src/e2e",
     "typecheck": "npm run typecheck -w @bitlogin/core && npm run typecheck -w @bitlogin/widget",
     "security:audit": "npm audit --audit-level=high && npm audit signatures",
     "security:semgrep": "semgrep scan --config .semgrep.yml --error --timeout 0 packages",
     "security:ci": "npm run build:demo && npm run typecheck && npm test && npm run security:audit && npm run security:semgrep"
   },
   "devDependencies": {
+    "playwright": "^1.62.1",
     "typescript": "^5.7.3",
     "vite": "^6.1.0",
     "vitest": "^3.0.5"

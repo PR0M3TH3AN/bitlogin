@@ -62,9 +62,18 @@ Owner action items:
 1. **Live-fire the NIP-46 QR with Amber** on bitlogin.network (flow was
    verified against a fake bunker in tests, not yet against a real phone
    signer end-to-end).
-2. **Live-fire passkey sign-in on a real device** (Chrome + Google Password
-   Manager, and once on iOS Safari). PRF cannot be exercised in CI; the
-   ceremony paths are untested against real authenticators.
+2. **Live-fire passkey sign-in on a real device.** *Partly discharged
+   2026-08-04:* `packages/widget/src/e2e/passkey.e2e.test.ts` drives real
+   headless Chromium through the real WebAuthn ceremonies with a CDP
+   virtual authenticator (`hasPrf: true`), against the built demo and
+   in-process mock relays — create passkey → register → dashboard npub →
+   capsules verified on the relays → logout → sign in with the same passkey
+   → same npub; plus a second passkey deriving a different account. Runs in
+   `npm test`, skips automatically without `npx playwright install
+   chromium`. What that still does NOT cover: a real platform authenticator
+   (Google Password Manager, iCloud Keychain, Bitwarden, a hardware key)
+   and the create-time-PRF-absent fallback path, which Chromium's virtual
+   authenticator does not exercise (it returns PRF results at creation).
 3. **Passkey derivation is a new compatibility contract** —
    `packages/widget/src/passkey.test.ts` known-answer vectors carry the
    same never-update-the-expected-value rule as `knownAnswer.test.ts`.

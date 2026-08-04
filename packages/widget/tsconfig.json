@@ -6,5 +6,7 @@
     "noEmit": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "//": "src/e2e is excluded from THIS project's typecheck only: it imports @bitlogin/core's test-support by relative source path, because test-support is deliberately not a package export (it must never ship), and a cross-package source import violates rootDir. Vitest still type-resolves and runs those files.",
+  "exclude": ["src/e2e"]
 }

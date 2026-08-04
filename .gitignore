@@ -6,3 +6,4 @@ dist-types/
 .DS_Store
 .vercel
 .env*
+.e2e-*.png
