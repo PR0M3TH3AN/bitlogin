@@ -267,6 +267,26 @@ button:focus-visible { outline: 2px solid var(--bl-accent); outline-offset: 2px;
   margin-top: 4px;
   overflow: hidden;
 }
+.option-group-label {
+  padding: 10px 14px 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--bl-muted);
+}
+.option-group-label + .option-row { border-top: none; }
+.notice .link-inline {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+}
 .option-row {
   display: flex;
   align-items: center;

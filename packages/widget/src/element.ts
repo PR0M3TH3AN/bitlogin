@@ -20,12 +20,22 @@ import { Nip46Signer } from "./signers/nip46.js";
 import type { Signer, SignerCapabilities, SignerMethod } from "./signers/types.js";
 import { renderQrSvg } from "./qr.js";
 import { setActiveSession, clearActiveSession } from "./globalSession.js";
+import {
+  buildOnrampAuthUrl,
+  newOnrampState,
+  onrampProviderLabel,
+  storeOnrampCredential,
+  validateOnrampMessage,
+  type OnrampConfig
+} from "./onramp.js";
+import { randomBytes, bytesToHex } from "@bitlogin/core/crypto";
 
 type Screen =
   | "welcome"
   | "extension-confirm"
   | "bunker-connect"
   | "bunker-confirm"
+  | "onramp-create"
   | "import-key"
   | "create-name"
   | "create-credential"
@@ -54,7 +64,8 @@ const OPTION_ICONS = {
   extension: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M6.5 6.7h.01"/><path d="M9.3 6.7h.01"/></svg>`,
   remote: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3"/><path d="M21 14v0.01"/><path d="M14 21h0.01"/><path d="M17.5 17.5L21 21"/></svg>`,
   importKey: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21"/><path d="M18 12v3.2"/><path d="M14.8 12v2.2"/></svg>`,
-  recover: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5v5h5"/><path d="M4.2 14a8 8 0 1 0 1.9-8.3L2.5 10"/></svg>`
+  recover: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5v5h5"/><path d="M4.2 14a8 8 0 1 0 1.9-8.3L2.5 10"/></svg>`,
+  onramp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.2 18.5a6.5 6.5 0 0 1 11.6 0"/></svg>`
 } as const;
 
 const CHEVRON_DOWN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
@@ -112,6 +123,47 @@ export class BitLoginAuthElement extends HTMLElement {
   private bunkerConnectUri = "";
   private bunkerAuthUrl = "";
   private pendingBunker: { userPubkey: string; npub: string } | null = null;
+
+  // ---- Centralized on-ramp (centralized-onramps.md §CO5, Architecture B) ----
+  // Configured by the host or absent entirely. `attempt` spans one popup round
+  // trip (state nonce + popup handle); `registration` spans a new user's
+  // choice between a fresh identity and importing one (§SF10); `session` marks
+  // the standing for dashboard labeling (the session itself is an ordinary
+  // BitLogin account session). `securePhrasePending` is Tier B2: the phrase is
+  // in memory this session, the ceremony deferred behind a dashboard card.
+  private onramp: OnrampConfig | undefined;
+  private onrampAttempt: { state: string; provider: string; popup: Window | null } | null = null;
+  private onrampRegistration: { registrationToken: string; provider: string; suggestedLoginName?: string } | null = null;
+  private onrampSession = false;
+  private securePhrasePending = false;
+  private readonly onWindowMessage = (event: MessageEvent): void => {
+    const attempt = this.onrampAttempt;
+    if (!attempt || !this.onramp) return;
+    const result = validateOnrampMessage(
+      { origin: event.origin, data: event.data },
+      { origin: this.onramp.origin, state: attempt.state }
+    );
+    if (!result) return;
+    this.onrampAttempt = null;
+    try {
+      attempt.popup?.close();
+    } catch {
+      // Cross-origin popup handles can refuse; it closes itself regardless.
+    }
+    if (result.kind === "unlock") {
+      // Returning user: the service is simply the password manager -- this is
+      // the ordinary password login from here on.
+      this.onrampSession = true;
+      void this.attemptLogin(result.loginName, result.password);
+      return;
+    }
+    this.onrampRegistration = {
+      registrationToken: result.registrationToken,
+      provider: attempt.provider,
+      suggestedLoginName: result.suggestedLoginName
+    };
+    this.goto("onramp-create");
+  };
   private sessionWarnings: string[] = [];
   private lastSignedEventJson = "";
   private exportedNsec = "";
@@ -190,6 +242,8 @@ export class BitLoginAuthElement extends HTMLElement {
     const config = readConfigFromElement(this);
     this.vaultRelayUrls = config.vaultRelayUrls ?? [];
     this.discoveryRelayUrls = config.discoveryRelayUrls ?? [];
+    this.onramp = config.onramp;
+    window.addEventListener("message", this.onWindowMessage);
     void this.worker
       .configure({ vaultRelayUrls: this.vaultRelayUrls, discoveryRelayUrls: this.discoveryRelayUrls })
       .then(() => this.tryRestoreSession());
@@ -216,6 +270,7 @@ export class BitLoginAuthElement extends HTMLElement {
 
   disconnectedCallback(): void {
     if (this.successDismissTimer !== null) clearTimeout(this.successDismissTimer);
+    window.removeEventListener("message", this.onWindowMessage);
     clearActiveSession(this);
     this.releaseSigner();
     this.worker.terminate();
@@ -271,6 +326,8 @@ export class BitLoginAuthElement extends HTMLElement {
       if (this.altSigner.method === "nip46") void this.worker.nip46Disconnect();
       this.altSigner = null;
       this.session = null;
+      this.onrampSession = false;
+      this.securePhrasePending = false;
       clearActiveSession(this);
       this.releaseSigner();
       this.dispatchEvent(new CustomEvent("bitlogin-logout"));
@@ -279,6 +336,8 @@ export class BitLoginAuthElement extends HTMLElement {
     }
     await this.worker.logout();
     this.session = null;
+    this.onrampSession = false;
+    this.securePhrasePending = false;
     clearActiveSession(this);
     this.releaseSigner();
     this.dispatchEvent(new CustomEvent("bitlogin-logout"));
@@ -770,6 +829,8 @@ export class BitLoginAuthElement extends HTMLElement {
       case "goto-welcome":
         this.pendingRollback = null;
         this.pendingExtensionSigner = null;
+        this.onrampAttempt = null;
+        this.onrampRegistration = null;
         // Backing out of an unfinished bunker connect abandons the worker-side
         // attempt -- but never a live session (altSigner) that's merely
         // navigating around.
@@ -784,6 +845,18 @@ export class BitLoginAuthElement extends HTMLElement {
       case "toggle-more":
         this.moreOptionsOpen = !this.moreOptionsOpen;
         this.render();
+        return;
+      case "onramp-signin":
+        this.startOnramp(target.dataset.provider ?? "");
+        return;
+      case "onramp-new":
+        this.importKey = "";
+        this.importPreviewNpub = "";
+        return void this.runOnrampRegistration();
+      case "onramp-import":
+        this.importKey = "";
+        this.importPreviewNpub = "";
+        this.goto("import-key");
         return;
       case "extension-signin":
         return this.handleExtensionSignIn();
@@ -976,8 +1049,101 @@ export class BitLoginAuthElement extends HTMLElement {
       this.render();
       return;
     }
+    if (this.onrampRegistration) {
+      // On-ramp signup chose "use my existing key": same §SF10 wrap, with the
+      // service holding the password instead of the user (§CO5).
+      void this.runOnrampRegistration();
+      return;
+    }
     this.loginName = "";
     this.goto("create-name");
+  }
+
+  /** Opens the on-ramp's OAuth popup for one attempt (§CO5). */
+  private startOnramp(provider: string): void {
+    if (!this.onramp) return;
+    const state = newOnrampState();
+    const url = buildOnrampAuthUrl(this.onramp, provider, state, window.location.origin);
+    const popup = window.open(url, "bitlogin-onramp", "popup,width=480,height=640");
+    if (!popup) {
+      this.errorMessage = "Your browser blocked the sign-in window. Allow pop-ups for this site and try again.";
+      this.render();
+      return;
+    }
+    this.onrampAttempt = { state, provider, popup };
+    this.errorMessage = undefined;
+    this.render();
+  }
+
+  /**
+   * New-user registration through the on-ramp (§CO5): standard client-side
+   * registration (§15) -- optionally wrapping an imported key (§SF10) -- with
+   * the generated password handed to the service for safekeeping afterward.
+   * Tier B2 phrase handling: the ceremony is deferred behind the dashboard's
+   * "Secure your account" card, EXCEPT when the store call fails -- an account
+   * whose credential nobody is holding forces the ceremony immediately.
+   */
+  private async runOnrampRegistration(): Promise<void> {
+    const registration = this.onrampRegistration;
+    const onramp = this.onramp;
+    if (!registration || !onramp) return;
+    this.setBusy(true);
+    try {
+      const suggested = registration.suggestedLoginName?.trim().toLowerCase() ?? "";
+      const loginName = isValidLoginName(suggested) ? suggested : `nostr-${bytesToHex(randomBytes(4))}`;
+      const password = generatePassphrase().secret;
+      const result = await this.worker.register({
+        loginName,
+        password,
+        importKey: this.importKey || undefined
+      });
+      this.importKey = "";
+      this.importPreviewNpub = "";
+      this.onrampRegistration = null;
+      this.loginName = loginName;
+      this.recoveryPhrase = result.recoveryPhrase;
+      const words = this.recoveryPhrase.split(" ");
+      const indices = pickRandomIndices(words.length, 3);
+      this.confirmSlots = indices.map((index) => ({ index, value: "" }));
+      this.session = {
+        publicKey: result.everydayPublicKey,
+        npub: encodeNpub(result.everydayPublicKey),
+        accountId: result.accountId,
+        method: "bitlogin"
+      };
+      this.sessionWarnings = [];
+      void this.worker.publishProfileAndRelayLists({
+        name: this.loginName,
+        generalRelays: this.vaultRelayUrls,
+        dmRelays: this.vaultRelayUrls
+      });
+      try {
+        await storeOnrampCredential(onramp, {
+          registrationToken: registration.registrationToken,
+          loginName,
+          password
+        });
+      } catch (storeErr) {
+        // The account is real and live on relays, but the service is not
+        // holding its credential -- the phrase ceremony happens NOW.
+        this.busy = false;
+        this.onrampSession = false;
+        this.securePhrasePending = false;
+        this.errorMessage = storeErr instanceof Error ? storeErr.message : String(storeErr);
+        this.noteSignerClaim(this.claimSigner());
+        this.dispatchLogin();
+        this.goto("confirm-phrase");
+        return;
+      }
+      this.busy = false;
+      this.onrampSession = true;
+      this.securePhrasePending = true;
+      this.noteSignerClaim(this.claimSigner());
+      this.dispatchLogin();
+      this.flashSuccess("dashboard", "Account created");
+    } catch (err) {
+      this.fail(err);
+    }
   }
 
   private handleCreateNameSubmit(): void {
@@ -1042,6 +1208,14 @@ export class BitLoginAuthElement extends HTMLElement {
         return;
       }
     }
+    if (this.securePhrasePending) {
+      // Tier B2 deferred ceremony (§CO4): the session already exists and
+      // bitlogin-login already fired at registration -- this just retires
+      // the "Secure your account" card.
+      this.securePhrasePending = false;
+      this.flashSuccess("dashboard", "Recovery phrase secured");
+      return;
+    }
     this.sessionWarnings = [];
     this.noteSignerClaim(this.claimSigner());
     this.dispatchLogin();
@@ -1051,6 +1225,7 @@ export class BitLoginAuthElement extends HTMLElement {
   private async handleLoginSubmit(): Promise<void> {
     const loginName = this.field("loginName").trim().toLowerCase();
     const password = this.field("password");
+    this.onrampSession = false; // typed credentials: the user is their own password manager here
     await this.attemptLogin(loginName, password);
   }
 
@@ -1442,11 +1617,28 @@ export class BitLoginAuthElement extends HTMLElement {
               this.busy
             )
           : "";
+        // Centralized rows exist only when the host configured an on-ramp;
+        // the sub-label IS the custody statement (§CO7): who manages access.
+        const onrampRows = (this.onramp?.providers ?? [])
+          .map((provider) => {
+            const label = onrampProviderLabel(provider);
+            return `
+          <button class="option-row" type="button" data-action="onramp-signin" data-provider="${escapeHtml(provider)}">
+            <span class="option-icon">${OPTION_ICONS.onramp}</span>
+            <span class="option-text"><span>Continue with ${escapeHtml(label)}</span><span class="option-sub">${escapeHtml(this.onramp!.name)} manages your sign-in</span></span>
+          </button>`;
+          })
+          .join("");
+        const onrampWaiting = this.onrampAttempt
+          ? `<div class="notice info">Finish signing in with ${escapeHtml(onrampProviderLabel(this.onrampAttempt.provider))} in the window that opened, then return here.</div>`
+          : "";
         const optionsMenu = this.moreOptionsOpen
           ? `<div class="option-menu">
+              <div class="option-group-label">Use an account you already have</div>
               ${extensionRow}
               ${optionRow("goto-bunker", OPTION_ICONS.remote, "Remote signer", "Scan a code with Amber or another signer app")}
               ${optionRow("goto-import", OPTION_ICONS.importKey, "Import a Nostr key", "Wrap an existing identity in a login name and password")}
+              ${onrampRows}
               ${optionRow("goto-recover", OPTION_ICONS.recover, "Recover account", "Sign back in with your 12-word recovery phrase")}
             </div>`
           : "";
@@ -1459,7 +1651,26 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="options-toggle ${this.moreOptionsOpen ? "open" : ""}" type="button" data-action="toggle-more" aria-expanded="${this.moreOptionsOpen}">
             More sign-in options ${CHEVRON_DOWN}
           </button>
+          ${onrampWaiting}
           ${optionsMenu}
+        `;
+      }
+
+      case "onramp-create": {
+        const providerLabel = this.onrampRegistration
+          ? onrampProviderLabel(this.onrampRegistration.provider)
+          : "";
+        return `
+          ${this.renderScreenHead("Almost there")}
+          <p class="sub">${escapeHtml(this.onramp?.name ?? "The sign-in service")} will manage your sign-in${
+            providerLabel ? ` through ${escapeHtml(providerLabel)}` : ""
+          }. Your account itself lives on the open Nostr network — choose how to set up its identity:</p>
+          ${this.renderError()}
+          <button class="primary" type="button" data-action="onramp-new" ${this.busy ? "disabled" : ""}>
+            ${this.busy ? '<span class="spinner"></span>Creating your account…' : "Create a fresh identity"}
+          </button>
+          <button class="secondary" type="button" data-action="onramp-import" ${this.busy ? "disabled" : ""}>I already have a Nostr key</button>
+          <p class="small">Either way you can later take full control of the account — or leave for any other Nostr app — without losing your identity.</p>
         `;
       }
 
@@ -1692,10 +1903,21 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="secondary" type="button" data-action="goto-vault-manage">Wallet connections</button>
           <button class="secondary" type="button" data-action="goto-change-password">Rotate password</button>
           <button class="secondary" type="button" data-action="goto-export">Export identity</button>`;
+        // Tier B2 (§CO4): the phrase exists only in this session's memory
+        // until the user claims it -- the one nudge that stays until acted on.
+        const securePhraseCard = this.securePhrasePending
+          ? `<div class="notice warn">Secure your account: your recovery phrase is available <strong>only during this session</strong>. Save it now and your account stays yours even without ${escapeHtml(this.onramp?.name ?? "the sign-in service")}.
+               <button class="link-inline" type="button" data-action="goto-confirm-phrase">View and save it</button></div>`
+          : "";
+        const onrampStanding = this.onrampSession
+          ? `<p class="small">Signed in via ${escapeHtml(this.onramp?.name ?? "a sign-in service")} — they manage your sign-in; your identity lives on the open Nostr network.</p>`
+          : "";
         return `
           <h2>Signed in</h2>
+          ${securePhraseCard}
           ${this.renderWarnings()}
           <p class="pubkey">${escapeHtml(this.session?.npub ?? "")}</p>
+          ${onrampStanding}
           ${this.renderError()}
           <button class="secondary" type="button" data-action="sign-test-event">Sign a test event</button>
           ${

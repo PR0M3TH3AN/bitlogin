@@ -1,8 +1,27 @@
 # Centralized On-Ramps — OAuth Sign-In as a Journey Toward Self-Custody
 
-**Document version:** 0.1 (design proposal)
-**Status:** Proposal only — nothing here is implemented, and the reference
-services it describes live outside this repository by definition. Depends on
+**Document version:** 0.2
+**Status:** The **widget side of §CO5 is implemented** (2026-08-04):
+`onramp-url` / `onramp-name` / `onramp-providers` attributes, the popup
+handshake below, "Continue with <Provider>" rows under the "Use an account
+you already have" group (§CO11.1 resolved: that heading covers the whole
+existing-account group — extension, remote signer, key import, and
+centralized rails — with the custody statement carried by each row's
+sub-label), client-side registration with optional §SF10 import, and the
+Tier B2 "Secure your account" dashboard card. Reference services live
+outside this repository by definition and do not yet exist.
+
+**Handshake contract as implemented (v1):** the widget opens
+`onramp-url?provider=<id>&state=<nonce>&origin=<page origin>` in a popup;
+the popup posts to its opener exactly one
+`{ type: "bitlogin:onramp:unlock", state, unlock: { loginName, password } }`
+(returning user) or `{ …, register: { registrationToken,
+suggestedLoginName? } }` (new user), accepted only from the configured
+origin with the exact state nonce. For new users the widget registers
+client-side, then `POST onramp-url` with
+`{ type: "bitlogin:onramp:store", registrationToken, loginName, password }`;
+a non-OK response forces the phrase ceremony immediately instead of
+deferring it. Hosts must add the service origin to their CSP `connect-src`. Depends on
 `docs/spec.md`, `docs/login-methods.md` (the one-login-surface model), and
 `docs/second-factor.md` §SF10 (imported identities, implemented), which turns
 out to be the graduation mechanism.
@@ -256,6 +275,8 @@ A service a BitLogin deployment points at must:
    `{ provider, service, tier }`.
 3. Whether Tier B2's first-session phrase window should survive a reload
    within some time budget, or end strictly with the worker.
-4. Whether the option-menu group heading "Centralized options" is the right
-   label, or something warmer ("Use an account you already have") with the
-   custody statement carried entirely by the sub-label.
+4. **Resolved 2026-08-04 (owner decision):** the group heading is "Use an
+   account you already have," covering every existing-account path — Nostr
+   extension, remote signer, key import, and centralized rails alike — with
+   the custody statement carried entirely by each centralized row's
+   sub-label ("<Service> manages your sign-in").

@@ -67,6 +67,20 @@ describe("widget security policy", () => {
     }
   });
 
+  it("centralized on-ramp rows carry the custody label and live inside the menu", () => {
+    // §CO7: the sub-label IS the custody statement, rendered from the
+    // host-configured service name -- and the rows exist nowhere else.
+    const menuStart = widgetSource.indexOf('`<div class="option-menu">');
+    const menuEnd = widgetSource.indexOf("</div>`", menuStart);
+    const menu = widgetSource.slice(menuStart, menuEnd);
+    expect(menu).toContain("${onrampRows}");
+    expect(widgetSource).toContain("manages your sign-in</span>");
+    // One rendering site (the onrampRows template) + one onClick case.
+    expect(widgetSource.split('"onramp-signin"').length - 1).toBe(2);
+    // The group heading is the owner-chosen wording.
+    expect(menu).toContain(">Use an account you already have</div>");
+  });
+
   it("treats the bunker URI as a secret and keeps the element storage-free", () => {
     // A bunker:// URI carries a connection token; it gets a password input
     // (no shoulder-surfing, no autofill heuristics), and the element itself

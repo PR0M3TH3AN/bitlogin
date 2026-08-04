@@ -162,6 +162,12 @@ if (uri) payWith(uri); // full nostr+walletconnect:// URI, or null if declined</
       already offers username/password, a NIP-07 extension, and a NIP-46 remote signer as sub-options behind one
       surface, and routes every signing call to whichever the user picked. You don't need your own method picker,
       and your app code doesn't branch by method.</p>
+      <p>Sites that want a "Continue with Google/GitHub" on-ramp can additionally point the widget at an OAuth
+      unlock service (<code>onramp-url</code>, <code>onramp-name</code>, <code>onramp-providers</code> attributes —
+      nothing centralized ships unless you configure it, and your CSP's <code>connect-src</code> must include the
+      service's origin). The service manages the password of a real, portable Nostr account; users can bring an
+      existing key at signup and are nudged toward claiming their recovery phrase over time. See
+      <code>docs/centralized-onramps.md</code> in the repo for the handshake contract and threat model.</p>
       <p>Two different questions have two different APIs, and conflating them is the classic integration bug:</p>
       <p><strong>"Is someone signed in through BitLogin?"</strong> — use <code>window.bitlogin.activeMethod()</code>
       (or the richer <code>activeSession()</code>), or listen for <code>bitlogin-login</code>. This answers correctly
