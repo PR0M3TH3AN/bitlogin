@@ -204,6 +204,60 @@ button.link {
   font-weight: 500;
   font-size: 13px;
 }
+button:focus-visible { outline: 2px solid var(--bl-accent); outline-offset: 2px; }
+/* Collapsed disclosure for every non-primary sign-in path (§LM9.1: the
+   password flow stays the visual headline; alternatives are one tap away).
+   Rows are full-bleed buttons with generous minimum height so the menu works
+   as well under a thumb as a pointer. */
+.options-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--bl-muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 0 8px;
+  margin-top: 8px;
+}
+.options-toggle:hover { color: var(--bl-fg); }
+.options-toggle svg { width: 14px; height: 14px; transition: transform 0.18s ease; }
+.options-toggle.open svg { transform: rotate(180deg); }
+.option-menu {
+  border: 1px solid var(--bl-border);
+  border-radius: 12px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  min-height: 56px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--bl-fg);
+}
+.option-row + .option-row { border-top: 1px solid var(--bl-border); }
+.option-row:hover { background: var(--bl-input-bg); }
+.option-row:disabled { opacity: 0.55; cursor: default; }
+.option-icon { flex: none; width: 20px; height: 20px; color: var(--bl-muted); }
+.option-icon svg { display: block; width: 100%; height: 100%; }
+.option-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.option-sub { font-size: 12px; font-weight: 400; color: var(--bl-muted); }
+@media (prefers-reduced-motion: reduce) {
+  .options-toggle svg { transition: none; }
+}
 .row { display: flex; gap: 8px; }
 .row > * { flex: 1; }
 .notice {

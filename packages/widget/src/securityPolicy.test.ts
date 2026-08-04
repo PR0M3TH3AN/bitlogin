@@ -34,20 +34,37 @@ describe("widget security policy", () => {
     // not displace the password path. The welcome screen's primary sign-in button has
     // to appear before the extension option in the rendered template.
     const passwordSignIn = widgetSource.indexOf('data-action="goto-login">Sign in</button>');
-    const extensionSlot = widgetSource.indexOf("${extensionOption}");
+    const optionsMenuSlot = widgetSource.indexOf("${optionsMenu}");
     expect(passwordSignIn).toBeGreaterThan(-1);
-    expect(extensionSlot).toBeGreaterThan(-1);
-    expect(passwordSignIn).toBeLessThan(extensionSlot);
+    expect(optionsMenuSlot).toBeGreaterThan(-1);
+    expect(passwordSignIn).toBeLessThan(optionsMenuSlot);
+    // The extension row renders inside the collapsed menu, not free-standing.
+    expect(widgetSource).toContain('"extension-signin",');
   });
 
-  it("keeps alternative methods below the password path on the welcome screen", () => {
-    // Same owner decision as the extension pin above, applied to NIP-46: the
-    // remote-signer option renders after the primary sign-in button.
-    const passwordSignIn = widgetSource.indexOf('data-action="goto-login">Sign in</button>');
-    const bunkerOption = widgetSource.indexOf('data-action="goto-bunker">Use a remote signer');
-    expect(passwordSignIn).toBeGreaterThan(-1);
-    expect(bunkerOption).toBeGreaterThan(-1);
-    expect(passwordSignIn).toBeLessThan(bunkerOption);
+  it("keeps every alternative method inside the collapsed options menu", () => {
+    // Same owner decision as the pin above, applied to all of NIP-46, key
+    // import, and recovery: each renders as a row of the option-menu that the
+    // "${optionsMenu}" slot (already pinned after the primary sign-in button)
+    // interpolates -- never as a free-standing button beside the primaries.
+    const menuStart = widgetSource.indexOf('`<div class="option-menu">');
+    const menuEnd = widgetSource.indexOf("</div>`", menuStart);
+    expect(menuStart).toBeGreaterThan(-1);
+    expect(menuEnd).toBeGreaterThan(menuStart);
+    const menu = widgetSource.slice(menuStart, menuEnd);
+    // Expected occurrences: the onClick case + the menu row, plus sanctioned
+    // contextual renderings AWAY from the welcome screen -- the login screen's
+    // "Forgot password?" link (goto-recover) and the bunker screen's own
+    // "Generate a new code" retry (goto-bunker).
+    for (const [action, expected] of [
+      ["goto-bunker", 3],
+      ["goto-import", 2],
+      ["goto-recover", 3],
+    ] as const) {
+      expect(menu).toContain(`optionRow("${action}"`);
+      const occurrences = widgetSource.split(`"${action}"`).length - 1;
+      expect(occurrences).toBe(expected);
+    }
   });
 
   it("treats the bunker URI as a secret and keeps the element storage-free", () => {

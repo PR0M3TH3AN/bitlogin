@@ -289,7 +289,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     case "nip46NostrconnectStart": {
       const p = payload as Nip46NostrconnectStartPayload;
-      const relayUrls = vaultRelayUrls;
+      // Two relays, not the whole list: every relay URL inflates the QR by a
+      // version step or two, and a dense code with tiny modules is measurably
+      // harder for a phone camera to lock onto. NIP-46 needs one shared
+      // relay; the second is the redundancy.
+      const relayUrls = vaultRelayUrls.slice(0, 2);
       const clientSecretKey = generatePrivateKey();
       // The secret is the proof-of-scan: whoever echoes it back becomes this
       // session's signer, so it gets real entropy, not a friendly string.

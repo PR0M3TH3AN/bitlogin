@@ -47,6 +47,17 @@ interface ConfirmSlot {
   value: string;
 }
 
+/** Line icons for the "More sign-in options" menu: stroke-based so they pick
+ *  up the muted foreground in either theme, sized by .option-icon. */
+const OPTION_ICONS = {
+  extension: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M6.5 6.7h.01"/><path d="M9.3 6.7h.01"/></svg>`,
+  remote: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3"/><path d="M21 14v0.01"/><path d="M14 21h0.01"/><path d="M17.5 17.5L21 21"/></svg>`,
+  importKey: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21"/><path d="M18 12v3.2"/><path d="M14.8 12v2.2"/></svg>`,
+  recover: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5v5h5"/><path d="M4.2 14a8 8 0 1 0 1.9-8.3L2.5 10"/></svg>`
+} as const;
+
+const CHEVRON_DOWN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
+
 export class BitLoginAuthElement extends HTMLElement {
   private root: ShadowRoot;
   private worker: WorkerClient;
@@ -57,6 +68,9 @@ export class BitLoginAuthElement extends HTMLElement {
   private screen: Screen = "welcome";
   private busy = false;
   private errorMessage: string | undefined;
+  /** Welcome-screen disclosure for non-primary sign-in paths; survives
+   *  re-renders so an open menu doesn't snap shut on an error render. */
+  private moreOptionsOpen = false;
 
   private loginName = "";
   private generatedCredential = "";
@@ -752,6 +766,10 @@ export class BitLoginAuthElement extends HTMLElement {
         this.bunkerAuthUrl = "";
         this.goto("welcome");
         return;
+      case "toggle-more":
+        this.moreOptionsOpen = !this.moreOptionsOpen;
+        this.render();
+        return;
       case "extension-signin":
         return this.handleExtensionSignIn();
       case "extension-continue":
@@ -1381,12 +1399,30 @@ export class BitLoginAuthElement extends HTMLElement {
   private renderScreen(): string {
     switch (this.screen) {
       case "welcome": {
-        // Username/password is the primary method; a detected extension appears as a
-        // secondary affordance only (§LM9.1, resolved: password-first).
-        const extensionOption = detectForeignNip07Provider()
-          ? `<button class="link" data-action="extension-signin" ${this.busy ? "disabled" : ""}>${
-              this.busy ? '<span class="spinner"></span>Asking your extension…' : "Use your Nostr extension instead"
-            }</button>`
+        // Username/password is the primary method (§LM9.1, resolved:
+        // password-first); every alternative path lives behind the collapsed
+        // "More sign-in options" disclosure below the two primary buttons.
+        const optionRow = (action: string, icon: string, title: string, sub: string, disabled = false) => `
+          <button class="option-row" type="button" data-action="${action}" ${disabled ? "disabled" : ""}>
+            <span class="option-icon">${icon}</span>
+            <span class="option-text"><span>${title}</span><span class="option-sub">${sub}</span></span>
+          </button>`;
+        const extensionRow = detectForeignNip07Provider()
+          ? optionRow(
+              "extension-signin",
+              OPTION_ICONS.extension,
+              this.busy ? "Asking your extension…" : "Nostr extension",
+              "Use the signer extension in this browser",
+              this.busy
+            )
+          : "";
+        const optionsMenu = this.moreOptionsOpen
+          ? `<div class="option-menu">
+              ${extensionRow}
+              ${optionRow("goto-bunker", OPTION_ICONS.remote, "Remote signer", "Scan a code with Amber or another signer app")}
+              ${optionRow("goto-import", OPTION_ICONS.importKey, "Import a Nostr key", "Wrap an existing identity in a login name and password")}
+              ${optionRow("goto-recover", OPTION_ICONS.recover, "Recover account", "Sign back in with your 12-word recovery phrase")}
+            </div>`
           : "";
         return `
           ${this.renderBrandLockup()}
@@ -1394,10 +1430,10 @@ export class BitLoginAuthElement extends HTMLElement {
           ${this.renderError()}
           <button class="primary" data-action="goto-login">Sign in</button>
           <button class="secondary" data-action="goto-create">Create account</button>
-          <button class="link" data-action="goto-import">Import an existing Nostr key</button>
-          <button class="link" data-action="goto-recover">Forgot password? Recover with phrase</button>
-          ${extensionOption}
-          <button class="link" data-action="goto-bunker">Use a remote signer (bunker)</button>
+          <button class="options-toggle ${this.moreOptionsOpen ? "open" : ""}" type="button" data-action="toggle-more" aria-expanded="${this.moreOptionsOpen}">
+            More sign-in options ${CHEVRON_DOWN}
+          </button>
+          ${optionsMenu}
         `;
       }
 
