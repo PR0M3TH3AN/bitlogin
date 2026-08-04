@@ -205,6 +205,41 @@ button.link {
   font-size: 13px;
 }
 button:focus-visible { outline: 2px solid var(--bl-accent); outline-offset: 2px; }
+.screen-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px -8px; /* negative left margin optically aligns the chevron with the content edge */
+}
+.screen-head h2 { margin: 0; }
+.icon-back {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  color: var(--bl-muted);
+}
+.icon-back:hover { background: var(--bl-input-bg); color: var(--bl-fg); }
+.icon-back svg { width: 20px; height: 20px; }
+/* Right-aligned helper link under an input (e.g. "Forgot password?"). */
+.field-hint { display: flex; justify-content: flex-end; margin-top: 8px; }
+.field-hint .link-inline {
+  width: auto;
+  margin: 0;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: var(--bl-accent);
+  font-size: 12.5px;
+  font-weight: 500;
+}
 /* Collapsed disclosure for every non-primary sign-in path (§LM9.1: the
    password flow stays the visual headline; alternatives are one tap away).
    Rows are full-bleed buttons with generous minimum height so the menu works

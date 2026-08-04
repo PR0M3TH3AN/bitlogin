@@ -58,6 +58,8 @@ const OPTION_ICONS = {
 
 const CHEVRON_DOWN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
 
+const CHEVRON_LEFT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>`;
+
 export class BitLoginAuthElement extends HTMLElement {
   private root: ShadowRoot;
   private worker: WorkerClient;
@@ -1381,6 +1383,17 @@ export class BitLoginAuthElement extends HTMLElement {
     }, 1100);
   }
 
+  /** Screen header with an icon back button, replacing the dangling "Back"
+   *  link every pre-auth screen used to end with -- back navigation belongs
+   *  where the eye starts, not after the form. */
+  private renderScreenHead(title: string, backAction = "goto-welcome"): string {
+    return `
+      <div class="screen-head">
+        <button class="icon-back" type="button" data-action="${backAction}" aria-label="Back">${CHEVRON_LEFT}</button>
+        <h2>${title}</h2>
+      </div>`;
+  }
+
   private renderError(): string {
     return this.errorMessage ? `<div class="notice error">${escapeHtml(this.errorMessage)}</div>` : "";
   }
@@ -1439,13 +1452,12 @@ export class BitLoginAuthElement extends HTMLElement {
 
       case "extension-confirm":
         return `
-          <h2>Sign in with your extension</h2>
+          ${this.renderScreenHead("Sign in with your extension")}
           <p class="sub">Your Nostr signer extension reports this identity:</p>
           <div class="credential-box">${escapeHtml(this.extensionPreviewNpub)}</div>
           <p class="small">Check this is the profile you expect — extensions can hold more than one. BitLogin never sees this identity's private key; your extension signs on its behalf. This session lasts until you log out or leave the page, and BitLogin account features (wallet connections, password rotation, recovery) stay with BitLogin accounts.</p>
           ${this.renderError()}
           <button class="primary" type="button" data-action="extension-continue">This is me — continue</button>
-          <button class="link" data-action="goto-welcome">Back</button>
         `;
 
       case "bunker-connect": {
@@ -1461,7 +1473,7 @@ export class BitLoginAuthElement extends HTMLElement {
             ? `<button class="secondary" type="button" data-action="goto-bunker">Generate a new code</button>`
             : `<p class="sub"><span class="spinner"></span>Preparing connection code…</p>`;
         return `
-          <h2>Use a remote signer</h2>
+          ${this.renderScreenHead("Use a remote signer")}
           <p class="sub">Scan with a signer app on your phone (Amber, nsec.app, …). Your key stays in the signer; BitLogin only requests signatures.</p>
           ${this.renderError()}
           ${authNotice}
@@ -1474,25 +1486,23 @@ export class BitLoginAuthElement extends HTMLElement {
               ${this.busy ? '<span class="spinner"></span>Contacting your signer…' : "Connect"}
             </button>
           </form>
-          <button class="link" data-action="goto-welcome">Back</button>
         `;
       }
 
       case "bunker-confirm":
         return `
-          <h2>Remote signer connected</h2>
+          ${this.renderScreenHead("Remote signer connected")}
           <p class="sub">Your signer reports this identity:</p>
           <div class="credential-box">${escapeHtml(this.pendingBunker?.npub ?? "")}</div>
           <p class="small">Check this is the profile you expect. Your private key stays in your signer — each signature is requested over relays, and your signer can require approval or be disconnected at any time. This session lasts until you log out or leave the page; BitLogin account features (wallet connections, password rotation, recovery) stay with BitLogin accounts.</p>
           ${this.renderError()}
           <button class="primary" type="button" data-action="bunker-continue">This is me — continue</button>
-          <button class="link" data-action="goto-welcome">Back</button>
         `;
 
       case "import-key": {
         const previewed = !!this.importPreviewNpub;
         return `
-          <h2>Import an existing Nostr key</h2>
+          ${this.renderScreenHead("Import an existing Nostr key")}
           <p class="sub">Wrap a Nostr identity you already control in a BitLogin login name and password. Your key never changes — you just get a friendlier way in.</p>
           <div class="notice warn">Pasting a private key into any web page is risky. Only do this on a BitLogin build you trust, and clear your clipboard afterward. BitLogin can't secure copies of this key that already exist elsewhere.</div>
           ${this.renderError()}
@@ -1510,13 +1520,12 @@ export class BitLoginAuthElement extends HTMLElement {
                  <button class="primary" type="button" data-action="import-continue">This is my identity — continue</button>`
               : ""
           }
-          <button class="link" data-action="goto-welcome">Back</button>
         `;
       }
 
       case "create-name":
         return `
-          <h2>${this.importKey ? "Set up your login" : "Create your BitLogin"}</h2>
+          ${this.renderScreenHead(this.importKey ? "Set up your login" : "Create your BitLogin")}
           <p class="sub">${
             this.importKey
               ? "Choose a login name for your imported identity. It's a convenience, not a secret."
@@ -1528,7 +1537,6 @@ export class BitLoginAuthElement extends HTMLElement {
             <input type="text" name="loginName" id="loginName" placeholder="adam" autocomplete="off" required minlength="3" maxlength="32" />
             <button class="primary" type="submit">Continue</button>
           </form>
-          <button class="link" data-action="goto-welcome">Back</button>
         `;
 
       case "create-credential": {
@@ -1592,24 +1600,25 @@ export class BitLoginAuthElement extends HTMLElement {
 
       case "login":
         return `
-          <h2>Sign in</h2>
+          ${this.renderScreenHead("Sign in")}
           ${this.renderError()}
           <form data-form="login">
             <label for="loginName">Login name</label>
             <input type="text" name="loginName" id="loginName" autocomplete="username" required />
             <label for="password">Password</label>
             <input type="password" name="password" id="password" autocomplete="current-password" required />
+            <div class="field-hint">
+              <button class="link-inline" type="button" data-action="goto-recover">Forgot password?</button>
+            </div>
             <button class="primary" type="submit" ${this.busy ? "disabled" : ""}>
               ${this.busy ? '<span class="spinner"></span>Signing in…' : "Sign in"}
             </button>
           </form>
-          <button class="link" data-action="goto-recover">Forgot password? Recover with phrase</button>
-          <button class="link" data-action="goto-welcome">Back</button>
         `;
 
       case "recover-phrase":
         return `
-          <h2>Recover with phrase</h2>
+          ${this.renderScreenHead("Recover with phrase")}
           <p class="sub">Enter your 12-word BitLogin recovery phrase.</p>
           <p class="small">Do not enter a Bitcoin or other cryptocurrency-wallet recovery phrase into BitLogin.</p>
           ${this.renderError()}
@@ -1628,7 +1637,6 @@ export class BitLoginAuthElement extends HTMLElement {
               ${this.busy ? '<span class="spinner"></span>Recovering…' : "Continue"}
             </button>
           </form>
-          <button class="link" data-action="goto-welcome">Back</button>
         `;
 
       case "recover-new-credentials": {
