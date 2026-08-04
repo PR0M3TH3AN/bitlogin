@@ -19,6 +19,7 @@ import { detectForeignNip07Provider, Nip07Signer } from "./signers/nip07.js";
 import { Nip46Signer } from "./signers/nip46.js";
 import type { Signer, SignerCapabilities, SignerMethod } from "./signers/types.js";
 import { renderQrSvg } from "./qr.js";
+import { setActiveSession, clearActiveSession } from "./globalSession.js";
 
 type Screen =
   | "welcome"
@@ -215,6 +216,7 @@ export class BitLoginAuthElement extends HTMLElement {
 
   disconnectedCallback(): void {
     if (this.successDismissTimer !== null) clearTimeout(this.successDismissTimer);
+    clearActiveSession(this);
     this.releaseSigner();
     this.worker.terminate();
   }
@@ -269,6 +271,7 @@ export class BitLoginAuthElement extends HTMLElement {
       if (this.altSigner.method === "nip46") void this.worker.nip46Disconnect();
       this.altSigner = null;
       this.session = null;
+      clearActiveSession(this);
       this.releaseSigner();
       this.dispatchEvent(new CustomEvent("bitlogin-logout"));
       this.goto("welcome");
@@ -276,6 +279,7 @@ export class BitLoginAuthElement extends HTMLElement {
     }
     await this.worker.logout();
     this.session = null;
+    clearActiveSession(this);
     this.releaseSigner();
     this.dispatchEvent(new CustomEvent("bitlogin-logout"));
     this.goto("welcome");
@@ -591,6 +595,15 @@ export class BitLoginAuthElement extends HTMLElement {
       nip04: true,
       getRelays: true
     };
+    if (this.session) {
+      // Keep window.bitlogin.activeMethod()/activeSession() in step with the
+      // bitlogin-login event -- hosts may use either.
+      setActiveSession(this, {
+        method: this.session.method,
+        publicKey: this.session.publicKey,
+        npub: this.session.npub
+      });
+    }
     this.dispatchEvent(
       new CustomEvent("bitlogin-login", {
         detail: {

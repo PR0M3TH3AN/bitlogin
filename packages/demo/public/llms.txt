@@ -47,12 +47,18 @@ deployment above.
   existing Nostr app code that already calls `window.nostr` works unmodified,
   same as it would against a browser extension (Alby, nos2x, …).
 - `window.bitlogin` — installed as soon as the script loads, independent of
-  login state: `{ version, isActiveSigner(), releaseSigner() }`. Use
-  `window.bitlogin.isActiveSigner()` to tell whether BitLogin specifically
-  (not another extension) currently backs `window.nostr`, and
-  `releaseSigner()` to hand `window.nostr` back (a safe no-op if BitLogin
-  doesn't hold it) when a user switches to a different signing method in
-  your own UI.
+  login state: `{ version, isActiveSigner(), releaseSigner(), activeMethod(),
+  activeSession() }`. Two distinct questions: `activeMethod()` answers "is
+  someone signed in through BitLogin, and how" ('bitlogin' | 'nip07' |
+  'nip46' | null; `activeSession()` adds publicKey and npub — public data
+  only), while `isActiveSigner()` answers "does BitLogin currently back
+  window.nostr". They deliberately diverge during NIP-07 sessions: the
+  extension rightly owns window.nostr (isActiveSigner() false) while the
+  user IS signed in through BitLogin (activeMethod() 'nip07'). Use
+  activeMethod()/the bitlogin-login event for session state, never
+  isActiveSigner(). `releaseSigner()` hands `window.nostr` back (safe no-op
+  if BitLogin doesn't hold it) when a user switches signing methods in your
+  own UI.
 - The `<bitlogin-auth>` element also exposes instance-scoped
   `claimSigner()` / `releaseSigner()` methods for the same purpose;
   `claimSigner()` is called automatically on every successful sign-in,

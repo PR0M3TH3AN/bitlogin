@@ -1,5 +1,7 @@
 /** Entry point: any static site includes this file and drops in <bitlogin-auth>. */
 import { BitLoginAuthElement } from "./element.js";
+import { getActiveSession, type ActiveSessionInfo } from "./globalSession.js";
+import type { SignerMethod } from "./signers/types.js";
 
 if (!customElements.get("bitlogin-auth")) {
   customElements.define("bitlogin-auth", BitLoginAuthElement);
@@ -24,6 +26,19 @@ export interface BitLoginGlobal {
    * holds several widget instances. Returns whether it actually released anything.
    */
   releaseSigner(): boolean;
+  /**
+   * How the current widget session was established -- 'bitlogin' (password
+   * account), 'nip07' (extension), 'nip46' (remote signer) -- or null when
+   * nobody is signed in. THE session check for hosts. Deliberately distinct
+   * from isActiveSigner(): during a NIP-07 session the extension rightly owns
+   * window.nostr, so isActiveSigner() is false while activeMethod() is
+   * 'nip07'. With several <bitlogin-auth> elements, reflects the most recent
+   * sign-in.
+   */
+  activeMethod(): SignerMethod | null;
+  /** The current session's public identity ({ method, publicKey, npub }), or
+   *  null. Public data only -- never key material. */
+  activeSession(): ActiveSessionInfo | null;
 }
 
 declare global {
@@ -56,6 +71,12 @@ window.bitlogin = {
       return true;
     }
     return false;
+  },
+  activeMethod(): SignerMethod | null {
+    return getActiveSession()?.method ?? null;
+  },
+  activeSession(): ActiveSessionInfo | null {
+    return getActiveSession();
   }
 };
 
