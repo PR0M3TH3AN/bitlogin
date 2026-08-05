@@ -16,7 +16,10 @@ import {
 import { RelayPool } from "./pool.js";
 import { MockRelay } from "../test-support/mockRelay.js";
 import {
+  BUILTIN_DISCOVERY_RELAYS,
+  BUILTIN_VAULT_RELAYS,
   MAINTAINER_PUBLIC_KEY_HEX,
+  WRITE_HOSTILE_RELAYS,
   mergeRelayLists,
   parseAndVerifyBootstrapList,
   type BootstrapRelayList,
@@ -425,5 +428,40 @@ describe("RelayPool quorum", () => {
     const withEvents = result.outcomes.filter((o) => o.events.length > 0);
     expect(withEvents).toHaveLength(3);
     pool.closeAll();
+  });
+});
+
+/*
+ * The built-in relay lists are a shipped configuration that decides whether a
+ * user can create an account at all, so they get the same treatment as any
+ * other invariant: pinned, with the reasoning attached.
+ *
+ * Hermetic on purpose -- no relay is contacted here. Reachability is a
+ * property of the network the user is on and cannot be asserted in CI;
+ * WRITE POLICY is a property of the relay and can.
+ */
+describe("built-in relay lists", () => {
+  it("keeps write-hostile relays out of the vault (publish) list", () => {
+    // nostr.wine advertises payment_required + restricted_writes in its own
+    // NIP-11 document, so it can never accept a free user's capsule. It sat
+    // in this list occupying one of five write slots it could not fill.
+    for (const hostile of WRITE_HOSTILE_RELAYS) {
+      expect(BUILTIN_VAULT_RELAYS).not.toContain(hostile);
+    }
+  });
+
+  it("leaves enough margin over the publish floor to lose relays", () => {
+    // publishAndVerify enforces minAcks/minReadbacks = 2 regardless of list
+    // size. Two usable relays against a floor of two is zero margin: one
+    // unreachable relay fails registration outright. Require room to lose
+    // several and still clear the floor.
+    expect(BUILTIN_VAULT_RELAYS.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("ships no duplicates and only secure websocket URLs", () => {
+    for (const list of [BUILTIN_VAULT_RELAYS, BUILTIN_DISCOVERY_RELAYS]) {
+      expect(new Set(list).size).toBe(list.length);
+      for (const url of list) expect(url.startsWith("wss://")).toBe(true);
+    }
   });
 });

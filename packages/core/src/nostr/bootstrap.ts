@@ -23,9 +23,56 @@ export const MAINTAINER_PUBLIC_KEY_HEX: string | null = null;
 // comfortably -- a 3-relay list has zero margin the moment one relay is
 // unreachable, which is exactly what "add more vault relays" (the
 // registration failure message) is telling operators to fix.
-export const BUILTIN_VAULT_RELAYS: readonly string[] = ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.nostr.band", "wss://nostr.wine", "wss://relay.snort.social"];
+/**
+ * Relays that CANNOT accept an ordinary user's capsule, by their own policy.
+ *
+ * Measured 2026-08-05 from each relay's NIP-11 document, not from reputation:
+ * `nostr.wine` advertises `payment_required: true` and
+ * `restricted_writes: true`, so a free user's write is refused there no matter
+ * how healthy the socket looks. It sat in the vault list below occupying one
+ * of five write slots it could never fill.
+ *
+ * A relay here may still be perfectly good for READING. This list exists so
+ * the test suite can refuse to let one back into a write path.
+ */
+export const WRITE_HOSTILE_RELAYS: readonly string[] = ["wss://nostr.wine", "wss://nostr21.com", "wss://nostr.land"];
 
-export const BUILTIN_DISCOVERY_RELAYS: readonly string[] = ["wss://purplepag.es", "wss://relay.nostr.band", "wss://nostr-pub.wellorder.net"];
+/**
+ * Vault relays: where capsules are PUBLISHED, so every entry must accept
+ * anonymous writes.
+ *
+ * Widened 2026-08-05 after measuring the old five. Only two could actually
+ * take a write from a fresh client: nostr.wine refuses by policy (above), and
+ * relay.damus.io and relay.nostr.band were unreachable across three runs from
+ * the machine under test. Two usable relays against a floor of two
+ * acknowledgements is zero margin -- one hiccup and registration or a
+ * password rotation fails outright.
+ *
+ * damus stays: it is the most widely used relay on the network and the
+ * failure may be datacenter-IP filtering rather than downtime. The point of
+ * widening is that quorum no longer DEPENDS on it.
+ */
+export const BUILTIN_VAULT_RELAYS: readonly string[] = [
+  "wss://nos.lol",
+  "wss://offchain.pub",
+  "wss://nostr.bitcoiner.social",
+  "wss://relay.mostr.pub",
+  "wss://nostr-pub.wellorder.net",
+  "wss://relay.primal.net",
+  "wss://relay.snort.social",
+  "wss://relay.damus.io",
+];
+
+/**
+ * Discovery relays: read-only lookups (profiles, relay lists), so a
+ * search-oriented or write-restricted relay is appropriate here.
+ */
+export const BUILTIN_DISCOVERY_RELAYS: readonly string[] = [
+  "wss://purplepag.es",
+  "wss://relay.nostr.band",
+  "wss://nostr-pub.wellorder.net",
+  "wss://relay.primal.net",
+];
 
 /** Well-known static HTTPS fallback URLs for the signed relay-list document (§19.1). */
 export const BOOTSTRAP_HTTPS_FALLBACK_URLS: readonly string[] = [];
