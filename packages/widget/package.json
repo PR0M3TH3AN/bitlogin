@@ -17,7 +17,7 @@
     "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
+    "typescript": "^7.0.2",
     "vite": "^6.1.0"
   }
 }
