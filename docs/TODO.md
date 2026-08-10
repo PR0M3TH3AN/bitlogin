@@ -171,3 +171,147 @@ Carried from the 2026-07-30 audit; none are live defects.
   That gate is now **met** — the sudo key lives only in the phrase-gated
   recovery capsule — but the UI still needs a separately reviewed key
   ceremony before it ships.
+
+## Additive browser distribution and integrator API roadmap
+
+These are additive compatibility goals. The existing multi-file build,
+`<bitlogin-auth>` behavior, `window.nostr` provider, derivation chain, session
+formats, and current consuming applications are compatibility contracts. Do
+not replace or silently alter them while adding standalone distribution or a
+new public API. Every release must continue to produce and test the standard
+build before the standalone build is considered successful.
+
+### Priority 1 — Distribution
+
+- [ ] Add a standalone browser build target: `npm run build:standalone`.
+- [ ] Produce one self-contained `bitlogin.js` for standalone consumers.
+- [ ] Keep the standard multi-file build unchanged and available alongside it:
+      `dist/standard/` and `dist/standalone/`.
+- [ ] Remove standalone runtime dependence on external `cryptoWorker.js`,
+      hashed shared chunks, or other sibling files; preserve Web Worker
+      isolation internally where possible using a Blob/module worker.
+- [ ] Support this minimal static-site integration:
+      `<script type="module" src="./bitlogin.js"></script>` and
+      `<bitlogin-auth></bitlogin-auth>`.
+- [ ] Verify standalone hosting from arbitrary static HTTPS origins, including
+      GitHub Pages, Cloudflare Pages, Netlify, Vercel, and ordinary nginx.
+- [ ] Verify localhost development usage.
+- [ ] Document `file://` limitations clearly, including the recommended local
+      HTTPS or local development-server path.
+- [ ] Define CSP requirements for standalone Blob/module workers and report
+      incompatible policies instead of silently degrading crypto isolation.
+
+### Priority 2 — Developer API
+
+- [ ] Define and document one canonical signer interface with capability-based
+      methods: `getPublicKey()`, `signEvent()`, `getRelays()`, and supported
+      `nip04.encrypt/decrypt`, `nip44.encrypt/decrypt`, and NWC operations.
+- [ ] Keep `window.nostr` compatibility, including its existing NIP-07-shaped
+      behavior, as an adapter over the canonical signer rather than a breaking
+      replacement.
+- [ ] Expose a clean additive `window.bitlogin` API, including
+      `activeSession()`, `login()`, `logout()`, and `getSigner()`.
+- [ ] Add and document stable lifecycle event aliases: `bitlogin:ready`,
+      `bitlogin:login`, `bitlogin:logout`, and `bitlogin:error`. Preserve the
+      existing hyphenated events (`bitlogin-login`, `bitlogin-logout`, and
+      related current event names) for compatibility; the colon-named events
+      must be additive and must not replace them silently.
+- [ ] Version and test event payloads; preserve existing event names and
+      payload fields used by current apps while adding new fields additively.
+- [ ] Expose capability detection, for example `signer.capabilities()`, for
+      `signEvent`, `nip04`, `nip44`, `nip46`, `nwc`, and `passkey`.
+- [ ] Ensure capability reporting describes the active session and never
+      implies support for a method that the active signer cannot perform.
+
+### Priority 3 — Embedding and UI
+
+- [ ] Support a headless mode so applications can use BitLogin without
+      rendering `<bitlogin-auth>`.
+- [ ] Keep `<bitlogin-auth>` as the default easy-to-integrate UI.
+- [ ] Allow applications to open the login dialog programmatically, including
+      `await bitlogin.login()`.
+- [ ] Allow configurable login methods, for example
+      `<bitlogin-auth methods="passkey,password,nip07,nip46"></bitlogin-auth>`.
+- [ ] Add basic theming hooks: CSS custom properties, light/dark support,
+      accent color, and compact mode.
+- [ ] Expose supported configuration through documented attributes/options;
+      do not require integrators to reach into widget internals or private DOM.
+- [ ] Preserve current login-method defaults and existing method ordering unless
+      an explicit versioned compatibility decision says otherwise.
+
+### Priority 4 — Build, versioning, and releases
+
+- [ ] Give browser artifacts predictable filenames: `bitlogin.js` and,
+      if useful, `bitlogin.min.js`.
+- [ ] Expose version information through `window.bitlogin.version` and the
+      module/API surface where applicable.
+- [ ] Emit integrity/hash manifests for releases and document exactly which
+      artifact each hash covers.
+- [ ] Create downloadable release artifacts: `bitlogin-standard.zip` and
+      `bitlogin-standalone.js`.
+- [ ] Publish release notes specifically for integrators, including changed
+      browser requirements, CSP requirements, API additions, and compatibility
+      notes.
+- [ ] Evaluate public package exports for the widget, standalone entry point,
+      and core package (for example `@bitlogin/widget`,
+      `@bitlogin/widget/standalone`, and `@bitlogin/core`) without exposing
+      unsupported private paths or weakening package encapsulation.
+
+### Priority 5 — Integration and compatibility testing
+
+- [ ] Add a minimal vanilla HTML integration test for both standard and
+      standalone builds.
+- [ ] Test standalone flows for password account, passkey account, recovery
+      phrase, NIP-07 extension, and NIP-46 bunker.
+- [ ] Test `getPublicKey()`, `signEvent()`, `logout()`, and session restore
+      through both the canonical signer and the compatibility adapter.
+- [ ] Test signed kind-1 publication against real or mock relays.
+- [ ] Test multiple BitLogin-enabled applications on separate origins and
+      confirm origin-scoped storage/session behavior remains isolated.
+- [ ] Test CSP compatibility, including the documented Blob/module-worker
+      requirements and a fail-closed result when a required policy is absent.
+- [ ] Test Blob Worker behavior across Chromium, Firefox, and Safari.
+- [ ] Test passkeys on real platform authenticators in addition to the existing
+      virtual-authenticator coverage.
+- [ ] Run the existing derivation-chain known-answer tests and regression suite
+      unchanged; never update expected values to make a compatibility failure
+      pass.
+- [ ] Verify current consuming applications (including AdZap, Satisfied,
+      BitUnlock, BitRoad, and Bitvid where their checkouts are available) still
+      load the standard artifact and retain login, signing, logout, and session
+      restore behavior.
+- [ ] Add a release gate that builds/tests the standard artifact before and
+      after standalone bundling, proving standalone work cannot replace or
+      mutate the standard output accidentally.
+
+### Priority 6 — Documentation
+
+- [ ] Put a "30-second integration" section at the top of the README.
+- [ ] Provide a complete single-page standard and standalone example.
+- [ ] Provide a headless example.
+- [ ] Provide a Nostr publishing example:
+      `const signer = await bitlogin.getSigner();` followed by
+      `const event = await signer.signEvent(...);`.
+- [ ] Provide a migration guide from the standard build to the standalone
+      build, with a rollback path that requires no application-code rewrite.
+- [ ] Clearly explain the security tradeoff between the standard worker/chunk
+      build and the standalone bundled build.
+- [ ] Clearly state that standalone is a distribution convenience, not a
+      stronger security boundary; an embedding host remains trusted and
+      same-origin with the widget unless a separate isolation architecture is
+      used.
+
+### Definition of done
+
+A developer can download one JavaScript file, add approximately 3–5 lines of
+HTML/JavaScript, and obtain a real BitLogin-backed Nostr signer without npm,
+Vite, React, or a backend. Existing standard-build consumers continue to work
+without source changes, and the compatibility and security claims above are
+backed by automated tests and release artifacts.
+
+### Context warnings to resolve
+
+- [ ] Replace unresolved package references such as `@file:bitlogin/widget`,
+      `@file:bitlogin/widget/standalone`, and `@file:bitlogin/core` with actual
+      documented package paths or mark them as examples only; do not publish
+      links to files or exports that do not exist.
