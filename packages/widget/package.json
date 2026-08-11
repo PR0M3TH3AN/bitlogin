@@ -6,12 +6,20 @@
   "type": "module",
   "description": "BitLogin embeddable login widget: a <bitlogin-auth> custom element plus a window.nostr NIP-07-compatible provider, backed by a dedicated crypto Web Worker.",
   "main": "./dist/bitlogin.js",
+  "types": "./dist-types/index.d.ts",
   "exports": {
-    ".": "./dist/bitlogin.js",
-    "./session": "./dist/bitlogin-session.js"
+    ".": {
+      "types": "./dist-types/index.d.ts",
+      "default": "./dist/bitlogin.js"
+    },
+    "./session": {
+      "types": "./dist-types/session.d.ts",
+      "default": "./dist/bitlogin-session.js"
+    }
   },
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && npm run build:types",
+    "build:types": "tsc -p tsconfig.types.json",
     "dev": "vite build --watch",
     "typecheck": "tsc --noEmit"
   },

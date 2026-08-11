@@ -1,0 +1,16 @@
+{
+  "//": "Emits public .d.ts for @bitlogin/widget (and /session) into dist-types. Kept separate from tsconfig.json (which is noEmit typecheck-only). Tests and the e2e tree are excluded so they don't ship as declarations.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist-types",
+    "rootDir": "src",
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src"],
+  "exclude": ["src/e2e", "**/*.test.ts"]
+}

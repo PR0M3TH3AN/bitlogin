@@ -416,6 +416,15 @@ how much they cost.
 
 ### Small
 
-- Ship a `.d.ts` (or documented event/method surface) for the element:
-  `getPublicKey`, `signEvent`, `nip44Encrypt/Decrypt`, and the event
-  `detail` shapes. Integrators currently read the demo to learn the API.
+- **[DONE 2026-08-11]** Ship a `.d.ts` (or documented event/method surface) for
+  the element. **Shipped:** the widget now emits type declarations from source
+  (`tsconfig.types.json` → `dist-types/`, wired via `build:types` and the
+  package `types`/`exports` conditions for both `@bitlogin/widget` and
+  `@bitlogin/widget/session`) — zero-drift because they're generated, not
+  hand-written. Added the type surface integrators actually want: a
+  `HTMLElementTagNameMap["bitlogin-auth"]` augmentation (typed
+  `querySelector`/`createElement`), typed `addEventListener` overloads via a
+  declaration-merged interface, and exported event-detail types
+  (`BitLoginLoginEventDetail` etc. + `BitLoginEventMap`) in `src/events.ts`.
+  Verified with a consumer conformance typecheck; README "TypeScript" section
+  added.

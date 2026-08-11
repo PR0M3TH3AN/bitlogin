@@ -96,6 +96,13 @@ window.bitlogin = {
 export { readCachedSession } from "./session.js";
 export type { PublicSessionInfo } from "./publicSession.js";
 export { BitLoginAuthElement } from "./element.js";
+export type {
+  BitLoginEventMap,
+  BitLoginLoginEventDetail,
+  BitLoginConnectionGrantedEventDetail,
+  BitLoginSignerClaimedEventDetail
+} from "./events.js";
+export type { SignerMethod, SignerCapabilities } from "./signers/types.js";
 export { WorkerClient } from "./worker/workerClient.js";
 export { createNip07Provider } from "./provider.js";
 export type { BitLoginConfig } from "./config.js";

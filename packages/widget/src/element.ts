@@ -20,6 +20,7 @@ import { Nip46Signer } from "./signers/nip46.js";
 import type { Signer, SignerCapabilities, SignerMethod } from "./signers/types.js";
 import { renderQrSvg } from "./qr.js";
 import { setActiveSession, clearActiveSession } from "./globalSession.js";
+import type { BitLoginEventMap } from "./events.js";
 import {
   buildPasskeyCreateOptions,
   buildPasskeyGetOptions,
@@ -2216,4 +2217,40 @@ function pickRandomIndices(max: number, count: number): number[] {
 
 function escapeHtml(input: string): string {
   return input.replace(/[&<>"']/gu, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
+}
+
+// Declaration merge: give BitLoginAuthElement typed addEventListener/
+// removeEventListener overloads for its own bitlogin-* events, so a host gets
+// `e.detail` typed without a cast. The string overload preserves the base
+// signature for every other event. Merging an interface of the same name adds
+// these to the class type; the runtime implementation stays HTMLElement's.
+export interface BitLoginAuthElement {
+  addEventListener<K extends keyof BitLoginEventMap>(
+    type: K,
+    listener: (this: BitLoginAuthElement, ev: BitLoginEventMap[K]) => void,
+    options?: boolean | AddEventListenerOptions
+  ): void;
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions
+  ): void;
+  removeEventListener<K extends keyof BitLoginEventMap>(
+    type: K,
+    listener: (this: BitLoginAuthElement, ev: BitLoginEventMap[K]) => void,
+    options?: boolean | EventListenerOptions
+  ): void;
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions
+  ): void;
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    // So document.querySelector("bitlogin-auth") and
+    // document.createElement("bitlogin-auth") are typed as the element.
+    "bitlogin-auth": BitLoginAuthElement;
+  }
 }

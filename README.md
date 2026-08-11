@@ -242,6 +242,33 @@ Nostr signer (browser extension) is active in this browser and couldn't be
 replaced...") using the same warning banner already shown for rollback and
 relay-disagreement conditions.
 
+### TypeScript
+
+The package ships type declarations (`@bitlogin/widget` and
+`@bitlogin/widget/session`), generated from source so they can't drift.
+Registering the widget augments the DOM types, so integrators get real
+autocomplete instead of reading the demo:
+
+```ts
+import "@bitlogin/widget"; // registers <bitlogin-auth> and its types
+
+const el = document.querySelector("bitlogin-auth"); // typed as BitLoginAuthElement
+el?.addEventListener("bitlogin-login", (e) => {
+  // e.detail is typed: { publicKey?: string; method; capabilities }
+  console.log(e.detail.method, e.detail.capabilities.nip44);
+});
+await el?.getPublicKey(); // typed element methods
+
+import { readCachedSession } from "@bitlogin/widget/session";
+const who = await readCachedSession(); // { pubkey, npub, name? } | null
+```
+
+Exported types include `BitLoginAuthElement`, the `bitlogin-*`
+`...EventDetail` shapes and `BitLoginEventMap`, `PublicSessionInfo`,
+`SignerMethod`/`SignerCapabilities`, `BitLoginConfig`, and the
+`window.bitlogin` (`BitLoginGlobal`) interface. Run `npm run build` (or
+`build:types`) to emit them into `dist-types/`.
+
 ### Theming
 
 `<bitlogin-auth>` renders in a shadow root, but its colors, radius, font, and
