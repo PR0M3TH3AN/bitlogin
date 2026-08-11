@@ -238,9 +238,30 @@ export class BitLoginAuthElement extends HTMLElement {
 
   disconnectedCallback(): void {
     if (this.successDismissTimer !== null) clearTimeout(this.successDismissTimer);
+    // Captured before clearActiveSession() below wipes the signal.
+    const hadActiveSession = Boolean(this.session || this.altSigner);
     clearActiveSession(this);
     this.releaseSigner();
-    this.worker.terminate();
+    // Removing <bitlogin-auth> from the DOM tears down its crypto worker. That's
+    // correct on a genuine teardown, but a host that re-renders its surrounding
+    // markup (a framework diff, an htmx swap, an innerHTML assignment) can remove
+    // and re-insert the element incidentally -- and then every later
+    // signEvent/getPublicKey call rejects, which is baffling without the cause.
+    // Say so loudly rather than letting the app hit silent rejections. The fix is
+    // to mount the element into a container the host's re-renders never replace
+    // (README "Integration gotcha").
+    if (hadActiveSession) {
+      console.error(
+        "[BitLogin] <bitlogin-auth> was removed from the DOM while a session was active. " +
+          "Its crypto worker is now torn down, so later signEvent/getPublicKey calls will reject. " +
+          "If this was an incidental re-render, mount the element in a stable container your re-renders " +
+          "don't replace; see the BitLogin README, \"Integration gotcha\"."
+      );
+    }
+    this.worker.terminate(
+      "BitLogin's <bitlogin-auth> element was removed from the DOM, tearing down its signer. " +
+        "Re-mount the widget or reload the page to sign in again."
+    );
   }
 
   // ---- Public API mirroring window.nostr, scoped to this element instance ----

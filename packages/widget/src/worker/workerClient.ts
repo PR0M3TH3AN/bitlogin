@@ -53,6 +53,10 @@ export class WorkerClient {
   >();
   private counter = 0;
   private dead = false;
+  /** Why the worker is gone, surfaced on every post-teardown rejection so a
+   *  developer sees the CAUSE (usually an unmounted element), not just a bare
+   *  failure. Overridable via terminate(reason). */
+  private deadReason = "This BitLogin session was torn down; reload the page to sign in again.";
   /** Set by the element to receive unsolicited worker frames (auth_url). */
   onNotification: ((notification: WorkerNotification) => void) | null = null;
 
@@ -120,7 +124,7 @@ export class WorkerClient {
     timeoutMs = CALL_TIMEOUT_MS
   ): Promise<WorkerActionMap[A][1]> {
     if (this.dead) {
-      return Promise.reject(new Error("This BitLogin session was torn down; reload the page to sign in again."));
+      return Promise.reject(new Error(this.deadReason));
     }
     const id = `${Date.now().toString(36)}-${(this.counter++).toString(36)}`;
     return new Promise((resolve, reject) => {
@@ -248,11 +252,14 @@ export class WorkerClient {
     return this.call("logout", {});
   }
 
-  terminate(): void {
+  terminate(reason?: string): void {
     this.dead = true;
+    if (reason) this.deadReason = reason;
     this.worker.terminate();
     // terminate() silently kills in-flight work; without this every caller
-    // waits forever on a worker that no longer exists.
-    this.failAll("The BitLogin crypto worker was terminated.");
+    // waits forever on a worker that no longer exists. Reject with the same
+    // reason later calls get, so an in-flight signEvent and a subsequent one
+    // fail identically and legibly.
+    this.failAll(this.deadReason);
   }
 }

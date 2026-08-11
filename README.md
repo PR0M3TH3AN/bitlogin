@@ -168,9 +168,13 @@ crypto Web Worker (that's the correct cleanup when the element is genuinely
 being removed). If your host app re-renders its own DOM by resetting an
 ancestor's `innerHTML` — a common pattern in hand-rolled UI without a
 framework's reconciler — and the widget happens to be a descendant of that
-subtree, this **silently kills the in-progress session**: `getPublicKey()`
+subtree, this **kills the in-progress session**: `getPublicKey()` that
 already resolved before the render still looks fine, but every call after
-that hangs forever, because the worker is gone and nothing ever replies.
+that fails. As of the unmount guardrail, that failure is now loud rather
+than silent — the element logs a `console.error` on disconnect-while-active,
+and every later `signEvent`/`getPublicKey` **rejects** with a message naming
+the unmount as the cause, instead of hanging forever. It's still a broken
+session, though; the fix below is unchanged.
 Mount `<bitlogin-auth>` into a container that your own re-renders never
 replace (toggle visibility with the `hidden` attribute instead of removing
 it from the DOM), not into a template string that gets thrown away and
@@ -191,8 +195,12 @@ a genuine remove-and-recreate. The worker still gets terminated, and
 because `connectedCallback` doesn't construct a new `WorkerClient` (that
 only happens once, in the constructor), the element is left reusing a
 now-dead worker: every subsequent message — `configure`, `login`,
-everything — silently hangs forever with no error, since `postMessage` on
-a terminated `Worker` is a no-op. BitUnlock hit exactly this while trying
+everything — fails, since `postMessage` on a terminated `Worker` is a
+no-op. The client now marks itself torn-down on `terminate()`, so those
+calls **reject immediately** with a clear teardown message (and the removal
+logged a `console.error`) rather than hanging forever with no error — but
+the element is still stuck on a dead worker, so this is a diagnosis, not a
+recovery. BitUnlock hit exactly this while trying
 to work around the innerHTML gotcha above: it kept `#bitloginMount` static
 but used `replaceWith()` to relocate it into a per-step placeholder,
 believing a move (vs. removal) would spare the worker. It doesn't. The fix

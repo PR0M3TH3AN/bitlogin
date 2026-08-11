@@ -386,12 +386,17 @@ how much they cost.
 
 ### Medium
 
-- **The unmount-kills-the-worker footfooter deserves a guardrail.** The docs
-  warn that removing `<bitlogin-auth>` tears down the crypto worker and hangs
-  every later signing call with no error. I hit exactly this. Consider: (a) a
-  console.error when the element is disconnected while a session is active, and
-  (b) `signEvent` rejecting with a clear "widget was unmounted" error instead of
-  hanging forever. Silent infinite-hang is the worst failure mode.
+- **[DONE 2026-08-11] The unmount-kills-the-worker footgun now has a guardrail.**
+  The docs warned that removing `<bitlogin-auth>` tears down the crypto worker
+  and hangs every later signing call with no error. **Shipped both asks:**
+  (a) `disconnectedCallback` now logs a `console.error` when the element is
+  removed while a session is active, naming the unmount and pointing at the
+  README "Integration gotcha"; and (b) `WorkerClient.terminate(reason)` records
+  the reason and `signEvent`/`getPublicKey`/etc. — whether in-flight at teardown
+  or issued afterward — reject with that message instead of hanging (the
+  `dead`-flag path already prevented the infinite hang; this makes the *cause*
+  legible and unifies the message). Covered by `worker/workerClient.test.ts`;
+  README gotcha paragraphs updated to say "rejects loudly," not "hangs forever."
 - **Styling hooks / CSS parts.** The widget renders in a shadow root, so a host
   can only frame it, not theme it. A few `::part()` hooks (button, panel, text)
   would let it match a host design system instead of looking pasted in. Tessera
