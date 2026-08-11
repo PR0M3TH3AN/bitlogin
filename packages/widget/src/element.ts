@@ -1582,6 +1582,54 @@ export class BitLoginAuthElement extends HTMLElement {
   private render(): void {
     const successOverlay = this.pendingSuccessLabel ? this.renderSuccessOverlay(this.pendingSuccessLabel) : "";
     this.root.innerHTML = `<div class="card">${this.renderScreen()}${successOverlay}</div>`;
+    this.exposeParts();
+  }
+
+  /**
+   * Stamps `part` attributes onto the freshly rendered markup so a host page can
+   * theme the widget through the shadow boundary with `bitlogin-auth::part(...)`
+   * -- structural styling (padding, borders, shadows, layout) that the `:host`
+   * CSS custom properties (see styles.ts) can't reach. Custom properties remain
+   * the first tool for colours/radius/font; parts are the escape hatch for
+   * matching a host design system without the widget looking pasted in.
+   *
+   * Done here, once per render, rather than inline on ~60 rendered elements:
+   * the markup is regenerated on every render(), and mapping by existing class
+   * keeps new buttons/notices exposed automatically instead of drifting. The
+   * exposed set is a documented contract (README "Theming") -- keep the names
+   * stable. Purely decorative nodes (success overlay, spinner) stay unexposed.
+   */
+  private exposeParts(): void {
+    const set = (el: Element, ...parts: string[]) => el.setAttribute("part", parts.join(" "));
+
+    const card = this.root.querySelector(".card");
+    if (card) set(card, "card");
+
+    this.root.querySelectorAll("button, a").forEach((el) => {
+      if (el.classList.contains("primary")) set(el, "button", "button-primary");
+      else if (el.classList.contains("secondary")) set(el, "button", "button-secondary");
+      else if (el.classList.contains("link") || el.classList.contains("link-inline")) set(el, "link");
+      else set(el, "button");
+    });
+
+    this.root.querySelectorAll("input").forEach((el) => {
+      set(el, el.type === "checkbox" ? "checkbox" : "input");
+    });
+
+    this.root.querySelectorAll("h2").forEach((el) => set(el, "heading"));
+    this.root.querySelectorAll(".sub, .small, .field-hint").forEach((el) => set(el, "text"));
+
+    this.root.querySelectorAll(".notice").forEach((el) => {
+      const variant = el.classList.contains("warn")
+        ? "notice-warn"
+        : el.classList.contains("error")
+          ? "notice-error"
+          : el.classList.contains("info")
+            ? "notice-info"
+            : null;
+      if (variant) set(el, "notice", variant);
+      else set(el, "notice");
+    });
   }
 
   private renderSuccessOverlay(label: string): string {

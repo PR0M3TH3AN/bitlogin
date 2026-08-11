@@ -397,10 +397,17 @@ how much they cost.
   `dead`-flag path already prevented the infinite hang; this makes the *cause*
   legible and unifies the message). Covered by `worker/workerClient.test.ts`;
   README gotcha paragraphs updated to say "rejects loudly," not "hangs forever."
-- **Styling hooks / CSS parts.** The widget renders in a shadow root, so a host
-  can only frame it, not theme it. A few `::part()` hooks (button, panel, text)
-  would let it match a host design system instead of looking pasted in. Tessera
-  worked around this by wrapping it in a bordered panel with its own header.
+- **[DONE 2026-08-11] Styling hooks / CSS parts.** The widget renders in a
+  shadow root, so a host could recolor it via the `:host` custom properties but
+  couldn't restyle structure. **Shipped:** a stable set of `::part()` hooks —
+  `card`, `button` (+`button-primary`/`button-secondary`), `link`, `input`,
+  `checkbox`, `heading`, `text`, `notice` (+`notice-warn`/`-info`/`-error`) —
+  stamped centrally per render in `element.ts` `exposeParts()` (mapped by class
+  so new elements stay exposed without drift). Documented as a contract in the
+  README "Theming" section. Verified in-browser that
+  `bitlogin-auth::part(...)` matches through the shadow boundary. Custom
+  properties remain the first tool for color/radius/font; parts are the escape
+  hatch for structure (padding/border/shadow/shape).
 - **[RESOLVED — already the behavior] Session-change event on restore.**
   Confirmed: `bitlogin-login` already fires on silent session restore across a
   page load, not just interactive login, so a host listener needn't distinguish

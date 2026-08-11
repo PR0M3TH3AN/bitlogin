@@ -278,6 +278,36 @@ them is a valid choice — the widget just uses its own look. See BitRoad's
 `bitlogin-auth { ... }` rule in `src/styles.css` for a real integration that
 maps every one of these to its own design tokens.
 
+**Structural theming with `::part()`.** Custom properties cover colors,
+radius, font, and width — reach for them first. When you need to restyle
+_structure_ the tokens don't expose (padding, borders, box-shadow, a
+different button shape), the widget exposes a stable set of shadow parts you
+can target from light-DOM CSS:
+
+```css
+bitlogin-auth::part(card) { box-shadow: 0 8px 30px rgba(0,0,0,.12); border: 1px solid #e5e7eb; }
+bitlogin-auth::part(button) { border-radius: 8px; font-weight: 600; }
+bitlogin-auth::part(button-primary) { text-transform: uppercase; letter-spacing: .02em; }
+bitlogin-auth::part(input) { border-width: 2px; }
+bitlogin-auth::part(notice-warn) { border-left: 3px solid currentColor; }
+```
+
+The exposed parts (kept stable as a contract):
+
+| Part | Element |
+| --- | --- |
+| `card` | the outer widget panel |
+| `button`, `button-primary`, `button-secondary` | action buttons (both variants also carry the generic `button`) |
+| `link` | link-style buttons and inline links |
+| `input`, `checkbox` | form fields |
+| `heading` | screen headings |
+| `text` | secondary / hint text |
+| `notice`, `notice-warn`, `notice-info`, `notice-error` | inline message boxes (variants also carry the generic `notice`) |
+
+Parts are an escape hatch for matching a host design system without the
+widget looking pasted in; they don't expose the widget's internal layout or
+let a host reach past these named anchors.
+
 ## Deployment
 
 The demo site deploys to Vercel: `vercel.json` at the repo root sets the
