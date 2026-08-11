@@ -356,3 +356,54 @@ A developer or AI agent can take `bitlogin.js`, `bitgate.js`, `bitfeed.js`, and
 `bitblocks.js` and build a functional static Nostr application with almost no
 infrastructure or integration boilerplate, while each individual library
 remains usable without BitBlocks.
+
+## Feedback from integrating into Tessera (2026-08-11)
+
+Notes from embedding `@bitlogin/widget` in the Tessera static site. Grouped by
+how much they cost.
+
+### High-value
+
+- **[DONE 2026-08-11] Lightweight session-state read without the full widget.**
+  The single biggest cost: to know *whether a user is signed in* on a page, you
+  used to have to mount the whole widget (bitlogin.js + crypto worker + wasm,
+  ~1.6MB) because it was the only thing that restored the per-origin session.
+  **Shipped:** the widget now writes a cleartext, public-only record
+  (`{ pubkey, npub, name? }` — never key material) beside its encrypted session
+  in IndexedDB and clears it on logout, and a new `@bitlogin/widget/session`
+  entry point (`bitlogin-session.js`, ~1 KB gzip, zero deps, no worker/wasm)
+  exposes `readCachedSession(): Promise<{ pubkey, npub, name? } | null>`. The
+  same call is mirrored on `window.bitlogin.readCachedSession()` for pages that
+  already load the full widget. See `src/publicSession.ts`, `src/session.ts`,
+  and the README "Reading who's signed in without loading the widget" section.
+  Remaining polish: have the widget also record the profile display `name` once
+  fetched (currently `name` is only set when the caller supplies it), and add an
+  `@bitlogin/widget/session` `.d.ts` (tracked under the Small item below).
+- **A headless session-restore API.** Related: expose session restore +
+  `getPublicKey`/`signEvent` without the custom element, so a host app can wire
+  its own UI and only load the visual widget for login/management. Right now the
+  element is the only entry point.
+
+### Medium
+
+- **The unmount-kills-the-worker footfooter deserves a guardrail.** The docs
+  warn that removing `<bitlogin-auth>` tears down the crypto worker and hangs
+  every later signing call with no error. I hit exactly this. Consider: (a) a
+  console.error when the element is disconnected while a session is active, and
+  (b) `signEvent` rejecting with a clear "widget was unmounted" error instead of
+  hanging forever. Silent infinite-hang is the worst failure mode.
+- **Styling hooks / CSS parts.** The widget renders in a shadow root, so a host
+  can only frame it, not theme it. A few `::part()` hooks (button, panel, text)
+  would let it match a host design system instead of looking pasted in. Tessera
+  worked around this by wrapping it in a bordered panel with its own header.
+- **[RESOLVED — already the behavior] Session-change event on restore.**
+  Confirmed: `bitlogin-login` already fires on silent session restore across a
+  page load, not just interactive login, so a host listener needn't distinguish
+  the two (README "Sessions persist across a page reload"). No new event needed.
+  For pages that don't mount the widget at all, use `readCachedSession()` above.
+
+### Small
+
+- Ship a `.d.ts` (or documented event/method surface) for the element:
+  `getPublicKey`, `signEvent`, `nip44Encrypt/Decrypt`, and the event
+  `detail` shapes. Integrators currently read the demo to learn the API.

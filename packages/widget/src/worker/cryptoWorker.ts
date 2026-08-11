@@ -42,6 +42,7 @@ import {
 } from "@bitlogin/core/vault";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
+import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { SerialQueue } from "./serialQueue.js";
 import type { VaultConnectionSummary } from "./protocol.js";
 import type {
@@ -162,6 +163,17 @@ async function persistSession(): Promise<void> {
     ...(session.connectionVaultRoot ? { connectionVaultRoot: session.connectionVaultRoot } : {}),
     ...(session.vaultKnown ? { vaultEnabled: session.connectionVaultRoot !== null } : {})
   });
+  await persistPublicSession();
+}
+
+// Writes the cleartext public-only identity (publicSession.ts) beside the
+// encrypted record so a read-only page can show "signed in as …" without
+// loading this worker. Public data only -- never key material. Kept in lockstep
+// with persistSession()/logout so it can't outlive the real session.
+async function persistPublicSession(): Promise<void> {
+  if (!session.signer) return;
+  const pubkey = session.signer.getPublicKey();
+  await savePublicSession(store, { pubkey, npub: encodeNpub(pubkey) });
 }
 
 /**
@@ -671,12 +683,17 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       // cache entry leaves it false so requireVault says "sign in again"
       // rather than falsely claiming the account has no vault.
       session.vaultKnown = cached.vaultEnabled !== undefined;
+      // Self-heal: a session cached before the public-record feature has an
+      // encrypted entry but no cleartext one. Writing it here means the very
+      // next lightweight read sees the identity, no re-login required.
+      await persistPublicSession();
       return { restored: true, everydayPublicKey: session.signer.getPublicKey(), accountId: cached.accountId };
     }
 
     case "logout": {
       clearSession();
       await clearCachedSession(store);
+      await clearPublicSession(store);
       return {};
     }
 

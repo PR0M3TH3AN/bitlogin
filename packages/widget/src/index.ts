@@ -1,6 +1,8 @@
 /** Entry point: any static site includes this file and drops in <bitlogin-auth>. */
 import { BitLoginAuthElement } from "./element.js";
 import { getActiveSession, type ActiveSessionInfo } from "./globalSession.js";
+import { readCachedSession } from "./session.js";
+import type { PublicSessionInfo } from "./publicSession.js";
 import type { SignerMethod } from "./signers/types.js";
 
 if (!customElements.get("bitlogin-auth")) {
@@ -37,8 +39,18 @@ export interface BitLoginGlobal {
    */
   activeMethod(): SignerMethod | null;
   /** The current session's public identity ({ method, publicKey, npub }), or
-   *  null. Public data only -- never key material. */
+   *  null. Public data only -- never key material. In-memory: reflects a session
+   *  established or restored on THIS page, so it's null until the widget mounts
+   *  and restores. For a persistent "signed in as …" across page loads without
+   *  loading the widget, use readCachedSession() (or import
+   *  "@bitlogin/widget/session"). */
   activeSession(): ActiveSessionInfo | null;
+  /** Reads the persisted public identity for this origin ({ pubkey, npub,
+   *  name? }), or null. Cheap and widget-free: it reads the cleartext
+   *  public-session record rather than restoring the signer, so a header on any
+   *  page can show who's signed in without loading the crypto worker. Cannot
+   *  sign — load <bitlogin-auth> for that. */
+  readCachedSession(): Promise<PublicSessionInfo | null>;
 }
 
 declare global {
@@ -77,9 +89,12 @@ window.bitlogin = {
   },
   activeSession(): ActiveSessionInfo | null {
     return getActiveSession();
-  }
+  },
+  readCachedSession
 };
 
+export { readCachedSession } from "./session.js";
+export type { PublicSessionInfo } from "./publicSession.js";
 export { BitLoginAuthElement } from "./element.js";
 export { WorkerClient } from "./worker/workerClient.js";
 export { createNip07Provider } from "./provider.js";

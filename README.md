@@ -103,6 +103,31 @@ decrypted key sits in this browser's IndexedDB until logout," the same
 tradeoff a NIP-07 extension already makes. Calling `logout()` (or the
 element's dashboard "Log out" button) clears it.
 
+**Reading "who's signed in" without loading the widget.** A multi-page site
+often wants a persistent "Signed in as …" indicator in the header on *every*
+page, but only needs the full widget on the pages where a user actually signs
+in or manages their account. Loading `bitlogin.js` (plus the worker and wasm)
+on every page just to read the pubkey is a lot of bytes for a label. The
+`@bitlogin/widget/session` entry is a ~1 KB, dependency-free reader for exactly
+this:
+
+```html
+<script type="module">
+  import { readCachedSession } from "/vendor/bitlogin/bitlogin-session.js";
+  const who = await readCachedSession(); // { pubkey, npub, name? } | null
+  if (who) header.textContent = `Signed in as ${who.name ?? who.npub.slice(0, 12)}…`;
+</script>
+```
+
+It reads a cleartext, **public-only** record (pubkey / npub / optional display
+name — never key material) that the widget writes beside its encrypted session
+and clears on logout, so it can't report a session that has ended. It cannot
+sign: when the user clicks "sign in" or "manage account," load the full
+`<bitlogin-auth>` then and defer the heavy cost until it's needed. The same
+call is also on the full widget as `window.bitlogin.readCachedSession()`, so
+pages that already load `bitlogin.js` can use it without a second import.
+Deploy `bitlogin-session.js` alongside `bitlogin.js`.
+
 The `<bitlogin-auth>` element also mirrors `window.nostr` directly on the
 element instance (`getPublicKey`, `signEvent`, `nip44Encrypt`, `nip44Decrypt`)
 — prefer this over `window.nostr` when your host page holds a reference to
