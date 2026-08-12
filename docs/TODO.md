@@ -434,3 +434,22 @@ how much they cost.
   (`BitLoginLoginEventDetail` etc. + `BitLoginEventMap`) in `src/events.ts`.
   Verified with a consumer conformance typecheck; README "TypeScript" section
   added.
+
+## Design review — external critique (2026-08-11)
+
+From an outside review of the BitBlocks stack. BitLogin was called the highest
+upside AND highest risk in the stack.
+
+- **[agree] Highest assurance bar.** A BitLogin failure is identity compromise,
+  not "the feed looked weird." Keep promotion conservative and the
+  alpha/unaudited labeling prominent until an outside cryptographic/security
+  review. Treat an external audit as a **gate** before any "use this for real"
+  positioning — this is the one block where marketing must trail assurance.
+- **[agree] No impossibility claims in copy.** Relay retention is best-effort;
+  our own docs already say to keep the recovery export. Keep the site's language
+  on "portable / no single operator controls," never "cannot be deleted." (See
+  the umbrella claim-precision note.)
+- The choices the review praised — high-entropy passphrase (not raw human
+  passwords), Argon2id + AES-256-GCM, `window.nostr` compatibility so Nostr
+  "disappears into the background" — are the right ones. Hold that line; don't
+  soften the passphrase-entropy stance for UX.
