@@ -95,6 +95,8 @@ window.bitlogin = {
 
 export { readCachedSession } from "./session.js";
 export type { PublicSessionInfo } from "./publicSession.js";
+export { createHeadlessSigner } from "./headless.js";
+export type { HeadlessSigner, HeadlessSignerOptions } from "./headless.js";
 export { BitLoginAuthElement } from "./element.js";
 export type {
   BitLoginEventMap,

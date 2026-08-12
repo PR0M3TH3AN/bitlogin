@@ -379,10 +379,16 @@ how much they cost.
   Remaining polish: have the widget also record the profile display `name` once
   fetched (currently `name` is only set when the caller supplies it), and add an
   `@bitlogin/widget/session` `.d.ts` (tracked under the Small item below).
-- **A headless session-restore API.** Related: expose session restore +
-  `getPublicKey`/`signEvent` without the custom element, so a host app can wire
-  its own UI and only load the visual widget for login/management. Right now the
-  element is the only entry point.
+- **[DONE 2026-08-11] A headless session-restore API.** Shipped
+  `@bitlogin/widget/headless` (`bitlogin-headless.js`): `createHeadlessSigner()`
+  → `restore()` / `getPublicKey()` / `signEvent()` / `nip44Encrypt|Decrypt` /
+  `isUnlocked()` / `logout()` / `destroy()`, a DOM-free wrapper over the crypto
+  worker. It restores the cached session and signs with no custom element and no
+  `window.nostr`; it deliberately can't interactively log in (`restore()`
+  returns null when nothing is cached → mount `<bitlogin-auth>` once). Covered by
+  `headless.test.ts` (scripted-worker); also re-exported from `@bitlogin/widget`;
+  README "Signing without the widget (headless)". Deploy alongside
+  `cryptoWorker.js` + shared chunks.
 
 ### Medium
 

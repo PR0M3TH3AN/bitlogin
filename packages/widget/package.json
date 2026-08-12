@@ -15,6 +15,10 @@
     "./session": {
       "types": "./dist-types/session.d.ts",
       "default": "./dist/bitlogin-session.js"
+    },
+    "./headless": {
+      "types": "./dist-types/headless.d.ts",
+      "default": "./dist/bitlogin-headless.js"
     }
   },
   "scripts": {

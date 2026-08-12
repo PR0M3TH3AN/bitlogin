@@ -20,7 +20,10 @@ export default defineConfig({
       entry: {
         bitlogin: resolve(__dirname, "src/index.ts"),
         cryptoWorker: resolve(__dirname, "src/worker/cryptoWorker.ts"),
-        "bitlogin-session": resolve(__dirname, "src/session.ts")
+        "bitlogin-session": resolve(__dirname, "src/session.ts"),
+        // Headless signer (restore + sign, no element/DOM). Loads cryptoWorker.js
+        // at runtime like bitlogin.js, so deploy them together.
+        "bitlogin-headless": resolve(__dirname, "src/headless.ts")
       },
       formats: ["es"],
       fileName: (_format, entryName) => `${entryName}.js`

@@ -128,6 +128,30 @@ call is also on the full widget as `window.bitlogin.readCachedSession()`, so
 pages that already load `bitlogin.js` can use it without a second import.
 Deploy `bitlogin-session.js` alongside `bitlogin.js`.
 
+**Signing without the widget (headless).** `readCachedSession` reads identity
+but can't sign. When a host needs to *sign* programmatically — a background job,
+a framework rendering its own account UI, a headless test — and doesn't want the
+custom element, use the headless signer. It runs the same crypto worker without
+any DOM:
+
+```javascript
+import { createHeadlessSigner } from "@bitlogin/widget/headless";
+
+const signer = await createHeadlessSigner();
+const who = await signer.restore();          // { pubkey } | null (null → no cached session)
+if (who) {
+  const event = await signer.signEvent({ kind: 1, content: "gm", tags: [] });
+  const pubkey = await signer.getPublicKey();
+  // also: nip44Encrypt / nip44Decrypt / isUnlocked / logout / destroy
+}
+```
+
+It deliberately can't *log in* (that needs the password UI): `restore()` returns
+null when no session is cached, at which point mount `<bitlogin-auth>` once so
+the user signs in — after that the headless signer works across reloads from the
+cached session. Deploy `bitlogin-headless.js` next to `cryptoWorker.js` and the
+shared chunks, same as `bitlogin.js`.
+
 The `<bitlogin-auth>` element also mirrors `window.nostr` directly on the
 element instance (`getPublicKey`, `signEvent`, `nip44Encrypt`, `nip44Decrypt`)
 — prefer this over `window.nostr` when your host page holds a reference to
