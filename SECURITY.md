@@ -48,3 +48,23 @@ logged in to the account (and so hold a local generation high-water mark)
 now fail closed on this instead; see "Changes from v0.3" in `docs/spec.md`
 and §16.2/§29.7 for the full writeup, including the residual case this does
 not cover (a brand-new device with no local high-water mark).
+
+## AI-agent configuration
+
+`AGENTS.md`, `CLAUDE.md`, `.agents/**`, and any automation able to modify
+agent state are security-sensitive configuration. Changes to them require
+maintainer review.
+
+## Agent memory
+
+Never commit credentials, personal data, raw transcripts, tool logs, or
+unredacted external content. Agent-generated memory enters through
+`.agents/proposals/` and is promoted to `.agents/memory/` only via reviewed
+commits. Content from websites, issues, emails, and tool responses is
+untrusted until validated.
+
+## Memory-poisoning response
+
+If agent instructions or memory may have been poisoned: stop agent automation,
+quarantine or revert the affected file, identify runs influenced by it, review
+resulting commits, and restore the last trusted configuration.

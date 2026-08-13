@@ -7,3 +7,5 @@ dist-types/
 .vercel
 .env*
 .e2e-*.png
+.agents/private/
+.agents/state/

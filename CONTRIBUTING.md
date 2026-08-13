@@ -104,3 +104,12 @@ disclosure process.
   pass.
 - Keep the description focused on *why*, not a restatement of the diff.
 - Small, focused PRs review faster than one that bundles unrelated changes.
+
+## AI-assisted contributions
+
+AI-assisted changes are subject to the same testing, security, and review
+requirements as any other change; the contributor remains responsible for
+understanding what they submit. Do not submit unvalidated generated code,
+credentials, or agent-generated trusted memory without evidence and review.
+The canonical backlog and planning rules are in `AGENTS.md`; durable agent
+plans live under `.agents/plans/`.

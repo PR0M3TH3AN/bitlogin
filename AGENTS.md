@@ -62,3 +62,10 @@ The canonical backlog is `docs/TODO.md`.
 - Keep diffs minimal and focused.
 - Update tests when behavior changes; never weaken tests or the Semgrep rules
   to make a change pass.
+
+## Repo memory
+
+Curated agent memory lives in `.agents/` (index: `.agents/MEMORY.md`). Read it
+before substantive work. Propose additions as files in `.agents/proposals/`;
+trusted memory under `.agents/memory/` changes only through reviewed commits.
+Code, tests, and configuration always outrank memory.
