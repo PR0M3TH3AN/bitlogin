@@ -21,7 +21,7 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
-    "@noble/ciphers": "2.2.0",
+    "@noble/ciphers": "2.3.0",
     "@noble/curves": "1.9.7",
     "@noble/hashes": "1.8.0",
     "@scure/base": "1.2.6",
@@ -35,6 +35,6 @@
     "@types/ws": "^8.18.1",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5",
-    "ws": "^8.21.1"
+    "ws": "^8.21.3"
   }
 }
