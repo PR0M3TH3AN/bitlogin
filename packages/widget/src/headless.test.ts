@@ -46,7 +46,7 @@ describe("createHeadlessSigner", () => {
 
   it("restores a cached session and exposes the identity", async () => {
     const signer = await createHeadlessSigner();
-    await expect(signer.restore()).resolves.toEqual({ pubkey: PK });
+    await expect(signer.restore()).resolves.toEqual({ pubkey: PK, publicKey: PK });
     await expect(signer.getPublicKey()).resolves.toBe(PK);
     await expect(signer.isUnlocked()).resolves.toBe(true);
   });

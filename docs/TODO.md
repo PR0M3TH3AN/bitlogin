@@ -211,13 +211,20 @@ build before the standalone build is considered successful.
       replacement.
 - [ ] Expose a clean additive `window.bitlogin` API, including
       `activeSession()`, `login()`, `logout()`, and `getSigner()`.
-- [ ] Add and document stable lifecycle event aliases: `bitlogin:ready`,
+- [x] Add and document stable lifecycle event aliases: `bitlogin:ready`,
       `bitlogin:login`, `bitlogin:logout`, and `bitlogin:error`. Preserve the
       existing hyphenated events (`bitlogin-login`, `bitlogin-logout`, and
       related current event names) for compatibility; the colon-named events
-      must be additive and must not replace them silently.
-- [ ] Version and test event payloads; preserve existing event names and
+      must be additive and must not replace them silently. **Shipped 2026-10-08:**
+      every existing hyphen event also fires its colon alias (bubbles + composed,
+      object detail); hyphen dispatch is unchanged. `bitlogin:ready` on connect;
+      `bitlogin:error` from `fail()` with `{ code: "widget_error", message,
+      retryable: false }`. `pubkey` added beside deprecated `publicKey`.
+- [x] Version and test event payloads; preserve existing event names and
       payload fields used by current apps while adding new fields additively.
+      **Shipped 2026-10-08:** login detail and session APIs gained `pubkey`
+      without removing `publicKey`; covered by `events.test.ts` /
+      `globalSession.test.ts` / `publicSession.test.ts` / `headless.test.ts`.
 - [ ] Expose capability detection, for example `signer.capabilities()`, for
       `signEvent`, `nip04`, `nip44`, `nip46`, `nwc`, and `passkey`.
 - [ ] Ensure capability reporting describes the active session and never

@@ -10,7 +10,7 @@
  * manages the account, load `<bitlogin-auth>` and pay the heavy cost then.
  *
  *   ESM:        import { readCachedSession } from "@bitlogin/widget/session";
- *               const who = await readCachedSession(); // { pubkey, npub, name? } | null
+ *               const who = await readCachedSession(); // { pubkey, publicKey, npub, name? } | null
  *
  *   No build:   <script type="module" src="bitlogin-session.js"></script>
  *               const who = await window.bitlogin.readCachedSession();
@@ -37,8 +37,12 @@ function parsePublicSession(raw: string | null | undefined): PublicSessionInfo |
   try {
     const parsed = JSON.parse(raw) as Partial<PublicSessionInfo>;
     if (typeof parsed.pubkey !== "string" || typeof parsed.npub !== "string") return null;
+    // Duplicated from identityFields() — this file must not import runtime
+    // modules or rollup will hoist a shared chunk into the 1 KB reader.
+    const pubkey = parsed.pubkey.toLowerCase();
     return {
-      pubkey: parsed.pubkey,
+      pubkey,
+      publicKey: pubkey,
       npub: parsed.npub,
       ...(typeof parsed.name === "string" && parsed.name ? { name: parsed.name } : {})
     };

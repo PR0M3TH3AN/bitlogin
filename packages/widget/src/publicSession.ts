@@ -15,14 +15,19 @@
  * "signed in" here can never outlive the real session.
  */
 import type { KeyValueStore } from "@bitlogin/core/storage";
+import { identityFields } from "./identity.js";
 
 /** IndexedDB key for the cleartext public-session record (sibling of
  *  `bitlogin:session:v1`, which stays encrypted). */
 export const PUBLIC_SESSION_KEY = "bitlogin:session-public:v1";
 
 export interface PublicSessionInfo {
-  /** The account's Nostr public key, x-only, lowercase hex. */
+  /** Canonical identity: 64-char lowercase hex. */
   pubkey: string;
+  /**
+   * @deprecated Use `pubkey`. Identical value; not persisted on disk.
+   */
+  publicKey: string;
   /** NIP-19 npub encoding of the same key. */
   npub: string;
   /** Display name, when the widget knows one. Absent otherwise. */
@@ -39,7 +44,7 @@ export function parsePublicSession(raw: string | null | undefined): PublicSessio
     const parsed = JSON.parse(raw) as Partial<PublicSessionInfo>;
     if (typeof parsed.pubkey !== "string" || typeof parsed.npub !== "string") return null;
     return {
-      pubkey: parsed.pubkey,
+      ...identityFields(parsed.pubkey),
       npub: parsed.npub,
       ...(typeof parsed.name === "string" && parsed.name ? { name: parsed.name } : {})
     };
@@ -48,11 +53,18 @@ export function parsePublicSession(raw: string | null | undefined): PublicSessio
   }
 }
 
+/** On-disk shape. The deprecated `publicKey` alias is filled in on read only. */
+type PersistedPublicSession = {
+  pubkey: string;
+  npub: string;
+  name?: string;
+};
+
 /** Best-effort write, mirroring `saveCachedSession`: a full disk or a browser
  *  blocking IndexedDB must never break the login/rotate call that triggered it. */
-export async function savePublicSession(store: KeyValueStore, info: PublicSessionInfo): Promise<void> {
+export async function savePublicSession(store: KeyValueStore, info: PersistedPublicSession): Promise<void> {
   try {
-    const record: PublicSessionInfo = {
+    const record: PersistedPublicSession = {
       pubkey: info.pubkey,
       npub: info.npub,
       ...(info.name ? { name: info.name } : {})

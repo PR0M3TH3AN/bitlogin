@@ -62,9 +62,11 @@ The widget is a complete login surface, not just the password flow: behind
 detected), a NIP-46 remote signer (bunker:// paste or a scannable
 nostrconnect QR for phone signers like Amber), a passkey (WebAuthn PRF —
 zero site setup, the passkey deterministically derives the account
-credential), §SF10 key import, and phrase recovery. The `bitlogin-login`
-event reports `detail.method` (`'bitlogin' | 'nip07' | 'nip46'`) and
-`detail.capabilities`, and `window.bitlogin.activeMethod()` /
+credential), §SF10 key import, and phrase recovery. The `bitlogin:login`
+event (hyphenated `bitlogin-login` still fires, deprecated) reports
+`detail.pubkey` (lowercase hex; `detail.publicKey` is a deprecated alias
+with the same value), `detail.method` (`'bitlogin' | 'nip07' | 'nip46'`),
+and `detail.capabilities`. `window.bitlogin.activeMethod()` /
 `activeSession()` answer session state for every method. See
 `docs/login-methods.md` and `docs/passkey-login.md`.
 
@@ -96,9 +98,10 @@ export identity).
 
 **Sessions persist across a page reload.** After a successful sign-in, the
 everyday private key is cached in IndexedDB for that origin, so a later
-reload restores the session and fires `bitlogin-login` automatically —
-your existing listener doesn't need to distinguish "just typed" from
-"silently restored." This trades "nothing persists locally" for "the
+reload restores the session and fires `bitlogin:login` (and the
+deprecated `bitlogin-login`) automatically — your existing listener
+doesn't need to distinguish "just typed" from "silently restored." This
+trades "nothing persists locally" for "the
 decrypted key sits in this browser's IndexedDB until logout," the same
 tradeoff a NIP-07 extension already makes. Calling `logout()` (or the
 element's dashboard "Log out" button) clears it.
@@ -114,14 +117,15 @@ this:
 ```html
 <script type="module">
   import { readCachedSession } from "/vendor/bitlogin/bitlogin-session.js";
-  const who = await readCachedSession(); // { pubkey, npub, name? } | null
+  const who = await readCachedSession(); // { pubkey, publicKey, npub, name? } | null
   if (who) header.textContent = `Signed in as ${who.name ?? who.npub.slice(0, 12)}…`;
 </script>
 ```
 
 It reads a cleartext, **public-only** record (pubkey / npub / optional display
 name — never key material) that the widget writes beside its encrypted session
-and clears on logout, so it can't report a session that has ended. It cannot
+and clears on logout, so it can't report a session that has ended. The returned
+object also includes `publicKey` as a deprecated alias of `pubkey`. It cannot
 sign: when the user clicks "sign in" or "manage account," load the full
 `<bitlogin-auth>` then and defer the heavy cost until it's needed. The same
 call is also on the full widget as `window.bitlogin.readCachedSession()`, so
@@ -138,7 +142,7 @@ any DOM:
 import { createHeadlessSigner } from "@bitlogin/widget/headless";
 
 const signer = await createHeadlessSigner();
-const who = await signer.restore();          // { pubkey } | null (null → no cached session)
+const who = await signer.restore();          // { pubkey, publicKey } | null (null → no cached session)
 if (who) {
   const event = await signer.signEvent({ kind: 1, content: "gm", tags: [] });
   const pubkey = await signer.getPublicKey();
@@ -182,8 +186,9 @@ wallet-side budget allows; an embedded same-origin widget cannot broker
 (`docs/connection-vault.md` §12.3), so it does not pretend to. Encourage
 users toward budget-capped connections — the wallet's own budget is the real
 security boundary. Users manage and revoke grants from the dashboard's
-"Wallet connections" screen. A `bitlogin-connection-granted` event fires on
-the element after each share. Hosts using this flow need one extra CSP line,
+"Wallet connections" screen. A `bitlogin:connection-granted` event (and the
+deprecated `bitlogin-connection-granted`) fires on the element after each
+share. Hosts using this flow need one extra CSP line,
 `style-src-attr 'unsafe-inline'` (Bitcoin Connect's components set inline
 style attributes; a hash cannot cover those).
 
@@ -254,7 +259,7 @@ specifically to stop another script from overwriting it. `claimSigner()`
 `window.nostr = ...` assignment with no guard, so on a page where such an
 extension is active, that line threw `TypeError: Cannot assign to read only
 property 'nostr' of object '#<Window>'` — and since it ran synchronously
-before the widget dispatched `bitlogin-login` or moved to the dashboard
+before the widget dispatched `bitlogin:login` / `bitlogin-login` or moved to the dashboard
 screen, this **froze account creation/import at the final "verify your
 recovery phrase" step**, with that raw TypeError as the only (confusing)
 feedback. `claimSigner()` now catches this, returns `false` instead of
@@ -277,21 +282,27 @@ autocomplete instead of reading the demo:
 import "@bitlogin/widget"; // registers <bitlogin-auth> and its types
 
 const el = document.querySelector("bitlogin-auth"); // typed as BitLoginAuthElement
-el?.addEventListener("bitlogin-login", (e) => {
-  // e.detail is typed: { publicKey?: string; method; capabilities }
-  console.log(e.detail.method, e.detail.capabilities.nip44);
+el?.addEventListener("bitlogin:login", (e) => {
+  // e.detail is typed: { pubkey?: string; publicKey?: string; method; capabilities }
+  console.log(e.detail.pubkey, e.detail.method, e.detail.capabilities.nip44);
 });
 await el?.getPublicKey(); // typed element methods
 
 import { readCachedSession } from "@bitlogin/widget/session";
-const who = await readCachedSession(); // { pubkey, npub, name? } | null
+const who = await readCachedSession(); // { pubkey, publicKey, npub, name? } | null
 ```
 
-Exported types include `BitLoginAuthElement`, the `bitlogin-*`
-`...EventDetail` shapes and `BitLoginEventMap`, `PublicSessionInfo`,
-`SignerMethod`/`SignerCapabilities`, `BitLoginConfig`, and the
-`window.bitlogin` (`BitLoginGlobal`) interface. Run `npm run build` (or
-`build:types`) to emit them into `dist-types/`.
+Prefer the colon event names (`bitlogin:login`, `bitlogin:logout`, …): they
+bubble and compose across the widget's shadow root, so a host can listen on
+`document`. The original hyphenated names (`bitlogin-login`, …) still fire
+unchanged (non-bubbling) and are marked `@deprecated`. `publicKey` is a
+deprecated alias of `pubkey` with the identical lowercase-hex value.
+
+Exported types include `BitLoginAuthElement`, the `bitlogin-*` /
+`bitlogin:*` `...EventDetail` shapes and `BitLoginEventMap`,
+`PublicSessionInfo`, `SignerMethod`/`SignerCapabilities`, `BitLoginConfig`,
+and the `window.bitlogin` (`BitLoginGlobal`) interface. Run `npm run build`
+(or `build:types`) to emit them into `dist-types/`.
 
 ### Theming
 

@@ -21,6 +21,7 @@
 import { WorkerClient } from "./worker/workerClient.js";
 import type { SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
+import { identityFields, type IdentityFields } from "./identity.js";
 
 export interface HeadlessSignerOptions {
   /** Relays for the Connection Vault (only needed for wallet features). */
@@ -34,7 +35,7 @@ export interface HeadlessSigner {
   /** Restore the cached session for this origin. Returns the identity, or null
    *  if nothing is cached (mount `<bitlogin-auth>` so the user can sign in).
    *  Idempotent. */
-  restore(): Promise<{ pubkey: string } | null>;
+  restore(): Promise<IdentityFields | null>;
   /** Whether a session is unlocked and ready to sign. */
   isUnlocked(): Promise<boolean>;
   /** The signed-in public key (hex). Rejects if no session is unlocked. */
@@ -77,7 +78,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async restore() {
       const res = await client.restoreSession();
       pubkey = res.restored && res.everydayPublicKey ? res.everydayPublicKey : null;
-      return pubkey ? { pubkey } : null;
+      return pubkey ? identityFields(pubkey) : null;
     },
     async isUnlocked() {
       if (pubkey) return true;

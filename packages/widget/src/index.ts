@@ -4,6 +4,7 @@ import { getActiveSession, type ActiveSessionInfo } from "./globalSession.js";
 import { readCachedSession } from "./session.js";
 import type { PublicSessionInfo } from "./publicSession.js";
 import type { SignerMethod } from "./signers/types.js";
+import { dispatchBitLoginEvent } from "./events.js";
 
 if (!customElements.get("bitlogin-auth")) {
   customElements.define("bitlogin-auth", BitLoginAuthElement);
@@ -38,18 +39,20 @@ export interface BitLoginGlobal {
    * sign-in.
    */
   activeMethod(): SignerMethod | null;
-  /** The current session's public identity ({ method, publicKey, npub }), or
-   *  null. Public data only -- never key material. In-memory: reflects a session
-   *  established or restored on THIS page, so it's null until the widget mounts
-   *  and restores. For a persistent "signed in as …" across page loads without
-   *  loading the widget, use readCachedSession() (or import
-   *  "@bitlogin/widget/session"). */
+  /** The current session's public identity ({ method, pubkey, publicKey, npub }),
+   *  or null. `pubkey` is canonical (lowercase hex); `publicKey` is a deprecated
+   *  alias with the identical value. Public data only -- never key material.
+   *  In-memory: reflects a session established or restored on THIS page, so it's
+   *  null until the widget mounts and restores. For a persistent "signed in as
+   *  …" across page loads without loading the widget, use readCachedSession()
+   *  (or import "@bitlogin/widget/session"). */
   activeSession(): ActiveSessionInfo | null;
-  /** Reads the persisted public identity for this origin ({ pubkey, npub,
-   *  name? }), or null. Cheap and widget-free: it reads the cleartext
-   *  public-session record rather than restoring the signer, so a header on any
-   *  page can show who's signed in without loading the crypto worker. Cannot
-   *  sign — load <bitlogin-auth> for that. */
+  /** Reads the persisted public identity for this origin ({ pubkey, publicKey,
+   *  npub, name? }), or null. `pubkey` is canonical; `publicKey` is a deprecated
+   *  alias. Cheap and widget-free: it reads the cleartext public-session record
+   *  rather than restoring the signer, so a header on any page can show who's
+   *  signed in without loading the crypto worker. Cannot sign — load
+   *  <bitlogin-auth> for that. */
   readCachedSession(): Promise<PublicSessionInfo | null>;
 }
 
@@ -79,7 +82,7 @@ window.bitlogin = {
     const w = window as unknown as { nostr?: { _bitlogin?: boolean } };
     if (w.nostr?._bitlogin === true) {
       delete (w as { nostr?: unknown }).nostr;
-      window.dispatchEvent(new CustomEvent("bitlogin-signer-released"));
+      dispatchBitLoginEvent(window, "bitlogin-signer-released");
       return true;
     }
     return false;
@@ -102,8 +105,10 @@ export type {
   BitLoginEventMap,
   BitLoginLoginEventDetail,
   BitLoginConnectionGrantedEventDetail,
-  BitLoginSignerClaimedEventDetail
+  BitLoginSignerClaimedEventDetail,
+  BitLoginErrorEventDetail
 } from "./events.js";
+export type { IdentityFields } from "./identity.js";
 export type { SignerMethod, SignerCapabilities } from "./signers/types.js";
 export { WorkerClient } from "./worker/workerClient.js";
 export { createNip07Provider } from "./provider.js";

@@ -21,13 +21,15 @@ class TestStore implements KeyValueStore {
   }
 }
 
-const info = { pubkey: "a".repeat(64), npub: "npub1example", name: "Ada" };
+const hex = "a".repeat(64);
+const info = { pubkey: hex, npub: "npub1example", name: "Ada" };
+const loadedInfo = { ...info, publicKey: hex };
 
 describe("public session record", () => {
   it("round-trips the public identity", async () => {
     const store = new TestStore();
     await savePublicSession(store, info);
-    await expect(loadPublicSession(store)).resolves.toEqual(info);
+    await expect(loadPublicSession(store)).resolves.toEqual(loadedInfo);
   });
 
   it("stores only public data -- never key material", async () => {
@@ -37,6 +39,7 @@ describe("public session record", () => {
     // Sanity: the record is the pubkey/npub/name and nothing that looks like a
     // 32-byte hex private key field.
     expect(raw).toContain(info.pubkey);
+    expect(raw).not.toContain("publicKey");
     expect(raw).not.toMatch(/privatekey|nsec|everyday/i);
   });
 
@@ -44,8 +47,9 @@ describe("public session record", () => {
     const store = new TestStore();
     await savePublicSession(store, { pubkey: info.pubkey, npub: info.npub });
     const loaded = await loadPublicSession(store);
-    expect(loaded).toEqual({ pubkey: info.pubkey, npub: info.npub });
+    expect(loaded).toEqual({ pubkey: info.pubkey, publicKey: info.pubkey, npub: info.npub });
     expect(loaded).not.toHaveProperty("name");
+    expect(loaded!.pubkey).toBe(loaded!.publicKey);
   });
 
   it("returns null when nothing is stored", async () => {
@@ -62,7 +66,7 @@ describe("public session record", () => {
 
   describe("parsePublicSession", () => {
     it("accepts a well-formed record", () => {
-      expect(parsePublicSession(JSON.stringify(info))).toEqual(info);
+      expect(parsePublicSession(JSON.stringify(info))).toEqual(loadedInfo);
     });
 
     it("treats corrupt or partial records as no session, not an error", () => {
@@ -76,7 +80,7 @@ describe("public session record", () => {
 
     it("drops an empty name rather than surfacing a blank identity", () => {
       const parsed = parsePublicSession(JSON.stringify({ ...info, name: "" }));
-      expect(parsed).toEqual({ pubkey: info.pubkey, npub: info.npub });
+      expect(parsed).toEqual({ pubkey: info.pubkey, publicKey: info.pubkey, npub: info.npub });
     });
   });
 });

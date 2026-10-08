@@ -61,15 +61,19 @@
       <h3>React to sign-in and sign-out</h3>
       <pre><code>const bl = document.querySelector('bitlogin-auth');
 
-bl.addEventListener('bitlogin-login', (e) => {
-  console.log('signed in as', e.detail.publicKey);
+bl.addEventListener('bitlogin:login', (e) => {
+  console.log('signed in as', e.detail.pubkey); // lowercase hex; e.detail.publicKey is a deprecated alias
   console.log('via', e.detail.method); // 'bitlogin' | 'nip07' | 'nip46'
   console.log('supports', e.detail.capabilities); // { nip44, nip04, getRelays }
 });
 
-bl.addEventListener('bitlogin-logout', () => {
+bl.addEventListener('bitlogin:logout', () => {
   console.log('signed out');
 });</code></pre>
+      <p>Colon names (<code>bitlogin:login</code>, <code>bitlogin:logout</code>, …) bubble and compose across
+      the widget's shadow root, so you can also listen on <code>document</code>. The original hyphenated
+      names (<code>bitlogin-login</code>, …) still fire unchanged and are deprecated, not removed.
+      <code>detail.publicKey</code> remains as a deprecated alias of <code>detail.pubkey</code>.</p>
       <div class="callout">
         <strong>One login surface, several methods.</strong> If the visitor's browser has a NIP-07 signer
         extension (Alby, nos2x, …), the widget's welcome screen offers "Use your Nostr extension instead"
@@ -132,8 +136,9 @@ if (uri) payWith(uri); // full nostr+walletconnect:// URI, or null if declined</
       <p>The widget owns the whole ceremony: sign-in first if nobody is signed in, a <em>one-tap approval</em>
       when the account already has a connection bound to your origin (the connection follows the user to
       every new device), or a guided first-time import — Bitcoin Connect's wallet chooser, or a pasted URI —
-      stored as an encrypted record on the user's account. A <code>bitlogin-connection-granted</code> event
-      fires on the element after each share, and users manage or revoke grants from the widget dashboard's
+      stored as an encrypted record on the user's account. A <code>bitlogin:connection-granted</code> event
+      (hyphenated <code>bitlogin-connection-granted</code> still fires, deprecated) fires on the element after
+      each share, and users manage or revoke grants from the widget dashboard's
       "Wallet connections" screen.</p>
       <p>The inverse direction exists too: if your app obtained a connection by its own means (its own
       wallet chooser, its own paste box), offer the user a portable copy —</p>
@@ -172,13 +177,13 @@ if (uri) payWith(uri); // full nostr+walletconnect:// URI, or null if declined</
       model.</p>
       <p>Two different questions have two different APIs, and conflating them is the classic integration bug:</p>
       <p><strong>"Is someone signed in through BitLogin?"</strong> — use <code>window.bitlogin.activeMethod()</code>
-      (or the richer <code>activeSession()</code>), or listen for <code>bitlogin-login</code>. This answers correctly
+      (or the richer <code>activeSession()</code>), or listen for <code>bitlogin:login</code>. This answers correctly
       for every method:</p>
       <pre><code>const method = window.bitlogin?.activeMethod();
 // 'bitlogin' | 'nip07' | 'nip46' | null
 
 const session = window.bitlogin?.activeSession();
-// { method, publicKey, npub } | null — public data only</code></pre>
+// { method, pubkey, publicKey, npub } | null — public data only; publicKey is a deprecated alias of pubkey</code></pre>
       <p><strong>"Does BitLogin currently back <code>window.nostr</code>?"</strong> — use
       <code>window.bitlogin.isActiveSigner()</code>. Note the deliberate asymmetry: during a NIP-07 session the
       user's extension rightly owns <code>window.nostr</code> (it <em>is</em> the signer), so
@@ -218,14 +223,14 @@ if (window.bitlogin?.releaseSigner()) {
       the widget itself, so you only need this for a picker UI that lives outside the widget):</p>
       <pre><code>document.querySelector('bitlogin-auth').claimSigner();</code></pre>
       <p>Both <code>claimSigner()</code>/<code>releaseSigner()</code> on the element and
-      <code>window.bitlogin.releaseSigner()</code> also fire <code>bitlogin-signer-claimed</code> /
-      <code>bitlogin-signer-released</code> events (on the element and on <code>window</code>, respectively) if you'd
-      rather react to the change than check a return value.</p>
+      <code>window.bitlogin.releaseSigner()</code> also fire <code>bitlogin:signer-claimed</code> /
+      <code>bitlogin:signer-released</code> events (and the deprecated hyphenated names) on the element and on
+      <code>window</code>, respectively, if you'd rather react to the change than check a return value.</p>
       <div class="callout">
         <strong><code>claimSigner()</code> can fail without breaking anything.</strong> Some NIP-07 extensions
         install <code>window.nostr</code> as a non-configurable, non-writable property specifically to stop another
         script from overwriting it. When that happens, <code>claimSigner()</code> returns <code>false</code> instead
-        of throwing (and <code>bitlogin-signer-claimed</code>'s <code>event.detail</code> carries
+        of throwing (and <code>bitlogin:signer-claimed</code>'s <code>event.detail</code> carries
         <code>{ windowNostrClaimed: false, error }</code>), and every BitLogin sign-in flow completes normally
         regardless — the failure only means <code>window.nostr</code> still points at that other extension. If your
         app talks to the element directly (previous step) this never matters at all; only code that reads
