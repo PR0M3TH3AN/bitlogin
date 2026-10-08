@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import { clearActiveSession, getActiveSession, setActiveSession } from "./globalSession.js";
 
-const INFO = { method: "nip07" as const, publicKey: "ab".repeat(32), npub: "npub1example" };
+const HEX = "ab".repeat(32);
+const INFO = { method: "nip07" as const, publicKey: HEX, npub: "npub1example" };
+const STORED = { method: "nip07" as const, pubkey: HEX, publicKey: HEX, npub: "npub1example" };
 
 describe("global session registry", () => {
   beforeEach(() => {
@@ -16,13 +18,22 @@ describe("global session registry", () => {
     expect(getActiveSession()).toBeNull();
   });
 
-  it("records and returns the session, as a copy", () => {
+  it("records and returns the session, as a copy, with pubkey === publicKey", () => {
     const owner = {};
     setActiveSession(owner, INFO);
     const first = getActiveSession()!;
-    expect(first).toEqual(INFO);
+    expect(first).toEqual(STORED);
+    expect(first.pubkey).toBe(first.publicKey);
     first.publicKey = "tampered";
-    expect(getActiveSession()!.publicKey).toBe(INFO.publicKey);
+    expect(getActiveSession()!.publicKey).toBe(HEX);
+    expect(getActiveSession()!.pubkey).toBe(HEX);
+  });
+
+  it("lowercases the identity hex", () => {
+    const owner = {};
+    setActiveSession(owner, { ...INFO, publicKey: "AB".repeat(32) });
+    expect(getActiveSession()!.pubkey).toBe(HEX);
+    expect(getActiveSession()!.publicKey).toBe(HEX);
   });
 
   it("only the owning element can clear its session", () => {
@@ -30,7 +41,7 @@ describe("global session registry", () => {
     const elementB = {};
     setActiveSession(elementA, INFO);
     clearActiveSession(elementB); // a different element tearing down
-    expect(getActiveSession()).toEqual(INFO);
+    expect(getActiveSession()).toEqual(STORED);
     clearActiveSession(elementA);
     expect(getActiveSession()).toBeNull();
   });
@@ -49,17 +60,27 @@ describe("global session registry", () => {
 
 describe("element wiring", () => {
   const widgetSource = readFileSync(new URL("./element.ts", import.meta.url), "utf8");
+  const indexSource = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 
   it("every login dispatch records the session; every teardown clears it", () => {
     // dispatchLogin is the single sign-in dispatch point, so one setActiveSession
     // there covers password, extension, and remote-signer sessions alike.
     const dispatchBody = widgetSource.slice(
       widgetSource.indexOf("private dispatchLogin"),
-      widgetSource.indexOf("private noteSignerClaim"),
+      widgetSource.indexOf("private noteSignerClaim")
     );
     expect(dispatchBody).toContain("setActiveSession(this");
+    expect(dispatchBody).toContain("loginEventDetail");
+    expect(dispatchBody).toContain('dispatchBitLoginEvent');
     // Both logout branches and DOM removal clear it.
     const clearCount = widgetSource.split("clearActiveSession(this)").length - 1;
     expect(clearCount).toBe(3);
+  });
+
+  it("does not dispatch hyphenated host events except through dispatchBitLoginEvent", () => {
+    expect(widgetSource).not.toMatch(/new CustomEvent\("bitlogin-/);
+    expect(indexSource).not.toMatch(/new CustomEvent\("bitlogin-/);
+    expect(widgetSource).toContain("dispatchBitLoginEvent(");
+    expect(indexSource).toContain('dispatchBitLoginEvent(window, "bitlogin-signer-released")');
   });
 });

@@ -206,6 +206,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const session = await page.evaluate(() => window.bitlogin?.activeSession());
         expect(session?.method).toBe("bitlogin");
         expect(session?.npub).toBe(firstNpub);
+        expect(session?.pubkey).toBe(session?.publicKey);
+        expect(session?.pubkey).toMatch(/^[0-9a-f]{64}$/);
 
         // Sign out, then sign IN with the same passkey: derivation must land
         // on the same account.

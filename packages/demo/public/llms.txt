@@ -53,10 +53,11 @@ deployment above.
   signer-only: no vault (`requestNwcConnection` resolves null), no
   persistence (a reload ends the session). NIP-07 sessions leave
   `window.nostr` to the extension; NIP-46 sessions claim it, backed by the
-  worker-held remote-signer client. `bitlogin-login`'s `detail.method`
-  (`'bitlogin' | 'nip07' | 'nip46'`) and `detail.capabilities`
+  worker-held remote-signer client. `bitlogin:login`'s `detail.method`
+  (`'bitlogin' | 'nip07' | 'nip46'`), `detail.pubkey` (lowercase hex;
+  `detail.publicKey` is a deprecated alias), and `detail.capabilities`
   (`{ nip44, nip04, getRelays }`) tell your app which backend is active and
-  what it supports.
+  what it supports. The hyphenated `bitlogin-login` still fires.
 - A `window.nostr` provider shaped like the de facto NIP-07 interface
   (`getPublicKey`, `signEvent`, `getRelays`, `nip44.encrypt`/`decrypt`) —
   existing Nostr app code that already calls `window.nostr` works unmodified,
@@ -65,12 +66,12 @@ deployment above.
   login state: `{ version, isActiveSigner(), releaseSigner(), activeMethod(),
   activeSession() }`. Two distinct questions: `activeMethod()` answers "is
   someone signed in through BitLogin, and how" ('bitlogin' | 'nip07' |
-  'nip46' | null; `activeSession()` adds publicKey and npub — public data
-  only), while `isActiveSigner()` answers "does BitLogin currently back
-  window.nostr". They deliberately diverge during NIP-07 sessions: the
-  extension rightly owns window.nostr (isActiveSigner() false) while the
-  user IS signed in through BitLogin (activeMethod() 'nip07'). Use
-  activeMethod()/the bitlogin-login event for session state, never
+  'nip46' | null; `activeSession()` adds pubkey, deprecated publicKey, and
+  npub — public data only), while `isActiveSigner()` answers "does BitLogin
+  currently back window.nostr". They deliberately diverge during NIP-07
+  sessions: the extension rightly owns window.nostr (isActiveSigner() false)
+  while the user IS signed in through BitLogin (activeMethod() 'nip07'). Use
+  activeMethod()/the bitlogin:login event for session state, never
   isActiveSigner(). `releaseSigner()` hands `window.nostr` back (safe no-op
   if BitLogin doesn't hold it) when a user switches signing methods in your
   own UI.
@@ -90,19 +91,23 @@ deployment above.
   or first-time import via Bitcoin Connect's chooser / a pasted URI. REVEAL
   mode: the origin receives the full bearer credential — wallet-side budgets
   are the real security boundary. Requires `style-src-attr 'unsafe-inline'`
-  in the host CSP. Fires `bitlogin-connection-granted` after each share.
+  in the host CSP. Fires `bitlogin:connection-granted` after each share
+  (hyphenated `bitlogin-connection-granted` still fires, deprecated).
 - `offerNwcConnection(uri, { appName, label })` on the element — the inverse:
   the app obtained an NWC URI by its own means and offers the user a portable
   copy. Consent screen in the widget's own UI, never a silent save; resolves
   'saved' | 'declined' | 'already-saved' (same wallet+secret exists; origin
   binding refreshed, no UI) | 'unavailable' (no session/vault — treat as
   no-op). Safe to fire after every successful connect.
-- Events on the element: `bitlogin-login` (`detail.publicKey`,
-  `detail.method`, `detail.capabilities`),
-  `bitlogin-logout`, `bitlogin-signer-claimed`, `bitlogin-signer-released`
-  (the last also fires on `window` when triggered via
-  `window.bitlogin.releaseSigner()`), `bitlogin-connection-granted`
-  (`detail.origin`).
+- Events on the element: prefer colon names (`bitlogin:login` with
+  `detail.pubkey` / deprecated `detail.publicKey`, `detail.method`,
+  `detail.capabilities`; `bitlogin:logout`; `bitlogin:signer-claimed`;
+  `bitlogin:signer-released` — the last also fires on `window` when
+  triggered via `window.bitlogin.releaseSigner()`;
+  `bitlogin:connection-granted` with `detail.origin`; plus `bitlogin:ready`
+  and `bitlogin:error`). Hyphenated names (`bitlogin-login`, …) still fire
+  unchanged and are deprecated. Colon events bubble/composed; hyphen events
+  do not.
 - Private keys live in a dedicated Web Worker and the signing APIs return only
   public keys, signed events, and ciphertext. LIMIT: an embedded widget is
   same-origin with its host page, so a malicious or XSS-compromised host can

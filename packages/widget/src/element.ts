@@ -20,7 +20,12 @@ import { Nip46Signer } from "./signers/nip46.js";
 import type { Signer, SignerCapabilities, SignerMethod } from "./signers/types.js";
 import { renderQrSvg } from "./qr.js";
 import { setActiveSession, clearActiveSession } from "./globalSession.js";
-import type { BitLoginEventMap } from "./events.js";
+import {
+  dispatchBitLoginColonEvent,
+  dispatchBitLoginEvent,
+  loginEventDetail,
+  type BitLoginEventMap
+} from "./events.js";
 import {
   buildPasskeyCreateOptions,
   buildPasskeyGetOptions,
@@ -235,6 +240,7 @@ export class BitLoginAuthElement extends HTMLElement {
         // Not fatal -- this element's own API surface doesn't depend on window.nostr.
       }
     }
+    dispatchBitLoginColonEvent(this, "bitlogin:ready", {});
   }
 
   disconnectedCallback(): void {
@@ -318,7 +324,7 @@ export class BitLoginAuthElement extends HTMLElement {
       this.passkeySession = false;
       clearActiveSession(this);
       this.releaseSigner();
-      this.dispatchEvent(new CustomEvent("bitlogin-logout"));
+      dispatchBitLoginEvent(this, "bitlogin-logout");
       this.goto("welcome");
       return;
     }
@@ -327,7 +333,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.passkeySession = false;
     clearActiveSession(this);
     this.releaseSigner();
-    this.dispatchEvent(new CustomEvent("bitlogin-logout"));
+    dispatchBitLoginEvent(this, "bitlogin-logout");
     this.goto("welcome");
   }
 
@@ -358,7 +364,7 @@ export class BitLoginAuthElement extends HTMLElement {
       // Symmetric with bitlogin-offer-pending. Without it, a host following
       // the recommended hidden-mount pattern navigated a HIDDEN element to a
       // consent screen nobody could see, and the promise never settled.
-      this.dispatchEvent(new CustomEvent("bitlogin-request-pending"));
+      dispatchBitLoginEvent(this, "bitlogin-request-pending");
       void (async () => {
         try {
           const status = await this.worker.getSessionStatus();
@@ -426,7 +432,7 @@ export class BitLoginAuthElement extends HTMLElement {
       // Hosts that keep this element hidden until needed (the recommended
       // permanent-mount pattern) listen for this to reveal it: the silent
       // outcomes above never fire it, so nothing flashes for a duplicate.
-      this.dispatchEvent(new CustomEvent("bitlogin-offer-pending"));
+      dispatchBitLoginEvent(this, "bitlogin-offer-pending");
       this.goto("vault-offer");
     });
   }
@@ -449,9 +455,7 @@ export class BitLoginAuthElement extends HTMLElement {
       this.setBusy(false);
       this.finishVaultOffer("saved");
       this.flashSuccess(this.screen, "Wallet saved");
-      this.dispatchEvent(
-        new CustomEvent("bitlogin-connection-granted", { detail: { origin: window.location.origin } })
-      );
+      dispatchBitLoginEvent(this, "bitlogin-connection-granted", { origin: window.location.origin });
     } catch (err) {
       this.setBusy(false);
       this.fail(err);
@@ -468,9 +472,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.vaultUnsavedReason = undefined;
     request.resolve(uri);
     if (uri !== null) {
-      this.dispatchEvent(
-        new CustomEvent("bitlogin-connection-granted", { detail: { origin: request.origin } })
-      );
+      dispatchBitLoginEvent(this, "bitlogin-connection-granted", { origin: request.origin });
     }
     this.goto(this.session ? "dashboard" : "welcome");
   }
@@ -617,11 +619,11 @@ export class BitLoginAuthElement extends HTMLElement {
   claimSigner(): boolean {
     try {
       (window as unknown as { nostr: unknown }).nostr = this.installedProvider;
-      this.dispatchEvent(new CustomEvent("bitlogin-signer-claimed", { detail: { windowNostrClaimed: true } }));
+      dispatchBitLoginEvent(this, "bitlogin-signer-claimed", { windowNostrClaimed: true });
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.dispatchEvent(new CustomEvent("bitlogin-signer-claimed", { detail: { windowNostrClaimed: false, error: message } }));
+      dispatchBitLoginEvent(this, "bitlogin-signer-claimed", { windowNostrClaimed: false, error: message });
       return false;
     }
   }
@@ -632,9 +634,10 @@ export class BitLoginAuthElement extends HTMLElement {
    * relay-disagreement warnings -- so a user isn't left wondering why some other app still
    * seems to be using a different signer.
    */
-  /** Single dispatch point for bitlogin-login so every sign-in path reports the same
-   * detail shape: which method granted the session and what it can do (§LM3). The
-   * pre-existing `publicKey` field is unchanged for hosts written before `method`. */
+  /** Single dispatch point for bitlogin-login / bitlogin:login so every sign-in
+   * path reports the same detail shape: which method granted the session and
+   * what it can do (§LM3). `pubkey` is canonical; `publicKey` stays as a
+   * deprecated alias with the identical value. */
   private dispatchLogin(): void {
     const capabilities: SignerCapabilities = this.altSigner?.capabilities ?? {
       nip44: true,
@@ -643,21 +646,17 @@ export class BitLoginAuthElement extends HTMLElement {
     };
     if (this.session) {
       // Keep window.bitlogin.activeMethod()/activeSession() in step with the
-      // bitlogin-login event -- hosts may use either.
+      // login event -- hosts may use either.
       setActiveSession(this, {
         method: this.session.method,
         publicKey: this.session.publicKey,
         npub: this.session.npub
       });
     }
-    this.dispatchEvent(
-      new CustomEvent("bitlogin-login", {
-        detail: {
-          publicKey: this.session?.publicKey,
-          method: this.session?.method ?? "bitlogin",
-          capabilities
-        }
-      })
+    dispatchBitLoginEvent(
+      this,
+      "bitlogin-login",
+      loginEventDetail(this.session?.publicKey, this.session?.method ?? "bitlogin", capabilities)
     );
   }
 
@@ -688,7 +687,7 @@ export class BitLoginAuthElement extends HTMLElement {
       } catch {
         return false;
       }
-      this.dispatchEvent(new CustomEvent("bitlogin-signer-released"));
+      dispatchBitLoginEvent(this, "bitlogin-signer-released");
       return true;
     }
     return false;
@@ -724,6 +723,11 @@ export class BitLoginAuthElement extends HTMLElement {
     this.errorMessage = err instanceof Error ? err.message : String(err);
     this.busy = false;
     this.render();
+    dispatchBitLoginColonEvent(this, "bitlogin:error", {
+      code: "widget_error",
+      message: this.errorMessage,
+      retryable: false
+    });
   }
 
   private field(name: string): string {
@@ -2220,10 +2224,11 @@ function escapeHtml(input: string): string {
 }
 
 // Declaration merge: give BitLoginAuthElement typed addEventListener/
-// removeEventListener overloads for its own bitlogin-* events, so a host gets
-// `e.detail` typed without a cast. The string overload preserves the base
-// signature for every other event. Merging an interface of the same name adds
-// these to the class type; the runtime implementation stays HTMLElement's.
+// removeEventListener overloads for its own bitlogin-* / bitlogin:* events,
+// so a host gets `e.detail` typed without a cast. The string overload
+// preserves the base signature for every other event. Merging an interface of
+// the same name adds these to the class type; the runtime implementation
+// stays HTMLElement's.
 export interface BitLoginAuthElement {
   addEventListener<K extends keyof BitLoginEventMap>(
     type: K,

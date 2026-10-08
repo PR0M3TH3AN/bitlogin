@@ -6,6 +6,30 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-10-08 (additive host API aliases)
+
+- **Identity field: `pubkey` everywhere, `publicKey` kept as a deprecated
+  alias.** Login event detail, `window.bitlogin.activeSession()`,
+  `readCachedSession()`, and headless `restore()` now all expose `pubkey`
+  (lowercase 64-hex). Where `publicKey` already existed it is unchanged and
+  equal to `pubkey`; where only `pubkey` existed, `publicKey` is added as
+  the same alias. The persisted public-session record is still
+  `{ pubkey, npub, name? }` — the alias is filled in on read, not written
+  to disk. Prefer `pubkey` in new code.
+- **Colon DOM events, hyphen names kept.** Every existing `bitlogin-*`
+  event also fires a `bitlogin:<kebab-verb>` alias immediately after
+  (`bitlogin:login`, `bitlogin:logout`, `bitlogin:connection-granted`,
+  `bitlogin:signer-claimed`, `bitlogin:signer-released`,
+  `bitlogin:request-pending`, `bitlogin:offer-pending`). Hyphen events keep
+  their historical non-bubbling dispatch so an old listener does not fire
+  twice. Colon events `bubble` and `composed` across shadow DOM and always
+  carry an object `detail` (empty `{}` when the hyphen event had none);
+  when there is a payload, both events share the same detail object,
+  including `pubkey` on login. New colon-only lifecycle events:
+  `bitlogin:ready` (element connected) and `bitlogin:error`
+  (`{ code, message, retryable }`; today's code is `widget_error`). Nothing
+  is removed.
+
 ## 2026-08-04 (security-audit response, same day)
 
 - **External signers are now verified, not trusted.** NIP-07 and NIP-46

@@ -14,7 +14,7 @@ export type SignerMethod = "bitlogin" | "nip07" | "nip46";
 /** What the active signer actually supports. NIP-07 extensions vary -- some lack nip44,
  * older ones lack nip04 -- and the facade reports honestly instead of throwing a
  * TypeError off an undefined property (§LM4). Surfaced to the host in the
- * bitlogin-login event detail. */
+ * bitlogin-login / bitlogin:login event detail. */
 export interface SignerCapabilities {
   nip44: boolean;
   nip04: boolean;

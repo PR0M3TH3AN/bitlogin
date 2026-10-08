@@ -1,6 +1,6 @@
 const element = document.getElementById("bitlogin-widget");
-element?.addEventListener("bitlogin-login", (event) => {
+element?.addEventListener("bitlogin:login", (event) => {
   const detail = event instanceof CustomEvent ? event.detail : undefined;
-  console.info("[bitlogin] signed in", detail?.publicKey);
+  console.info("[bitlogin] signed in", detail?.pubkey ?? detail?.publicKey);
 });
-element?.addEventListener("bitlogin-logout", () => console.info("[bitlogin] signed out"));
+element?.addEventListener("bitlogin:logout", () => console.info("[bitlogin] signed out"));
