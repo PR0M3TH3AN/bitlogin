@@ -49,6 +49,28 @@ now fail closed on this instead; see "Changes from v0.3" in `docs/spec.md`
 and §16.2/§29.7 for the full writeup, including the residual case this does
 not cover (a brand-new device with no local high-water mark).
 
+## Dependency audit policy
+
+Decided by the owner on 2026-11-17.
+
+- **Blocking:** `npm audit --omit=dev --audit-level=high` and `npm audit
+  signatures`. A high or critical advisory in anything that ships in the widget
+  fails CI.
+- **Reported, not blocking:** the same audit over development tooling
+  (`npm run security:audit:dev`). CI runs it on every push and shows the
+  result.
+
+Why the split: an advisory in a build or test tool can have no fixed release,
+and then nothing in this repository can clear it. That happened with picomatch
+(GHSA-fc5q-39xc-vjpf), which covers every published version and is pulled in
+by vite and vitest. A gate that cannot go green stops being read.
+
+What covers the gap: the widget build is reproducible, and
+`npm run release:artifacts` records a hash for every shipped file, so a build
+tool that altered the output would show up as changed bytes. Tooling
+advisories are still to be fixed promptly when a fix exists; when the tooling
+audit is clean again, consider making it blocking once more.
+
 ## AI-agent configuration
 
 `AGENTS.md`, `CLAUDE.md`, `.agents/**`, and any automation able to modify
