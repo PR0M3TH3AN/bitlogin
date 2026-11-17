@@ -26,6 +26,13 @@ jobs:
         run: pipx install semgrep==1.171.0
       - name: Run build, typecheck, tests, dependency audit, and static-analysis gate
         run: npm run security:ci
+      - name: Report advisories in development tooling (does not block)
+        # The blocking audit above covers the dependencies that ship in the
+        # widget. Advisories in build and test tooling are reported here on
+        # every run so they stay visible, without blocking a merge. See
+        # SECURITY.md, "Dependency audit policy".
+        continue-on-error: true
+        run: npm run security:audit:dev
       - name: Generate checksums and CycloneDX SBOM
         shell: bash
         run: |

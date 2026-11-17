@@ -26,9 +26,11 @@ Requires Node 22 (per CI). Run `npm install` first, then:
   relay; sandboxes/CI have no route to public relays)
 - Run `npm run build` (core → widget) and `npm run typecheck`
 - Run `npm run test:e2e` — the widget e2e suite (Playwright-backed)
-- Run `npm run security:ci` — build:demo + typecheck + test + `npm audit` +
-  Semgrep (`.semgrep.yml`); this is what CI runs, plus gitleaks and
-  SBOM/checksum generation
+- Run `npm run security:ci` — build:demo + typecheck + test + `npm audit` of
+  the dependencies that ship + Semgrep (`.semgrep.yml`); this is what CI runs,
+  plus gitleaks and SBOM/checksum generation. `npm run security:audit:dev`
+  audits build and test tooling too; CI reports it without blocking (see
+  SECURITY.md, "Dependency audit policy")
 - Run `npm run dev:demo` — serves the demo at :4173
 
 ## Conventions
