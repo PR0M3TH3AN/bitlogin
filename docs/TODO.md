@@ -245,8 +245,12 @@ build before the standalone build is considered successful.
       if useful, `bitlogin.min.js`.
 - [ ] Expose version information through `window.bitlogin.version` and the
       module/API surface where applicable.
-- [ ] Emit integrity/hash manifests for releases and document exactly which
-      artifact each hash covers.
+- [x] Emit integrity/hash manifests for releases and document exactly which
+      artifact each hash covers. **Done 2026-11-17:** `npm run
+      release:artifacts` writes `release/bitlogin-widget-v<version>/` with
+      `integrity.json` and `SHA256SUMS.txt` (see CHANGELOG). Still open: tag
+      a version and attach the folder to a GitHub Release, which is the
+      owner's call.
 - [ ] Create downloadable release artifacts: `bitlogin-standard.zip` and
       `bitlogin-standalone.js`.
 - [ ] Publish release notes specifically for integrators, including changed
