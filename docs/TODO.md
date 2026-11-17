@@ -435,6 +435,53 @@ how much they cost.
   Verified with a consumer conformance typecheck; README "TypeScript" section
   added.
 
+## Requests from BitPortal / NSWP (2026-11-17)
+
+BitPortal is a proposed spatial-web directory built on the four blocks
+(`PR0M3TH3AN/Nostr-Spatial-Web-Protocol--NSWP-`, `spec.md` v0.3 §13, §13.1,
+§21.1). It is a spec only; nothing consumes BitLogin yet. These are the gaps
+found while writing it. None is approved work, and each needs the owner's
+go-ahead.
+
+### New asks (not tracked elsewhere in this file)
+
+- [ ] **Pair a device without a QR or a long paste.** A standalone VR headset
+  can't use either NIP-46 path: a phone can't scan a `nostrconnect` QR shown
+  inside the headset, and pasting a `bunker://` URI with controllers isn't
+  practical. Wanted: the new device shows a short code and the user approves it
+  on a device where they are already signed in. A short code alone is guessable,
+  so this needs a password-authenticated key exchange or an equivalent; it is a
+  design task before it is a build task (NSWP spec Q12). The same flow would
+  help TVs and consoles.
+- [ ] **An opt-in headset profile for method order.** The widget is
+  password-first (`docs/login-methods.md` §LM9.1), which means a virtual
+  keyboard in VR. Wanted: a way for the host to lead with whichever methods need
+  no typing. It must stay opt-in, because "Preserve current login-method
+  defaults and existing method ordering" is already a rule in Priority 3 above.
+  Related: the unchecked `methods` attribute item in Priority 3.
+- [ ] **Test passkey (PRF) login on headset browsers.** `docs/passkey-login.md`
+  calls PRF support uneven and lists no headset browser. BitPortal's Phase 2
+  will run this matrix; results belong in that document.
+
+### Already tracked here, now with a second consumer waiting
+
+- One official tagged release with an integrity manifest (Priority 1 and
+  Priority 4). Blocks BitPortal Phase 2.
+- `pubkey` in event details, colon event aliases, `getSigner()` /
+  `capabilities()` (Priority 2). BitPortal can use an adapter until these ship.
+- NIP-46 credential persistence (gated on the external vault review, see
+  "Security audit response"). Without it a paired headset loses its session on
+  every reload.
+- Multi-account switching (`docs/account-switching.md`, not implemented).
+  BitPortal's "enter this world as an alternate identity" is sign-out and
+  sign-in until it exists.
+
+### Not requested
+
+- Per-world derived keys. They would touch the derivation chain, which is a
+  compatibility contract (see "Standing rule"). The NSWP spec lists this as an
+  open question (Q1) and does not ask for it.
+
 ## Design review — external critique (2026-08-11)
 
 From an outside review of the BitBlocks stack. BitLogin was called the highest
