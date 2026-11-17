@@ -6,6 +6,22 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-17
+
+- **A release artifact set with an integrity manifest.**
+  `npm run release:artifacts` builds the widget and assembles
+  `release/bitlogin-widget-v<version>/`: every file a site deploys side by
+  side, plus `integrity.json` (version, source commit, and a sha256 and SRI
+  hash per file) and `SHA256SUMS.txt`. Vendor that folder and keep the
+  hashes, so you can tell whether your copy still matches a known build.
+  Nothing about the build or the widget changed, and nothing is published by
+  the script.
+- **The build is reproducible, and one of the builds in circulation is now
+  identified.** Rebuilding from this commit's source gives byte-identical
+  files, and `bitlogin.js` (144,005 bytes, sha256 `33b1affe…281b839a`) matches
+  what `login.bitblocks.network` serves. A vendored copy with a different
+  hash was built from other source.
+
 ## 2026-08-04 (security-audit response, same day)
 
 - **External signers are now verified, not trusted.** NIP-07 and NIP-46
