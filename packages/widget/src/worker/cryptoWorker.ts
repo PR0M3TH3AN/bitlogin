@@ -25,6 +25,10 @@ import {
   RelayPool,
   BUILTIN_VAULT_RELAYS,
   BUILTIN_DISCOVERY_RELAYS,
+  loadCachedBootstrapList,
+  refreshBootstrapList,
+  relaySetsFor,
+  type RelaySets,
   encodeNsec,
   encodeNpub,
   Nip46Client,
@@ -109,6 +113,14 @@ let vaultRelayUrls: string[] = [...BUILTIN_VAULT_RELAYS];
 let discoveryRelayUrls: string[] = [...BUILTIN_DISCOVERY_RELAYS];
 
 const store = new IndexedDbKeyValueStore();
+
+let hostVaultRelays = false;
+let hostDiscoveryRelays = false;
+
+function applyRelaySets(sets: RelaySets): void {
+  if (!hostVaultRelays) vaultRelayUrls = sets.vaultRelays;
+  if (!hostDiscoveryRelays) discoveryRelayUrls = sets.discoveryRelays;
+}
 const requestQueue = new SerialQueue();
 
 function requireUnlocked(): { signer: NostrSigner; everydayPrivateKey: Uint8Array } {
@@ -473,8 +485,19 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     case "configure": {
       const p = payload as ConfigurePayload;
+      // A host that names its own relays has taken that decision on itself:
+      // the signed relay list (spec §19.1) only ever extends the BUILT-IN
+      // lists, and never touches a list the host supplied.
+      hostVaultRelays = Boolean(p.vaultRelayUrls?.length);
+      hostDiscoveryRelays = Boolean(p.discoveryRelayUrls?.length);
       if (p.vaultRelayUrls?.length) vaultRelayUrls = p.vaultRelayUrls;
       if (p.discoveryRelayUrls?.length) discoveryRelayUrls = p.discoveryRelayUrls;
+      // The list this device already accepted applies at once; looking for a
+      // newer one happens in the background and must never delay sign-in.
+      applyRelaySets(relaySetsFor(await loadCachedBootstrapList(store)));
+      if (!hostVaultRelays || !hostDiscoveryRelays) {
+        void refreshBootstrapList(store).then(applyRelaySets, () => undefined);
+      }
       return {};
     }
 

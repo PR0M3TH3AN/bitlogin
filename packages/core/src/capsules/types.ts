@@ -14,6 +14,24 @@ export const PROTOCOL_RECOVERY_DERIVATION = "bitlogin-bip39-hkdf-v1";
  */
 export const PROTOCOL_EVERYDAY_DERIVATION = "bitlogin-recovery-hkdf-v1";
 
+/**
+ * `vault_relay_hints` is a best-effort snapshot (§12.3): recovery must work
+ * from the bootstrap relays alone, so the hints are never the only way to
+ * find anything. They are capped because the credential payload is a
+ * fixed-size bucket with very little room to spare. It embeds a whole signed
+ * recovery event, and with eight built-in relays it sat within a few dozen
+ * bytes of the 4096-byte ceiling. Writing the full relay list into it made
+ * registration fail outright the day the list grew to thirteen.
+ */
+export const MAX_VAULT_RELAY_HINTS = 4;
+const MAX_VAULT_RELAY_HINT_LENGTH = 64;
+
+export function vaultRelayHints(relayUrls: readonly string[]): string[] {
+  return [...new Set(relayUrls)]
+    .filter((url) => url.length <= MAX_VAULT_RELAY_HINT_LENGTH)
+    .slice(0, MAX_VAULT_RELAY_HINTS);
+}
+
 /** The `protocol` entry to spread into a payload for a derived everyday key. */
 export function everydayDerivationField(derived: boolean): {
   everyday_derivation?: string;

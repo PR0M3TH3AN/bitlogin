@@ -31,19 +31,35 @@ Open:
   profile, and a rebuild from a phrase with no capsule on any relay all
   worked and returned the expected identity. Not covered: a real device or
   platform passkey, and the deployed site's CSP.
-- [ ] **Relay findings from that run, cause not established.** From the test
-  machine (a VPN may have been active), `relay.mostr.pub` and
-  `nostr-pub.wellorder.net` never connected and `relay.damus.io` connected
-  only occasionally, so 3 of the 8 vault relays contributed nothing. In two
-  of four sign-ups `offchain.pub` and `nostr.bitcoiner.social` stored the
-  recovery capsule but not the sign-in capsule, and an immediate re-send did
-  not change that; in the other two they stored both. The refusal text was
-  not captured at the time. The health screen now shows each relay's reply
-  after a re-send, but the refusal did not recur in two further live runs, so
-  the cause is still unknown. Next step: when it recurs, read the reason off
-  the health screen and review the vault relay list against it. Sign-up
-  itself still keeps only counts, so a refusal there is visible only after a
-  re-send.
+- [x] **Relay findings from that run, explained 2026-11-18.** Measured with
+  `scripts/relay-probe.mjs` from the same machine (a VPN may have been
+  active): `nostr.bitcoiner.social` and `offchain.pub` intermittently refuse
+  capsule keys ("pubkey is not in our web of trust"), `offchain.pub` also held
+  only half of the capsules it had acknowledged a few minutes later,
+  `relay.mostr.pub` and `nostr-pub.wellorder.net` never connect, and
+  `relay.damus.io` connects about one time in eight. Five relays that stored
+  everything were added; nothing was removed. Raw results for the final list
+  are in `release/relay-probe-2026-11-18.json` (untracked); re-read them with
+  `node scripts/relay-probe.mjs --recheck release/relay-probe-2026-11-18.json`.
+- [ ] **Owner: pin a maintainer key to switch the signed relay list on.** The
+  channel is built and off (`MAINTAINER_PUBLIC_KEY_HEX` is `null`). Choose a
+  key kept offline, get its public key with
+  `BITLOGIN_MAINTAINER_NSEC=... node scripts/sign-relay-list.mjs --pubkey`,
+  pin it in `packages/core/src/nostr/bootstrap.ts`, and release. After that,
+  relay changes are `sign-relay-list.mjs list.json --publish` and need no
+  re-vendoring. Until then every relay change is a client release.
+- [ ] **Retention is only measured over minutes.** The five added relays kept
+  every test event across two re-reads minutes apart. Re-run the recheck
+  after a day and after a week, and replace any that dropped events.
+- [ ] **Dead built-in relays still count against the read quorum.** Three of
+  the thirteen never or rarely answer, so 10 of 13 respond against the 7 a
+  read needs. They cannot be dropped from reads without risking accounts that
+  live only on them. A way to stop COUNTING a relay without ceasing to ask it
+  needs a spec decision.
+- [ ] **The credential capsule is close to its size ceiling.** With four
+  relay hints it has a little over a hundred bytes to spare in the 4096-byte
+  bucket. Any new field in that payload needs the size test in
+  `seedDerived.e2e.test.ts` extended first.
 - [ ] **Accounts created before v0.7 are no safer than before.** Their key is
   random, so only a saved `nsec` or a recovery export survives total relay
   loss. They now get a standing dashboard notice saying so, the health check,

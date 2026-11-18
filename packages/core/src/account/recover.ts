@@ -41,6 +41,7 @@ import {
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
   everydayDerivationField,
+  vaultRelayHints,
 } from "../capsules/types.js";
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { parseDmRelayListEvent, parseRelayListEvent } from "./profileEvents.js";
@@ -388,7 +389,7 @@ export async function rebuildAccountFromPhrase(
       vault_sudo_key: bytesToBase64url(randomBytes(32)),
       created_at:
         newestLeftover === null ? now : nextCreatedAt(newestLeftover, now),
-      vault_relay_hints: params.vaultRelayUrls,
+      vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
       protocol: {
         capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
         recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
@@ -561,7 +562,7 @@ export async function completeRecoveryWithNewCredentials(
       recovery_public_key: recovered.recoveryPublicKey,
       ...recoveryVaultFields,
       created_at: nextCreatedAt(recovered.currentRecoveryEvent.created_at, now),
-      vault_relay_hints: params.vaultRelayUrls,
+      vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
       protocol: {
         capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
         recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
@@ -618,7 +619,7 @@ export async function completeRecoveryWithNewCredentials(
       created_at: existingAtLocator.best
         ? nextCreatedAt(existingAtLocator.best.event.created_at, now)
         : now,
-      vault_relay_hints: params.vaultRelayUrls,
+      vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
       protocol: {
         password_kdf: PROTOCOL_PASSWORD_KDF,
         capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,

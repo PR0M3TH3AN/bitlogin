@@ -1,4 +1,5 @@
-import { describe, expect, it, afterEach, vi } from "vitest";
+import { describe, expect, it, afterEach, beforeEach, vi } from "vitest";
+import { InMemoryKeyValueStore } from "../storage/interface.js";
 import { generatePrivateKey, getPublicKeyHex } from "../crypto/secp256k1.js";
 import {
   compareNip01ReplacementOrder,
@@ -20,8 +21,13 @@ import {
   BUILTIN_VAULT_RELAYS,
   MAINTAINER_PUBLIC_KEY_HEX,
   WRITE_HOSTILE_RELAYS,
+  buildBootstrapListEvent,
+  fetchBootstrapListFromRelays,
+  loadCachedBootstrapList,
+  maxRemoteAdditions,
   mergeRelayLists,
   parseAndVerifyBootstrapList,
+  refreshBootstrapList,
   type BootstrapRelayList,
 } from "./bootstrap.js";
 
@@ -384,9 +390,121 @@ describe("signed bootstrap relay updates", () => {
       discoveryRelays: [],
       deprecated: ["wss://pinned.example", "wss://retired-remote.example"],
     };
-    expect(mergeRelayLists(["wss://pinned.example"], fetched, "vault")).toEqual(
-      ["wss://pinned.example", "wss://remote.example"],
+    // Two pinned relays, because a signed list may add at most one fewer
+    // relay than the client pins (see the quorum test below).
+    expect(
+      mergeRelayLists(
+        ["wss://pinned.example", "wss://also-pinned.example"],
+        fetched,
+        "vault",
+      ),
+    ).toEqual([
+      "wss://pinned.example",
+      "wss://also-pinned.example",
+      "wss://remote.example",
+    ]);
+  });
+
+  it("never lets a signed list add enough relays to form a read quorum on its own", () => {
+    // Reads need ceil(N/2) relays to answer. If additions could reach half of
+    // N, whoever holds the maintainer key could answer the quorum with relays
+    // they run, and a new device would believe them.
+    const pinned = ["wss://a.example", "wss://b.example", "wss://c.example"];
+    const hostile = Array.from({ length: 40 }, (_, i) => `wss://hostile-${i}.example`);
+    const merged = mergeRelayLists(
+      pinned,
+      { version: 1, vaultRelays: hostile, discoveryRelays: [] },
+      "vault",
     );
+    const added = merged.filter((url) => !pinned.includes(url));
+    expect(added).toEqual(hostile.slice(0, 2));
+    expect(added.length).toBeLessThan(Math.ceil(merged.length / 2));
+    expect(merged.slice(0, 3)).toEqual(pinned);
+    expect(maxRemoteAdditions(BUILTIN_VAULT_RELAYS.length)).toBe(BUILTIN_VAULT_RELAYS.length - 1);
+    // A single pinned relay leaves no room to add any.
+    expect(mergeRelayLists(["wss://only.example"], { version: 1, vaultRelays: hostile, discoveryRelays: [] }, "vault")).toEqual(["wss://only.example"]);
+  });
+});
+
+describe("signed relay list over relays (§19.1)", () => {
+  let relays: MockRelay[] = [];
+  let urls: string[] = [];
+  const maintainerKey = generatePrivateKey();
+  const maintainerPubkey = getPublicKeyHex(maintainerKey);
+  const list = (version: number, extra: string[] = []): BootstrapRelayList => ({
+    version,
+    vaultRelays: ["wss://added-vault.example", ...extra],
+    discoveryRelays: ["wss://added-discovery.example"],
+  });
+  const publishTo = async (target: MockRelay, event: NostrEvent) => {
+    const pool = new RelayPool([target.url]);
+    await pool.publishAll(event);
+    pool.closeAll();
+  };
+
+  beforeEach(async () => {
+    relays = await Promise.all([MockRelay.start(), MockRelay.start(), MockRelay.start()]);
+    urls = relays.map((r) => r.url);
+  });
+  afterEach(async () => {
+    await Promise.all(relays.map((r) => r.close()));
+  });
+
+  it("returns the highest version any relay holds, and nothing from another signer", async () => {
+    await publishTo(relays[0]!, buildBootstrapListEvent(list(2), maintainerKey, 1_800_000_000));
+    await publishTo(relays[1]!, buildBootstrapListEvent(list(5), maintainerKey, 1_800_000_100));
+    // A forger can publish at the same address under their own key; it is not the maintainer's.
+    await publishTo(relays[2]!, buildBootstrapListEvent(list(99), generatePrivateKey(), 1_800_000_200));
+
+    const found = await fetchBootstrapListFromRelays(urls, maintainerPubkey);
+    expect(found?.list.version).toBe(5);
+    expect(found?.event.pubkey).toBe(maintainerPubkey);
+    // No key pinned means the channel is off, whatever the relays hold.
+    expect(await fetchBootstrapListFromRelays(urls, null)).toBeNull();
+  });
+
+  it("refuses a list that is not newer than the one this device already accepted", async () => {
+    await publishTo(relays[0]!, buildBootstrapListEvent(list(3), maintainerKey));
+    expect(await fetchBootstrapListFromRelays(urls, maintainerPubkey, 3)).toBeNull();
+    expect((await fetchBootstrapListFromRelays(urls, maintainerPubkey, 2))?.list.version).toBe(3);
+  });
+
+  it("refreshes, remembers the list, and cannot be rolled back by a relay serving an old one", async () => {
+    const store = new InMemoryKeyValueStore();
+    const options = { maintainerPubkeyHex: maintainerPubkey, queryRelayUrls: urls };
+    expect((await refreshBootstrapList(store, options)).listVersion).toBeNull();
+
+    for (const relay of relays) await publishTo(relay, buildBootstrapListEvent(list(4), maintainerKey, 1_800_000_000));
+    const sets = await refreshBootstrapList(store, options);
+    expect(sets.listVersion).toBe(4);
+    expect(sets.vaultRelays.slice(0, BUILTIN_VAULT_RELAYS.length)).toEqual([...BUILTIN_VAULT_RELAYS]);
+    expect(sets.vaultRelays).toContain("wss://added-vault.example");
+    expect(sets.discoveryRelays).toContain("wss://added-discovery.example");
+
+    // Every relay loses the new list and one replays a genuine older one.
+    for (const relay of relays) relay.wipeAllData();
+    await publishTo(relays[0]!, buildBootstrapListEvent(list(1, ["wss://stale.example"]), maintainerKey, 1_700_000_000));
+    const after = await refreshBootstrapList(store, options);
+    expect(after.listVersion).toBe(4);
+    expect(after.vaultRelays).not.toContain("wss://stale.example");
+    expect((await loadCachedBootstrapList(store, maintainerPubkey))?.version).toBe(4);
+  });
+
+  it("ignores a cached list that does not verify against the pinned key", async () => {
+    const store = new InMemoryKeyValueStore();
+    await refreshBootstrapList(store, { maintainerPubkeyHex: maintainerPubkey, queryRelayUrls: urls });
+    await store.set("bitlogin:bootstrap-relays:v1", JSON.stringify(buildBootstrapListEvent(list(7), generatePrivateKey())));
+    expect(await loadCachedBootstrapList(store, maintainerPubkey)).toBeNull();
+    await store.set("bitlogin:bootstrap-relays:v1", "{not json");
+    expect(await loadCachedBootstrapList(store, maintainerPubkey)).toBeNull();
+    // With no key pinned, nothing is fetched and the built-in lists apply unchanged.
+    const off = await refreshBootstrapList(store, { maintainerPubkeyHex: null, queryRelayUrls: urls });
+    expect(off).toEqual({ vaultRelays: [...BUILTIN_VAULT_RELAYS], discoveryRelays: [...BUILTIN_DISCOVERY_RELAYS], listVersion: null });
+  });
+
+  it("refuses to sign a list a client would reject", () => {
+    expect(() => buildBootstrapListEvent({ version: 1, vaultRelays: ["ws://plain.example"], discoveryRelays: [] }, maintainerKey)).toThrow(/not valid/u);
+    expect(() => buildBootstrapListEvent({ version: 0, vaultRelays: [], discoveryRelays: [] }, maintainerKey)).toThrow(/not valid/u);
   });
 });
 

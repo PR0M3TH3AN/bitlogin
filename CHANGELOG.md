@@ -8,6 +8,37 @@ would plausibly want. Newest first.
 
 ## 2026-11-18
 
+**Relay list (later the same day).** A probe of the eight built-in storage
+relays found only about half dependable: two never connect, one connects
+about one time in eight, one refuses capsule keys under a web-of-trust rule,
+and one acknowledges capsules and then drops half within minutes.
+
+- **A signed, updatable relay list (spec §19.1) is now wired in, switched
+  off.** The widget remembers the last signed list it accepted, applies it at
+  start, and looks for a newer one in the background. It stays off until a
+  maintainer public key is pinned in `packages/core/src/nostr/bootstrap.ts`;
+  until then nothing is fetched. A host page that configures its own relays
+  is never extended by it. A signed list can add at most one fewer relay than
+  the widget pins, so it can never form a read quorum by itself, and a list
+  cannot be rolled back to an older version.
+- **Five storage relays added, none removed.** `nostr.mom`,
+  `relay.nostr.net`, `nostr-01.yakihonne.com`, `relay.nostr.wirednet.jp` and
+  `nostr.sathoarder.com` join the built-in list, and `nos.lol` joins the
+  lookup list. A live sign-up now lands on 10 of 13 relays, where it landed
+  on 3 to 5 of 8 before. Existing accounts are still looked for on every
+  relay they were ever written to. Sign-in opens more connections than it
+  did.
+- **Capsules store at most four relay hints.** They used to store the whole
+  relay list, twice, in a fixed-size payload that had only a few dozen bytes
+  to spare. Growing the list to thirteen made registration fail outright;
+  this was caught by a live run, not by the test suite, which now registers
+  against the largest relay list a client can have. Older widgets read the
+  shorter hints without change.
+- **`scripts/relay-probe.mjs`** tests relays the way BitLogin uses them
+  (capsule-shaped events from throwaway keys, read back now and later) and
+  can take candidates from NIP-66 monitors. **`scripts/sign-relay-list.mjs`**
+  signs and publishes the list.
+
 Spec v0.7. Prompted by a real loss: every relay dropped one account's
 capsules, and neither the password nor the recovery phrase could bring the
 identity back.

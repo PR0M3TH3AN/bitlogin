@@ -47,6 +47,7 @@ import {
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
   everydayDerivationField,
+  vaultRelayHints,
   isEverydayKeyDerived,
   type CredentialPayload,
   type RecoveryPayload,
@@ -223,7 +224,7 @@ export async function enableConnectionVault(
     connection_vault_root: rootB64,
     vault_sudo_key: sudoB64,
     created_at: nextCreatedAt(recoveryRead.best.event.created_at, now),
-    vault_relay_hints: params.vaultRelayUrls,
+    vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
     protocol: {
       capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
       recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
@@ -268,7 +269,7 @@ export async function enableConnectionVault(
     recovery_capsule_event: refreshedRecoveryEvent,
     connection_vault_root: rootB64,
     created_at: nextCreatedAt(credentialEvent.created_at, now),
-    vault_relay_hints: params.vaultRelayUrls,
+    vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
     protocol: {
       password_kdf: PROTOCOL_PASSWORD_KDF,
       capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
