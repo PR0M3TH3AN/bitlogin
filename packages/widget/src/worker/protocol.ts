@@ -1,6 +1,6 @@
 /** Request/response envelope for the main-thread <-> crypto-worker RPC channel. */
 import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
-import type { RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
+import type { RebroadcastResult, RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
 
 export interface WorkerRequest<TAction extends string = string, TPayload = unknown> {
   id: string;
@@ -161,11 +161,7 @@ export interface ExportIdentityResult {
   npub: string;
 }
 
-export interface RepairReplicasResult {
-  credentialAcknowledgedCount: number;
-  recoveryAcknowledgedCount: number;
-  relaysTried: number;
-}
+export type RepairReplicasResult = RebroadcastResult;
 
 export interface SessionStatusResult {
   unlocked: boolean;

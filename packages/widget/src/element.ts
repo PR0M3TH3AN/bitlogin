@@ -14,9 +14,9 @@ import { createElementRoutedProvider, type Nip07Provider } from "./provider.js";
 import { readConfigFromElement } from "./config.js";
 import { WIDGET_STYLES } from "./styles.js";
 import { chooseWalletViaBitcoinConnect } from "./vault/bitcoinConnect.js";
-import type { RecoverResult, VaultConnectionSummary } from "./worker/protocol.js";
+import type { RecoverResult, RepairReplicasResult, VaultConnectionSummary } from "./worker/protocol.js";
 import { buildVaultIntegrityWarnings } from "./vault/integrityWarnings.js";
-import { buildKeyBackupText, replicaStatusLabel, summarizeReplicaHealth } from "./replicaHealth.js";
+import { buildKeyBackupText, relayProblemNotes, replicaStatusLabel, summarizeReplicaHealth } from "./replicaHealth.js";
 import { detectForeignNip07Provider, Nip07Signer } from "./signers/nip07.js";
 import { Nip46Signer } from "./signers/nip46.js";
 import type { Signer, SignerCapabilities, SignerMethod } from "./signers/types.js";
@@ -167,6 +167,9 @@ export class BitLoginAuthElement extends HTMLElement {
   private replicaHealth: ReplicaHealthResult | null = null;
   private replicaHealthBusy: "checking" | "repairing" | null = null;
   private replicaRepairNote = "";
+  /** Each relay's reply to the last re-send, so a refusal can be shown in the
+   *  relay's own words. Cleared whenever a fresh check starts. */
+  private replicaRepairReplies: RepairReplicasResult["relays"] | null = null;
 
   // Brief animated brass-seal stamp (matching the widget's own brand mark) shown once over
   // the destination screen right after a real security-relevant success -- see flashSuccess().
@@ -1703,6 +1706,7 @@ export class BitLoginAuthElement extends HTMLElement {
     if (this.replicaHealthBusy) return;
     this.replicaHealth = null;
     this.replicaRepairNote = "";
+    this.replicaRepairReplies = null;
     this.replicaHealthBusy = "checking";
     this.goto("health");
     await this.refreshReplicaHealth();
@@ -1730,6 +1734,7 @@ export class BitLoginAuthElement extends HTMLElement {
     this.render();
     try {
       const repair = await this.worker.repairReplicas();
+      this.replicaRepairReplies = repair.relays;
       this.replicaRepairNote = `Re-sent to ${repair.relaysTried} relays: ${repair.credentialAcknowledgedCount} accepted the sign-in copy, ${repair.recoveryAcknowledgedCount} accepted the recovery copy.`;
     } catch (err) {
       this.replicaHealthBusy = null;
@@ -1777,6 +1782,12 @@ export class BitLoginAuthElement extends HTMLElement {
           <span class="health-relay">${escapeHtml(relay.relayUrl.replace(/^wss?:\/\//u, ""))}</span>
           ${cell("Sign-in", relay.credential)}
           ${cell("Recovery", relay.recovery)}
+          ${relayProblemNotes(
+            relay,
+            this.replicaRepairReplies?.find((reply) => reply.relayUrl === relay.relayUrl)
+          )
+            .map((note) => `<span class="health-note">${escapeHtml(note)}</span>`)
+            .join("")}
         </div>`
       )
       .join("");

@@ -2,7 +2,7 @@
  * Turns a replica health check (§24.4) into what the account panel says about
  * it. Pure, so the wording and the thresholds are testable without a DOM.
  */
-import type { ReplicaHealthResult, ReplicaStatus } from "@bitlogin/core/account";
+import type { RebroadcastResult, ReplicaHealthResult, ReplicaStatus } from "@bitlogin/core/account";
 
 export type ReplicaHealthLevel =
   /** Every vault relay holds both capsules. */
@@ -104,6 +104,51 @@ export function replicaStatusLabel(status: ReplicaStatus): string {
     case "unreachable":
       return "no answer";
   }
+}
+
+const RELAY_TEXT_MAX = 140;
+
+/**
+ * A relay's own words, made safe to put on screen as plain text. It is
+ * untrusted input: control characters and runs of whitespace are flattened
+ * and the length is capped, so a relay cannot reshape the panel or bury it.
+ * The caller still HTML-escapes the result.
+ */
+export function cleanRelayText(text: string): string {
+  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/gu, " ").replace(/\s+/gu, " ").trim();
+  return flat.length > RELAY_TEXT_MAX ? `${flat.slice(0, RELAY_TEXT_MAX - 1)}…` : flat;
+}
+
+type RelayHealth = ReplicaHealthResult["relays"][number];
+type RelayRepair = RebroadcastResult["relays"][number];
+
+/**
+ * Why one relay is not holding a capsule, in that relay's own words where it
+ * gave any. `repair` is the relay's reply to the most recent re-send, if one
+ * was made; `health` is what the check after it found.
+ */
+export function relayProblemNotes(health: RelayHealth, repair?: RelayRepair): string[] {
+  const notes: string[] = [];
+  const capsules = [
+    ["sign-in", health.credential, repair?.credential],
+    ["recovery", health.recovery, repair?.recovery]
+  ] as const;
+  for (const [label, status, reply] of capsules) {
+    // A relay that could not be reached refused nothing: that is the
+    // "No answer" case below, said once rather than once per capsule.
+    if (status === "current" || status === "unreachable") continue;
+    if (reply && !reply.ok) {
+      const said = cleanRelayText(reply.message);
+      notes.push(`Refused the ${label} copy${said ? `: ${said}` : " without giving a reason"}`);
+    } else if (reply?.ok && status === "missing") {
+      notes.push(`Said it accepted the ${label} copy, but does not return it`);
+    }
+  }
+  if (notes.length === 0 && health.error && (health.credential === "unreachable" || health.recovery === "unreachable")) {
+    notes.push(`No answer: ${cleanRelayText(health.error)}`);
+  }
+  // The same refusal for both capsules reads better once.
+  return [...new Set(notes)];
 }
 
 /** Private-key backup file offered at registration and from Export identity. */

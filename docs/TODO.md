@@ -38,9 +38,12 @@ Open:
   of four sign-ups `offchain.pub` and `nostr.bitcoiner.social` stored the
   recovery capsule but not the sign-in capsule, and an immediate re-send did
   not change that; in the other two they stored both. The refusal text was
-  not captured, because publish results are reduced to counts. Next step:
-  keep each relay's refusal message and show it on the health screen, then
-  review the vault relay list against what it shows.
+  not captured at the time. The health screen now shows each relay's reply
+  after a re-send, but the refusal did not recur in two further live runs, so
+  the cause is still unknown. Next step: when it recurs, read the reason off
+  the health screen and review the vault relay list against it. Sign-up
+  itself still keeps only counts, so a refusal there is visible only after a
+  re-send.
 - [ ] **Accounts created before v0.7 are no safer than before.** Their key is
   random, so only a saved `nsec` or a recovery export survives total relay
   loss. They now get a standing dashboard notice saying so, the health check,

@@ -338,6 +338,7 @@ button:focus-visible { outline: 2px solid var(--bl-accent); outline-offset: 2px;
 .health-relay { flex: 1 1 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
 .health-cell.ok { color: var(--bl-muted); }
 .health-cell.bad { color: var(--bl-danger); font-weight: 600; }
+.health-note { flex: 1 1 100%; color: var(--bl-muted); font-size: 12px; word-break: break-word; }
 .checkbox-row { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0; font-size: 13px; }
 .checkbox-row input { margin-top: 3px; }
 .spinner {

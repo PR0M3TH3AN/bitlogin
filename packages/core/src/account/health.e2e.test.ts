@@ -165,6 +165,13 @@ describe("replica health check (§24.4)", () => {
       expect(result.relaysTried).toBe(3);
       expect(result.credentialAcknowledgedCount).toBe(3);
       expect(result.recoveryAcknowledgedCount).toBe(2);
+      // The refusing relay's own words survive, so a user can see why.
+      expect(result.relays.map((r) => r.relayUrl)).toEqual(vaultRelayUrls);
+      expect(result.relays[1]!.credential.ok).toBe(true);
+      expect(result.relays[1]!.recovery).toEqual({
+        ok: false,
+        message: "blocked: refused by test relay",
+      });
 
       const health = await checkReplicaHealth({
         relayUrls: vaultRelayUrls,

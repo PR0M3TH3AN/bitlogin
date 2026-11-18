@@ -45,6 +45,12 @@ identity back.
   it. It runs only when the user asks. In core:
   `checkReplicaHealth({ relayUrls, credentialEvent, recoveryEvent })`; in the
   worker: a `checkReplicaHealth` action beside the existing `repairReplicas`.
+- **The health screen says why a relay lacks a copy.** After a re-send, each
+  relay that still lacks a capsule shows its own reply (a refusal reason, a
+  connection error, or "accepted it but does not return it"). Relay text is
+  flattened, capped at 140 characters and escaped. In core,
+  `rebroadcastCapsules` returns a per-relay `relays` array alongside the
+  counts; the worker's `repairReplicas` result carries the same array.
 - **Sign-in repairs relays on its own.** After each password or passkey
   sign-in the worker re-sends both capsules to every vault relay in the
   background, so relays dropping an account one at a time are topped up
