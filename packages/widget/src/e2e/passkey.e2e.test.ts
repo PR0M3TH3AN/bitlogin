@@ -259,8 +259,13 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await widget.locator('[data-action="goto-dashboard"]').click();
         await pubkeyLine.waitFor({ timeout: 30_000 });
 
+        // A generated identity is covered by its phrase: no key-backup notice.
+        expect(await widget.locator("[data-key-backup-notice]").count()).toBe(0);
+
         // Sign out, then sign IN with the same passkey: derivation must land
-        // on the same account.
+        // on the same account. One relay drops the account in between; the
+        // sign-in itself must put it back, with nobody opening a health screen.
+        relays[2]!.wipeAllData();
         await widget.locator('[data-action="logout"]').click();
         await openOptions();
         await widget.locator('[data-action="goto-passkey"]').click();
@@ -269,6 +274,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await pubkeyLine.waitFor({ timeout: 60_000 });
         const secondNpub = (await pubkeyLine.textContent())?.trim() ?? "";
         expect(secondNpub).toBe(firstNpub);
+        await expect
+          .poll(() => relays[2]!.storedEventKinds().filter((kind) => kind === 30078).length, { timeout: 30_000 })
+          .toBeGreaterThanOrEqual(2);
 
         // A returning sign-in does not repeat the ceremony.
         expect(await widget.locator(".phrase-word").count()).toBe(0);
@@ -413,7 +421,10 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect((await pubkeyLine.textContent())?.trim()).toBe(importedNpub);
 
         // The dashboard keeps saying so: this account's phrase is not enough.
-        await widget.locator('[data-action="goto-export"]').click();
+        expect(await widget.locator("[data-key-backup-notice]").textContent()).toContain(
+          "not contained in its recovery phrase"
+        );
+        await widget.locator('[data-key-backup-notice] [data-action="goto-export"]').click();
         expect(await widget.locator(".small").first().textContent()).toContain("not contained in its recovery phrase");
       } finally {
         await browser.close();

@@ -30,3 +30,37 @@ export async function repairReplicas(
     relaysTried: pool.relayUrls.length
   };
 }
+
+/**
+ * The same repair with one connection set per capsule, for callers that run
+ * it routinely (after every sign-in) rather than once at a user's request.
+ * The credential and recovery addresses are unlinkable on the wire unless a
+ * client publishes both over the same connection, so this does not.
+ */
+export async function rebroadcastCapsules(params: {
+  relayUrls: string[];
+  credentialEvent: NostrEvent;
+  recoveryEvent: NostrEvent;
+  timeoutMs?: number;
+}): Promise<RepairReplicasResult> {
+  const publish = async (event: NostrEvent): Promise<number> => {
+    const pool = new RelayPool(params.relayUrls);
+    try {
+      return countAcknowledgements(
+        await pool.publishAll(event, params.timeoutMs),
+      );
+    } finally {
+      pool.closeAll();
+    }
+  };
+  const [credentialAcknowledgedCount, recoveryAcknowledgedCount] =
+    await Promise.all([
+      publish(params.credentialEvent),
+      publish(params.recoveryEvent),
+    ]);
+  return {
+    credentialAcknowledgedCount,
+    recoveryAcknowledgedCount,
+    relaysTried: new Set(params.relayUrls).size,
+  };
+}

@@ -14,7 +14,7 @@ import {
   changePassword as changePasswordFlow,
   publishInitialProfile,
   buildRecoveryExport,
-  repairReplicas,
+  rebroadcastCapsules,
   checkReplicaHealth,
   importAccount,
   decodeEverydayPrivateKey,
@@ -535,6 +535,19 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.everydayKeyDerived = result.everydayKeyDerived;
       adoptVaultMaterial(result.connectionVaultRoot, result.vaultSudoKey);
       await persistSession();
+      // Replica repair after sign-in (spec §24.4): top up any relay that has
+      // dropped a capsule, so relays losing the account one at a time never
+      // add up to losing it everywhere. Not awaited, and never an error the
+      // user sees. Skipped when this sign-in looked stale in any way: a
+      // capsule the relays disagree about, or one older than this device has
+      // seen, must not be spread further.
+      if (!result.rollbackWarning && !result.relayDisagreementWarning) {
+        void rebroadcastCapsules({
+          relayUrls: vaultRelayUrls,
+          credentialEvent: result.credentialEvent,
+          recoveryEvent: result.recoveryCapsuleEvent
+        }).catch(() => undefined);
+      }
       return {
         everydayPublicKey: result.everydayPublicKey,
         accountId: result.accountId,
@@ -690,12 +703,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!session.activeCredentialEvent || !session.activeRecoveryEvent) {
         throw new Error("No active capsule events are known in this session yet.");
       }
-      const pool = new RelayPool(vaultRelayUrls);
-      try {
-        return await repairReplicas(pool, session.activeCredentialEvent, session.activeRecoveryEvent);
-      } finally {
-        pool.closeAll();
-      }
+      return rebroadcastCapsules({
+        relayUrls: vaultRelayUrls,
+        credentialEvent: session.activeCredentialEvent,
+        recoveryEvent: session.activeRecoveryEvent
+      });
     }
 
     case "checkReplicaHealth": {

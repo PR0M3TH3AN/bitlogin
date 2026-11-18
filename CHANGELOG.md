@@ -45,6 +45,15 @@ identity back.
   it. It runs only when the user asks. In core:
   `checkReplicaHealth({ relayUrls, credentialEvent, recoveryEvent })`; in the
   worker: a `checkReplicaHealth` action beside the existing `repairReplicas`.
+- **Sign-in repairs relays on its own.** After each password or passkey
+  sign-in the worker re-sends both capsules to every vault relay in the
+  background, so relays dropping an account one at a time are topped up
+  before the last copy goes. It is skipped when the sign-in showed a rollback
+  or relay disagreement, and it does not run on a restored session. Expect a
+  short burst of extra relay connections after sign-in.
+- **Standing notice for accounts the phrase can't rebuild.** Imported keys,
+  and every account created before this version, see a dashboard notice that
+  their key is not in the recovery phrase, with a link to Export identity.
 - **The revealed private key no longer lingers.** The Export identity screen
   kept a revealed `nsec` in the element until logout; it is now dropped on
   leaving the screen. That screen also gains "Copy" and "Download key file".

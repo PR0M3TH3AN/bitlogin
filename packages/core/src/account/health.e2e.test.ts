@@ -5,7 +5,7 @@ import { registerAccount } from "./create.js";
 import { loginWithPassword } from "./login.js";
 import { recoverWithPhrase } from "./recover.js";
 import { changePassword } from "./changePassword.js";
-import { repairReplicas } from "./repair.js";
+import { rebroadcastCapsules, repairReplicas } from "./repair.js";
 import { checkReplicaHealth } from "./health.js";
 import { AccountNotFoundError } from "./errors.js";
 import { RelayPool } from "../nostr/pool.js";
@@ -148,6 +148,33 @@ describe("replica health check (§24.4)", () => {
       expect(recovered.everydayPublicKey).toBe(registration.everydayPublicKey);
     },
     ARGON2_TIMEOUT * 3,
+  );
+
+  it(
+    "rebroadcastCapsules tops up a relay that dropped the account and reports what was accepted",
+    async () => {
+      const { registration } = await register("topup");
+      relays[2]!.wipeAllData();
+      relays[1]!.refusePublishFrom = new Set([registration.recoveryPublicKey]);
+
+      const result = await rebroadcastCapsules({
+        relayUrls: [...vaultRelayUrls, vaultRelayUrls[0]!],
+        credentialEvent: registration.credentialEvent,
+        recoveryEvent: registration.recoveryEvent,
+      });
+      expect(result.relaysTried).toBe(3);
+      expect(result.credentialAcknowledgedCount).toBe(3);
+      expect(result.recoveryAcknowledgedCount).toBe(2);
+
+      const health = await checkReplicaHealth({
+        relayUrls: vaultRelayUrls,
+        credentialEvent: registration.credentialEvent,
+        recoveryEvent: registration.recoveryEvent,
+      });
+      expect(health.credentialCurrentCount).toBe(3);
+      expect(health.recoveryCurrentCount).toBe(3);
+    },
+    ARGON2_TIMEOUT,
   );
 
   it(

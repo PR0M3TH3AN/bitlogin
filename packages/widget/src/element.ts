@@ -2304,10 +2304,18 @@ export class BitLoginAuthElement extends HTMLElement {
         const passkeyStanding = this.passkeySession
           ? `<p class="small">Signed in with a passkey — it unlocks this account from your device's password manager; your identity lives on the open Nostr network. Your recovery phrase works even if the passkey is lost.</p>`
           : "";
+        // Imported keys and accounts from before phrase-derived keys (spec
+        // §15.7): the phrase alone cannot bring these back, and nothing else
+        // ever told the older ones so.
+        const keyBackupNotice =
+          method === "bitlogin" && !this.phraseRebuildsIdentity
+            ? `<div class="notice warn" data-key-backup-notice>This account's key is not contained in its recovery phrase. If relays ever drop the account, only your private key can restore it. <button class="link-inline" type="button" data-action="goto-export">Save it from Export identity</button></div>`
+            : "";
         return `
           <h2>Signed in</h2>
           ${this.renderWarnings()}
           <p class="pubkey">${escapeHtml(this.session?.npub ?? "")}</p>
+          ${keyBackupNotice}
           ${passkeyStanding}
           ${this.renderError()}
           <button class="secondary" type="button" data-action="sign-test-event">Sign a test event</button>

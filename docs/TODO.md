@@ -29,10 +29,10 @@ Open:
   by the mock-relay suites and headless Chromium only.
 - [ ] **Accounts created before v0.7 are no safer than before.** Their key is
   random, so only a saved `nsec` or a recovery export survives total relay
-  loss. They get the health check and an Export identity screen that says so,
-  but nothing prompts them. The §27.6 reminder is still unimplemented; it
-  needs a place to remember "saved" that is not the element (which must stay
-  storage-free). Rotating such an account onto a derived key would change its
+  loss. They now get a standing dashboard notice saying so, the health check,
+  and background repair at each sign-in. The dismissible §27.6 reminder is
+  still unimplemented; it needs a place to remember "saved" that is not the
+  element (which must stay storage-free). Rotating such an account onto a derived key would change its
   npub, so there is no silent migration.
 - [ ] **A rebuild cannot tell whose phrase it has.** With no capsule left,
   nothing distinguishes a derived account from an imported or pre-v0.7 one,
@@ -44,8 +44,6 @@ Open:
   so stored wallet connections are lost unless a recovery export kept the old
   capsule. Deriving them from the phrase is possible but touches the vault's
   security model, which is gated on the external review.
-- [ ] **Automatic repair after login** (§24.4 says "should"). Today repair
-  runs only from the health screen.
 - [ ] **Health check for the Connection Vault records**, which live at other
   addresses and are not covered.
 

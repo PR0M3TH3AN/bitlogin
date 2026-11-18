@@ -1523,6 +1523,8 @@ Following successful login, the client should:
 1. Republish the current credential capsule to vault relays that lack it, hold an older generation, or return an invalid copy.
 2. Rebroadcast the embedded signed recovery event (§12.1) to vault relays that lack the recovery capsule or hold a lower `recovery_generation`. This requires no key material and must not involve re-signing.
 
+The client performs this repair in the background after each password login and does not report its outcome. It skips the repair when that login showed any sign of staleness — relays disagreeing about the newest credential capsule, or a generation below the device's high-water mark (§16.2) — so that a possibly stale capsule is never spread further. The two capsules are published over separate connections.
+
 **Replica health check.** The client shall let a logged-in user check replica health on demand. For each vault relay and each of the two capsule addresses, the client queries the address and classifies what comes back against the signed event the session holds:
 
 * `current` — the relay returned that exact event, and its ID and signature verify.
@@ -1627,6 +1629,8 @@ The recovery screen must state:
 ## 27.6 Export reminder
 
 Users who have not saved a recovery export receive a periodic, dismissible reminder referencing the relay-loss risk (§19.4) in plain language.
+
+Independently of that reminder, a client signed in to an account whose capsule does not carry `protocol.everyday_derivation` (§12.1) shows a standing notice that the account's key is not contained in its recovery phrase, with a route to export the private key.
 
 ---
 
