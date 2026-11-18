@@ -2,11 +2,13 @@
 import { getPublicKeyHex } from "../crypto/secp256k1.js";
 import { wipe } from "../crypto/memory.js";
 import { base64urlToBytes, bytesToBase64url } from "../crypto/encoding.js";
+import { randomAccountId, randomBytes } from "../crypto/random.js";
 import {
   isValidRecoveryPhrase,
   recoveryPhraseToSeed,
 } from "../crypto/bip39.js";
 import {
+  deriveEverydayPrivateKey,
   deriveRecoveryKeys,
   derivePasswordKeys,
   normalizeLoginName,
@@ -18,6 +20,7 @@ import {
   D_TAG_PASSWORD_CAPSULE,
   D_TAG_RECOVERY_CAPSULE,
   KIND_DM_RELAY_LIST,
+  KIND_PROFILE,
   KIND_RELAY_LIST,
   SCHEMA_CREDENTIAL_V1,
   SCHEMA_RECOVERY_V1,
@@ -37,6 +40,7 @@ import {
   PROTOCOL_CAPSULE_ENCRYPTION,
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
+  everydayDerivationField,
 } from "../capsules/types.js";
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { parseDmRelayListEvent, parseRelayListEvent } from "./profileEvents.js";
@@ -73,6 +77,12 @@ export interface RecoveredIdentity {
   generalRelays: string[];
   dmRelays: string[];
   chainWarning?: string;
+  /**
+   * True when the everyday key equals the one §11.6 derives from this phrase,
+   * so the phrase alone could rebuild it (§17.6). Established by comparing
+   * keys, not by reading the capsule's hint (§12.1).
+   */
+  everydayKeyDerived: boolean;
 }
 
 function pickNewestValidEvent(events: NostrEvent[]): NostrEvent | undefined {
@@ -92,10 +102,14 @@ export async function recoverWithPhrase(
   }
   const bip39Seed = await recoveryPhraseToSeed(params.phrase);
   const { recoveryPrivateKey, capsuleKey } = deriveRecoveryKeys(bip39Seed);
+  const derivedEveryday = deriveEverydayPrivateKey(bip39Seed);
+  const derivedEverydayPublicKey = getPublicKeyHex(derivedEveryday);
   // §11.10 -- the 64-byte master seed re-derives every recovery key; it must
   // not outlive this line. The phrase STRING itself is unwipeable (JS strings
   // are immutable), which is exactly why the caller is told to hold it briefly.
-  wipe(bip39Seed);
+  // The derived everyday key was needed only for its public half: the capsule
+  // is authoritative for the private key (§7.2).
+  wipe(bip39Seed, derivedEveryday);
   const recoveryPublicKey = getPublicKeyHex(recoveryPrivateKey);
 
   const vaultPool = new RelayPool(params.vaultRelayUrls, {
@@ -159,33 +173,11 @@ export async function recoverWithPhrase(
 
   // §17.4 step 4 — restore relay preferences from the user's own public kind 10002/10050 events,
   // searched across the discovery relays plus this capsule's own vault-relay hints.
-  const discoveryTargets = [
-    ...new Set([...params.discoveryRelayUrls, ...payload.vault_relay_hints]),
-  ];
-  const discoveryPool = new RelayPool(discoveryTargets);
-  let generalRelays: string[] = [];
-  let dmRelays: string[] = [];
-  try {
-    const relayListQuorum = await discoveryPool.queryQuorum(
-      { kinds: [KIND_RELAY_LIST], authors: [everydayPublicKey], limit: 5 },
-      params.timeoutMs,
-    );
-    const relayListEvent = pickNewestValidEvent(
-      relayListQuorum.outcomes.flatMap((o) => o.events),
-    );
-    if (relayListEvent) generalRelays = parseRelayListEvent(relayListEvent);
-
-    const dmListQuorum = await discoveryPool.queryQuorum(
-      { kinds: [KIND_DM_RELAY_LIST], authors: [everydayPublicKey], limit: 5 },
-      params.timeoutMs,
-    );
-    const dmListEvent = pickNewestValidEvent(
-      dmListQuorum.outcomes.flatMap((o) => o.events),
-    );
-    if (dmListEvent) dmRelays = parseDmRelayListEvent(dmListEvent);
-  } finally {
-    discoveryPool.closeAll();
-  }
+  const { generalRelays, dmRelays } = await fetchRelayPreferences(
+    everydayPublicKey,
+    [...params.discoveryRelayUrls, ...payload.vault_relay_hints],
+    params.timeoutMs,
+  );
 
   return {
     everydayPrivateKey,
@@ -199,7 +191,257 @@ export async function recoverWithPhrase(
     generalRelays,
     dmRelays,
     chainWarning: chainCheck.consistent ? undefined : chainCheck.warning,
+    everydayKeyDerived: everydayPublicKey === derivedEverydayPublicKey,
   };
+}
+
+async function fetchRelayPreferences(
+  everydayPublicKey: string,
+  relayUrls: string[],
+  timeoutMs: number | undefined,
+): Promise<{ generalRelays: string[]; dmRelays: string[] }> {
+  const discoveryPool = new RelayPool([...new Set(relayUrls)]);
+  let generalRelays: string[] = [];
+  let dmRelays: string[] = [];
+  try {
+    const relayListQuorum = await discoveryPool.queryQuorum(
+      { kinds: [KIND_RELAY_LIST], authors: [everydayPublicKey], limit: 5 },
+      timeoutMs,
+    );
+    const relayListEvent = pickNewestValidEvent(
+      relayListQuorum.outcomes.flatMap((o) => o.events),
+    );
+    if (relayListEvent) generalRelays = parseRelayListEvent(relayListEvent);
+
+    const dmListQuorum = await discoveryPool.queryQuorum(
+      { kinds: [KIND_DM_RELAY_LIST], authors: [everydayPublicKey], limit: 5 },
+      timeoutMs,
+    );
+    const dmListEvent = pickNewestValidEvent(
+      dmListQuorum.outcomes.flatMap((o) => o.events),
+    );
+    if (dmListEvent) dmRelays = parseDmRelayListEvent(dmListEvent);
+  } finally {
+    discoveryPool.closeAll();
+  }
+  return { generalRelays, dmRelays };
+}
+
+// ---- Rebuild from phrase (§17.6) ----
+
+export interface PhraseRebuildParams {
+  phrase: string;
+  vaultRelayUrls: string[];
+  discoveryRelayUrls: string[];
+  timeoutMs?: number;
+}
+
+export interface PhraseRebuildPreview {
+  /** The identity §11.6 derives from this phrase. Only the user can say whether it is theirs. */
+  everydayPublicKey: string;
+  /** A kind-0 profile signed by that identity exists on a relay. */
+  profileFound: boolean;
+  /** A kind-10002 relay list signed by that identity exists on a relay. */
+  relayListFound: boolean;
+}
+
+interface PhraseKeys {
+  recoveryPrivateKey: Uint8Array;
+  recoveryPublicKey: string;
+  capsuleKey: Uint8Array;
+  everydayPrivateKey: Uint8Array;
+  everydayPublicKey: string;
+}
+
+async function derivePhraseKeys(phrase: string): Promise<PhraseKeys> {
+  if (!isValidRecoveryPhrase(phrase)) {
+    throw new RecoveryFailedError(
+      "This does not look like a valid 12-word BitLogin recovery phrase.",
+    );
+  }
+  const bip39Seed = await recoveryPhraseToSeed(phrase);
+  try {
+    const { recoveryPrivateKey, capsuleKey } = deriveRecoveryKeys(bip39Seed);
+    const everydayPrivateKey = deriveEverydayPrivateKey(bip39Seed);
+    return {
+      recoveryPrivateKey,
+      recoveryPublicKey: getPublicKeyHex(recoveryPrivateKey),
+      capsuleKey,
+      everydayPrivateKey,
+      everydayPublicKey: getPublicKeyHex(everydayPrivateKey),
+    };
+  } finally {
+    wipe(bip39Seed);
+  }
+}
+
+/**
+ * A rebuild is only honest when the capsule is known to be gone: a quorum of
+ * relays answered, and nothing at the recovery address decrypts. Relays that
+ * did not answer prove nothing, and an account whose capsule still exists
+ * must go through ordinary recovery, which keeps its vault roots (§17.6).
+ * Returns the newest `created_at` seen at the address, so a rebuilt capsule
+ * can replace undecryptable leftovers (§24.6).
+ */
+async function assertNoRecoveryCapsule(
+  keys: PhraseKeys,
+  vaultRelayUrls: string[],
+  timeoutMs: number | undefined,
+): Promise<number | null> {
+  const pool = new RelayPool(vaultRelayUrls, {
+    authPrivateKey: keys.recoveryPrivateKey,
+  });
+  let read;
+  try {
+    read = await readRecoveryCapsule(
+      pool,
+      keys.recoveryPublicKey,
+      keys.capsuleKey,
+      timeoutMs,
+    );
+  } finally {
+    pool.closeAll();
+  }
+  if (!read.quorumMet) throw new AccountNotFoundError("quorum-not-met");
+  if (read.best) {
+    throw new RecoveryFailedError(
+      "This account's recovery capsule is still on the relays. Use normal recovery instead of a rebuild.",
+    );
+  }
+  return read.candidates.length > 0
+    ? Math.max(...read.candidates.map((c) => c.event.created_at))
+    : null;
+}
+
+/**
+ * §17.6 steps 1-3: what identity this phrase derives, and whether any public
+ * trace of it exists. Publishes nothing. The caller must show the result and
+ * get the user's explicit confirmation before calling rebuildAccountFromPhrase:
+ * for an imported key or a pre-v0.7 account the derived identity is a new,
+ * empty one, and only the user can tell.
+ */
+export async function previewPhraseRebuild(
+  params: PhraseRebuildParams,
+): Promise<PhraseRebuildPreview> {
+  const keys = await derivePhraseKeys(params.phrase);
+  try {
+    await assertNoRecoveryCapsule(keys, params.vaultRelayUrls, params.timeoutMs);
+    const pool = new RelayPool([
+      ...new Set([...params.discoveryRelayUrls, ...params.vaultRelayUrls]),
+    ]);
+    try {
+      const found = await pool.queryQuorum(
+        {
+          kinds: [KIND_PROFILE, KIND_RELAY_LIST],
+          authors: [keys.everydayPublicKey],
+          limit: 10,
+        },
+        params.timeoutMs,
+      );
+      const events = found.outcomes
+        .flatMap((o) => o.events)
+        .filter(
+          (e) => e.pubkey === keys.everydayPublicKey && verifyNostrEvent(e),
+        );
+      return {
+        everydayPublicKey: keys.everydayPublicKey,
+        profileFound: events.some((e) => e.kind === KIND_PROFILE),
+        relayListFound: events.some((e) => e.kind === KIND_RELAY_LIST),
+      };
+    } finally {
+      pool.closeAll();
+    }
+  } finally {
+    wipe(keys.recoveryPrivateKey, keys.capsuleKey, keys.everydayPrivateKey);
+  }
+}
+
+/**
+ * §17.6 step 4: publishes a fresh generation-0 recovery capsule for the
+ * identity this phrase derives, and returns it in the same shape phrase
+ * recovery does, so completeRecoveryWithNewCredentials finishes the job.
+ *
+ * Not restored, because they were random and lived only in the lost capsules:
+ * the original account_id and the Connection Vault roots. New ones are minted.
+ */
+export async function rebuildAccountFromPhrase(
+  params: PhraseRebuildParams & { minAcknowledgements?: number; now?: number },
+): Promise<RecoveredIdentity> {
+  const now = params.now ?? Math.floor(Date.now() / 1000);
+  const keys = await derivePhraseKeys(params.phrase);
+  let handedOver = false;
+  try {
+    const newestLeftover = await assertNoRecoveryCapsule(
+      keys,
+      params.vaultRelayUrls,
+      params.timeoutMs,
+    );
+    const payload: RecoveryPayload = {
+      schema: SCHEMA_RECOVERY_V1,
+      account_id: bytesToBase64url(randomAccountId()),
+      recovery_generation: 0,
+      previous_recovery_event_id: null,
+      operational_private_key: bytesToBase64url(keys.everydayPrivateKey),
+      operational_public_key: keys.everydayPublicKey,
+      recovery_public_key: keys.recoveryPublicKey,
+      connection_vault_root: bytesToBase64url(randomBytes(32)),
+      vault_sudo_key: bytesToBase64url(randomBytes(32)),
+      created_at:
+        newestLeftover === null ? now : nextCreatedAt(newestLeftover, now),
+      vault_relay_hints: params.vaultRelayUrls,
+      protocol: {
+        capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
+        recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+        ...everydayDerivationField(true),
+      },
+    };
+    const event = await buildRecoveryCapsuleEvent({
+      recoveryPrivateKey: keys.recoveryPrivateKey,
+      capsuleKey: keys.capsuleKey,
+      payload,
+    });
+    const pool = new RelayPool(params.vaultRelayUrls, {
+      authPrivateKey: keys.recoveryPrivateKey,
+    });
+    let publish: PublishVerificationResult;
+    try {
+      publish = await publishAndVerify(pool, event, {
+        dTag: D_TAG_RECOVERY_CAPSULE,
+        minAcks: params.minAcknowledgements,
+        timeoutMs: params.timeoutMs,
+      });
+    } finally {
+      pool.closeAll();
+    }
+    if (!publish.success) {
+      throw new RecoveryFailedError(
+        "Could not publish the rebuilt recovery capsule to enough relays. Nothing else was changed; please retry.",
+      );
+    }
+    const { generalRelays, dmRelays } = await fetchRelayPreferences(
+      keys.everydayPublicKey,
+      [...params.discoveryRelayUrls, ...params.vaultRelayUrls],
+      params.timeoutMs,
+    );
+    handedOver = true;
+    return {
+      everydayPrivateKey: keys.everydayPrivateKey,
+      everydayPublicKey: keys.everydayPublicKey,
+      recoveryPrivateKey: keys.recoveryPrivateKey,
+      recoveryPublicKey: keys.recoveryPublicKey,
+      recoveryCapsuleKey: keys.capsuleKey,
+      accountId: payload.account_id,
+      currentRecoveryEvent: event,
+      currentRecoveryPayload: payload,
+      generalRelays,
+      dmRelays,
+      everydayKeyDerived: true,
+    };
+  } finally {
+    if (!handedOver) {
+      wipe(keys.recoveryPrivateKey, keys.capsuleKey, keys.everydayPrivateKey);
+    }
+  }
 }
 
 export interface CompleteRecoveryParams {
@@ -323,6 +565,7 @@ export async function completeRecoveryWithNewCredentials(
       protocol: {
         capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
         recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+        ...everydayDerivationField(recovered.everydayKeyDerived),
       },
     };
     const refreshedRecoveryEvent = await buildRecoveryCapsuleEvent({
@@ -380,6 +623,7 @@ export async function completeRecoveryWithNewCredentials(
         password_kdf: PROTOCOL_PASSWORD_KDF,
         capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
         recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+        ...everydayDerivationField(recovered.everydayKeyDerived),
       },
     };
     const credentialEvent = await buildCredentialCapsuleEvent({

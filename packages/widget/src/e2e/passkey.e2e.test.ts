@@ -22,6 +22,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // Relative source import on purpose: test-support is deliberately NOT a
 // package export (it must never ship), and vitest resolves the TS directly.
 import { MockRelay } from "../../../core/src/test-support/mockRelay.js";
+import { generatePrivateKey, getPublicKeyHex } from "../../../core/src/crypto/secp256k1.js";
+import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
 
 const DIST = fileURLToPath(new URL("../../../demo/dist/", import.meta.url));
 const MIME: Record<string, string> = {
@@ -94,7 +96,9 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
 /**
  * Drives the mandatory recovery ceremony that every passkey registration now
  * runs before a session exists: read the 12 words, answer the three-word quiz
- * from them, submit. Returns the phrase.
+ * from them, submit. Returns the phrase. For a generated identity that is
+ * the whole ceremony (the phrase derives the key); an imported key gets one
+ * more screen, driven by acknowledgeKeyBackup below.
  */
 async function completeRecoveryCeremony(widget: {
   locator: (selector: string) => any;
@@ -111,6 +115,30 @@ async function completeRecoveryCeremony(widget: {
   }
   await widget.locator('form[data-form="verify-phrase"] button[type="submit"]').click();
   return words;
+}
+
+/**
+ * Imported keys only: the key is shown, and Finish is refused until it is
+ * acknowledged as saved. Returns the nsec that was on screen.
+ */
+async function acknowledgeKeyBackup(widget: { locator: (selector: string) => any }): Promise<string> {
+  const saveKey = widget.locator('form[data-form="save-key"]');
+  await saveKey.waitFor({ timeout: 60_000 });
+  const shownKey: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+  await saveKey.locator('button[type="submit"]').click();
+  await widget.locator(".notice.error").waitFor({ timeout: 10_000 });
+  expect(await widget.locator(".pubkey").count()).toBe(0);
+  await widget.locator("#key-saved-check").check();
+  await saveKey.locator('button[type="submit"]').click();
+  return shownKey;
+}
+
+/** Password sign-up through the generated-password screen, up to the phrase. */
+async function startPasswordSignUp(widget: { locator: (selector: string) => any }, loginName: string): Promise<void> {
+  await widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(loginName);
+  await widget.locator('form[data-form="create-name"] button[type="submit"]').click();
+  await widget.locator("#saved-check").check();
+  await widget.locator('form[data-form="create-credential"] button[type="submit"]').click();
 }
 
 describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", () => {
@@ -207,6 +235,30 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(session?.method).toBe("bitlogin");
         expect(session?.npub).toBe(firstNpub);
 
+        // Backup health panel, against the same relays: healthy at first,
+        // then every relay drops the account (the loss this panel exists
+        // for), the panel says so, and one tap re-sends it from this device.
+        const healthNotice = widget.locator(".notice:has(strong)").first();
+        const healthRows = widget.locator(".health-row");
+        await widget.locator('[data-action="goto-health"]').click();
+        await healthRows.first().waitFor({ timeout: 30_000 });
+        expect(await healthRows.count()).toBe(3);
+        expect(await healthNotice.textContent()).toContain("Stored on every relay");
+        expect(await widget.locator(".health-cell.bad").count()).toBe(0);
+
+        for (const relay of relays) relay.wipeAllData();
+        await widget.locator('[data-action="health-recheck"]').click();
+        await widget.locator(".health-cell.bad").first().waitFor({ timeout: 30_000 });
+        expect(await healthNotice.textContent()).toContain("Relays have dropped your account");
+        expect(await widget.locator(".health-cell.bad").count()).toBe(6);
+
+        await widget.locator('[data-action="health-repair"]').click();
+        await widget.locator(".notice:has-text('Stored on every relay')").waitFor({ timeout: 30_000 });
+        expect(await widget.locator(".health-cell.bad").count()).toBe(0);
+        expect(relays.every((r) => r.storedEventKinds().filter((kind) => kind === 30078).length >= 2)).toBe(true);
+        await widget.locator('[data-action="goto-dashboard"]').click();
+        await pubkeyLine.waitFor({ timeout: 30_000 });
+
         // Sign out, then sign IN with the same passkey: derivation must land
         // on the same account.
         await widget.locator('[data-action="logout"]').click();
@@ -273,6 +325,96 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(npubs[0]).toMatch(/^npub1/u);
         expect(npubs[1]).toMatch(/^npub1/u);
         expect(npubs[0]).not.toBe(npubs[1]);
+      } finally {
+        await browser.close();
+      }
+    },
+    180_000
+  );
+
+  it(
+    "every relay drops a generated account, and the phrase alone rebuilds the same identity",
+    async () => {
+      const browser = await playwright!.chromium.launch();
+      try {
+        const page = await (await browser.newContext()).newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (err) => errors.push(String(err)));
+        await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = page.locator("bitlogin-auth");
+
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, "rebuildme");
+        const words = await completeRecoveryCeremony(widget);
+        // A generated identity needs no key-backup screen: the phrase is it.
+        const pubkeyLine = widget.locator(".pubkey");
+        await pubkeyLine.waitFor({ timeout: 60_000 });
+        expect(await widget.locator('form[data-form="save-key"]').count()).toBe(0);
+        const npub = (await pubkeyLine.textContent())?.trim() ?? "";
+        expect(npub).toMatch(/^npub1/u);
+
+        await widget.locator('[data-action="logout"]').click();
+        for (const relay of relays) relay.wipeAllData();
+
+        await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-recover"]').click();
+        await widget.locator('form[data-form="recover-phrase"] input[name="phrase"]').fill(words.join(" "));
+        await widget.locator('form[data-form="recover-phrase"] button[type="submit"]').click();
+
+        // Nothing is rebuilt or signed in until the identity is confirmed.
+        const confirm = widget.locator('[data-action="rebuild-confirm"]');
+        await confirm.waitFor({ timeout: 60_000 });
+        expect(((await widget.locator(".credential-box").first().textContent()) ?? "").trim()).toBe(npub);
+        expect(await page.evaluate(() => window.bitlogin?.activeMethod())).toBeNull();
+        expect(relays.flatMap((r) => r.storedEventKinds()).filter((kind) => kind === 30078)).toEqual([]);
+        await confirm.click();
+
+        const newLogin = widget.locator('form[data-form="recover-new-credentials"]');
+        await newLogin.waitFor({ timeout: 60_000 });
+        await newLogin.locator('input[name="newLoginName"]').fill("rebuilt");
+        await newLogin.locator('button[type="submit"]').click();
+        await pubkeyLine.waitFor({ timeout: 60_000 });
+        expect((await pubkeyLine.textContent())?.trim()).toBe(npub);
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    },
+    180_000
+  );
+
+  it(
+    "an imported key is told it is different and must be acknowledged as saved",
+    async () => {
+      const importedKey = generatePrivateKey();
+      const importedNsec = encodeNsec(importedKey);
+      const importedNpub = encodeNpub(getPublicKeyHex(importedKey));
+      const browser = await playwright!.chromium.launch();
+      try {
+        const page = await (await browser.newContext()).newPage();
+        await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = page.locator("bitlogin-auth");
+
+        await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-import"]').click();
+        await widget.locator('form[data-form="import-key"] input[name="importKey"]').fill(importedNsec);
+        await widget.locator('form[data-form="import-key"] button[type="submit"]').click();
+        await widget.locator('[data-action="import-continue"]').click();
+        await startPasswordSignUp(widget, "importer");
+        await completeRecoveryCeremony(widget);
+
+        await widget.locator('form[data-form="save-key"]').waitFor({ timeout: 60_000 });
+        expect(await widget.locator("h2").textContent()).toContain("Keep your private key safe");
+        expect(await widget.locator(".sub").first().textContent()).toContain("Imported accounts are different");
+        expect(await acknowledgeKeyBackup(widget)).toBe(importedNsec);
+
+        const pubkeyLine = widget.locator(".pubkey");
+        await pubkeyLine.waitFor({ timeout: 60_000 });
+        expect((await pubkeyLine.textContent())?.trim()).toBe(importedNpub);
+
+        // The dashboard keeps saying so: this account's phrase is not enough.
+        await widget.locator('[data-action="goto-export"]').click();
+        expect(await widget.locator(".small").first().textContent()).toContain("not contained in its recovery phrase");
       } finally {
         await browser.close();
       }

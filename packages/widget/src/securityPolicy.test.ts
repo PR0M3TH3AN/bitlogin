@@ -54,12 +54,13 @@ describe("widget security policy", () => {
     const menu = widgetSource.slice(menuStart, menuEnd);
     // Expected occurrences: the onClick case + the menu row, plus sanctioned
     // contextual renderings AWAY from the welcome screen -- the login screen's
-    // "Forgot password?" link (goto-recover) and the bunker screen's own
+    // "Forgot password?" link (goto-recover), the rebuild screen's back button
+    // to the phrase form (goto-recover), and the bunker screen's own
     // "Generate a new code" retry (goto-bunker).
     for (const [action, expected] of [
       ["goto-bunker", 3],
       ["goto-import", 2],
-      ["goto-recover", 3],
+      ["goto-recover", 4],
     ] as const) {
       expect(menu).toContain(`optionRow("${action}"`);
       const occurrences = widgetSource.split(`"${action}"`).length - 1;
@@ -80,6 +81,69 @@ describe("widget security policy", () => {
     expect(body).not.toContain("dispatchLogin");
     expect(body).not.toContain("flashSuccess");
     expect(widgetSource).not.toContain("securePhrasePending");
+  });
+
+  it("an imported key gets no session before its private key is acknowledged as saved", () => {
+    // Owner decision 2026-11-18, after a real loss: every relay dropped an
+    // account's capsules, and the recovery phrase alone could not bring it
+    // back. Generated identities are now derived from the phrase (spec §11.6)
+    // so the phrase is enough for them. An imported key is not in the phrase,
+    // so the phrase quiz hands it to the key-backup screen and grants nothing;
+    // only the acknowledged save-key form does. Sessions for new accounts are
+    // granted in exactly one place.
+    const verifyBody = widgetSource.slice(
+      widgetSource.indexOf("private async handleVerifyPhraseSubmit"),
+      widgetSource.indexOf("private handleSaveKeySubmit"),
+    );
+    const generatedOnly = verifyBody.indexOf("if (!this.registeredByImport) {");
+    expect(generatedOnly).toBeGreaterThan(-1);
+    expect(verifyBody.indexOf("this.finishRegistration()")).toBeGreaterThan(generatedOnly);
+    expect(verifyBody.split("this.finishRegistration()").length - 1).toBe(1);
+    expect(verifyBody).toContain('this.goto("save-key")');
+    for (const grant of ["dispatchLogin", "claimSigner", "flashSuccess"]) {
+      expect(verifyBody).not.toContain(grant);
+    }
+
+    const saveBody = widgetSource.slice(
+      widgetSource.indexOf("private handleSaveKeySubmit"),
+      widgetSource.indexOf("private finishRegistration"),
+    );
+    const refusal = saveBody.indexOf("if (!this.keySavedCheckbox)");
+    expect(refusal).toBeGreaterThan(-1);
+    expect(saveBody.indexOf("this.finishRegistration()")).toBeGreaterThan(refusal);
+    expect(saveBody).not.toContain("dispatchLogin");
+
+    expect(widgetSource.split("this.finishRegistration()").length - 1).toBe(2);
+  });
+
+  it("a phrase rebuild publishes nothing until the user confirms the identity shown", () => {
+    // Spec §17.6 step 3. For an imported key or an older account the derived
+    // identity is a new, empty one; only the npub on screen tells the user.
+    // The submit handler may preview, and only the confirm button may rebuild.
+    const submitBody = widgetSource.slice(
+      widgetSource.indexOf("private async handleRecoverPhraseSubmit"),
+      widgetSource.indexOf("private async handleRebuildConfirm"),
+    );
+    expect(submitBody).toContain("this.worker.previewPhraseRebuild(");
+    expect(submitBody).not.toContain("rebuildFromPhrase");
+    expect(widgetSource.split("this.worker.rebuildFromPhrase(").length - 1).toBe(1);
+    // The onClick case and the one button that triggers it.
+    expect(widgetSource.split('"rebuild-confirm"').length - 1).toBe(2);
+    expect(widgetSource).toContain("<strong>Only continue if this is your npub.</strong>");
+  });
+
+  it("checks relay health only when the user asks", () => {
+    // The check opens a connection to every vault relay and asks for both
+    // capsule addresses. Running it on every page load of every embedding
+    // site would be a standing privacy and traffic cost.
+    const occurrences = widgetSource.split("this.worker.checkReplicaHealth()").length - 1;
+    expect(occurrences).toBe(1);
+    for (const lifecycle of ["connectedCallback(): void", "private async tryRestoreSession"]) {
+      const start = widgetSource.indexOf(lifecycle);
+      expect(start).toBeGreaterThan(-1);
+      const body = widgetSource.slice(start, widgetSource.indexOf("\n  }\n", start));
+      expect(body).not.toContain("ReplicaHealth");
+    }
   });
 
   it("the passkey row lives inside the menu with an honest custody label", () => {

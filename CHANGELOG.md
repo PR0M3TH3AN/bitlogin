@@ -6,6 +6,49 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-18
+
+Spec v0.7. Prompted by a real loss: every relay dropped one account's
+capsules, and neither the password nor the recovery phrase could bring the
+identity back.
+
+- **New accounts derive their identity key from the recovery phrase.**
+  Previously the key was random and the phrase only located a capsule on a
+  relay. Now the phrase alone rebuilds the identity when no relay holds
+  anything (spec §11.6). This applies to accounts created from this version
+  on; existing accounts keep the key they have, and nothing about how they
+  sign in changes. The derivation is a frozen contract, pinned in
+  `knownAnswer.test.ts`.
+- **Rebuild from phrase.** When "Recover account" finds no account on the
+  relays, the widget shows the identity the phrase derives and, once the user
+  confirms the npub is theirs, republishes a recovery capsule and continues
+  to "set a new login" (spec §17.6). Saved wallet connections are not
+  rebuilt. For an imported key or an older account the identity shown is not
+  theirs, and the screen says so. In core: `previewPhraseRebuild` and
+  `rebuildAccountFromPhrase`.
+- **Imported keys are told they are different.** An imported `nsec` is not in
+  the phrase. After the phrase quiz, an imported-key sign-up shows the key
+  with copy and download buttons and grants the session only once the user
+  ticks that it is saved. **Integration-visible:** for imported keys only,
+  `bitlogin-login` fires one screen later than before.
+- **Capsules record where the key came from.** A new optional
+  `protocol.everyday_derivation` field in both capsule payloads (spec §12.1).
+  Older vendored widgets ignore it, and can read and write these accounts as
+  before; if one rewrites a capsule the hint is dropped, which only changes
+  what the newer widget says about backups. `LoginResult`, `RegisterAccountResult`
+  and `RecoveredIdentity` gain `everydayKeyDerived`.
+- **Backup health check on the dashboard.** "Check account backup health"
+  asks each vault relay for the two capsules this session holds, verifies
+  what comes back, and reports how many relays hold each one. "Re-send my
+  account to every relay" republishes both signed events, which restores an
+  account that relays have dropped as long as one signed-in device still has
+  it. It runs only when the user asks. In core:
+  `checkReplicaHealth({ relayUrls, credentialEvent, recoveryEvent })`; in the
+  worker: a `checkReplicaHealth` action beside the existing `repairReplicas`.
+- **The revealed private key no longer lingers.** The Export identity screen
+  kept a revealed `nsec` in the element until logout; it is now dropped on
+  leaving the screen. That screen also gains "Copy" and "Download key file".
+
 ## 2026-11-17
 
 - **A release artifact set with an integrity manifest.**

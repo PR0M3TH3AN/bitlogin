@@ -11,6 +11,7 @@ import {
   type KeyValueStore,
 } from "../storage/interface.js";
 import type { NostrEvent } from "../nostr/event.js";
+import { isEverydayKeyDerived } from "../capsules/types.js";
 
 export interface LoginParams {
   loginName: string;
@@ -35,6 +36,9 @@ export interface LoginResult {
   recoveryPublicKey: string;
   accountId: string;
   generation: number;
+  /** True when the capsule records that the recovery phrase alone can rebuild this
+   *  identity (§11.6, §12.1). False for imported, rotated, and pre-v0.7 keys. */
+  everydayKeyDerived: boolean;
   credentialEvent: NostrEvent;
   /** The signed recovery capsule event embedded in the credential capsule (§12.1, §24.4) — needed to build a recovery export or rebroadcast replicas without re-deriving anything from the phrase. */
   recoveryCapsuleEvent: NostrEvent;
@@ -109,6 +113,7 @@ export async function loginWithPassword(
       recoveryPublicKey: payload.recovery_public_key,
       accountId: payload.account_id,
       generation: payload.generation,
+      everydayKeyDerived: isEverydayKeyDerived(payload),
       credentialEvent: result.best.event,
       recoveryCapsuleEvent: payload.recovery_capsule_event,
       connectionVaultRoot: payload.connection_vault_root

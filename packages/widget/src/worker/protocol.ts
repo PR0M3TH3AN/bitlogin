@@ -1,6 +1,6 @@
 /** Request/response envelope for the main-thread <-> crypto-worker RPC channel. */
 import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
-import type { RecoveryExportFile } from "@bitlogin/core/account";
+import type { RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
 
 export interface WorkerRequest<TAction extends string = string, TPayload = unknown> {
   id: string;
@@ -29,6 +29,8 @@ export interface RegisterResult {
   recoveryPublicKey: string;
   accountId: string;
   imported: boolean;
+  /** True when the recovery phrase alone can rebuild this identity (spec §11.6). */
+  everydayKeyDerived: boolean;
   credentialEventId: string;
   recoveryEventId: string;
 }
@@ -51,6 +53,7 @@ export interface LoginResult {
   everydayPublicKey: string;
   accountId: string;
   generation: number;
+  everydayKeyDerived: boolean;
   rollbackWarning?: string;
   relayDisagreementWarning?: string;
 }
@@ -71,6 +74,18 @@ export interface RecoverResult {
   generalRelays: string[];
   dmRelays: string[];
   chainWarning?: string;
+  everydayKeyDerived: boolean;
+}
+
+/** Rebuild from phrase (spec §17.6). */
+export interface PhraseRebuildPayload {
+  phrase: string;
+}
+export interface PhraseRebuildPreviewResult {
+  everydayPublicKey: string;
+  npub: string;
+  profileFound: boolean;
+  relayListFound: boolean;
 }
 
 export interface CompleteRecoveryPayload {
@@ -161,6 +176,7 @@ export interface RestoreSessionResult {
   restored: boolean;
   everydayPublicKey?: string;
   accountId?: string;
+  everydayKeyDerived?: boolean;
 }
 
 // ---- Connection Vault (connection-vault.md §12, phase D; reveal mode) ----
@@ -274,6 +290,8 @@ export type WorkerActionMap = {
   previewImportKey: [PreviewImportKeyPayload, PreviewImportKeyResult];
   login: [LoginPayload, LoginResult];
   recover: [RecoverPayload, RecoverResult];
+  previewPhraseRebuild: [PhraseRebuildPayload, PhraseRebuildPreviewResult];
+  rebuildFromPhrase: [PhraseRebuildPayload, RecoverResult];
   completeRecovery: [CompleteRecoveryPayload, CompleteRecoveryResult];
   changePassword: [ChangePasswordPayload, ChangePasswordResult];
   publishProfileAndRelayLists: [PublishProfilePayload, PublishProfileResult];
@@ -284,8 +302,9 @@ export type WorkerActionMap = {
   nip04Encrypt: [Nip04EncryptPayload, { ciphertext: string }];
   nip04Decrypt: [Nip04DecryptPayload, { plaintext: string }];
   exportIdentity: [Record<string, never>, ExportIdentityResult];
-  buildRecoveryExport: [Record<string, never>, unknown];
+  buildRecoveryExport: [Record<string, never>, RecoveryExportFile];
   repairReplicas: [Record<string, never>, RepairReplicasResult];
+  checkReplicaHealth: [Record<string, never>, ReplicaHealthResult];
   getSessionStatus: [Record<string, never>, SessionStatusResult];
   restoreSession: [Record<string, never>, RestoreSessionResult];
   logout: [Record<string, never>, Record<string, never>];

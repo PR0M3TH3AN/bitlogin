@@ -4,7 +4,8 @@ import {
   isValidLoginName,
   parseRecoveryExport,
   RecoveryExportParseError,
-  type RecoveryExportFile
+  type RecoveryExportFile,
+  type ReplicaHealthResult
 } from "@bitlogin/core/account";
 import { encodeNpub } from "@bitlogin/core/nostr";
 import { randomUniformInt } from "@bitlogin/core/crypto";
@@ -13,8 +14,9 @@ import { createElementRoutedProvider, type Nip07Provider } from "./provider.js";
 import { readConfigFromElement } from "./config.js";
 import { WIDGET_STYLES } from "./styles.js";
 import { chooseWalletViaBitcoinConnect } from "./vault/bitcoinConnect.js";
-import type { VaultConnectionSummary } from "./worker/protocol.js";
+import type { RecoverResult, VaultConnectionSummary } from "./worker/protocol.js";
 import { buildVaultIntegrityWarnings } from "./vault/integrityWarnings.js";
+import { buildKeyBackupText, replicaStatusLabel, summarizeReplicaHealth } from "./replicaHealth.js";
 import { detectForeignNip07Provider, Nip07Signer } from "./signers/nip07.js";
 import { Nip46Signer } from "./signers/nip46.js";
 import type { Signer, SignerCapabilities, SignerMethod } from "./signers/types.js";
@@ -41,12 +43,15 @@ type Screen =
   | "create-credential"
   | "confirm-phrase"
   | "verify-phrase"
+  | "save-key"
   | "login"
   | "recover-phrase"
+  | "recover-rebuild"
   | "recover-new-credentials"
   | "dashboard"
   | "change-password"
   | "export"
+  | "health"
   | "rollback-confirm"
   | "vault-consent"
   | "vault-import"
@@ -139,6 +144,29 @@ export class BitLoginAuthElement extends HTMLElement {
   private lastSignedEventJson = "";
   private exportedNsec = "";
   private changePasswordNewCredential = "";
+
+  // Imported keys only (spec §15.7): a generated identity is derived from the
+  // recovery phrase, so the phrase alone rebuilds it. An imported key is not,
+  // so its phrase only works while a relay or a recovery export still holds
+  // the capsule. Registration of an imported key therefore shows the private
+  // key and requires it to be acknowledged as saved before the session exists.
+  private keySavedCheckbox = false;
+  private registeredByImport = false;
+
+  /** The capsule's own record (spec §12.1) of whether the recovery phrase
+   *  alone rebuilds this identity. False for imported, pre-v0.7 and unknown,
+   *  which is the safe default: those are told to keep their private key. */
+  private phraseRebuildsIdentity = false;
+
+  // Rebuild from phrase (spec §17.6): the identity this phrase derives, shown
+  // for the user to confirm when no relay holds the account any more.
+  private rebuildPreview: { npub: string; profileFound: boolean; relayListFound: boolean } | null = null;
+  private recoveredByRebuild = false;
+
+  // Replica health panel (§24.4): null while a check is running or has failed.
+  private replicaHealth: ReplicaHealthResult | null = null;
+  private replicaHealthBusy: "checking" | "repairing" | null = null;
+  private replicaRepairNote = "";
 
   // Brief animated brass-seal stamp (matching the widget's own brand mark) shown once over
   // the destination screen right after a real security-relevant success -- see flashSuccess().
@@ -316,6 +344,7 @@ export class BitLoginAuthElement extends HTMLElement {
       this.altSigner = null;
       this.session = null;
       this.passkeySession = false;
+      this.phraseRebuildsIdentity = false;
       clearActiveSession(this);
       this.releaseSigner();
       this.dispatchEvent(new CustomEvent("bitlogin-logout"));
@@ -325,6 +354,7 @@ export class BitLoginAuthElement extends HTMLElement {
     await this.worker.logout();
     this.session = null;
     this.passkeySession = false;
+    this.phraseRebuildsIdentity = false;
     clearActiveSession(this);
     this.releaseSigner();
     this.dispatchEvent(new CustomEvent("bitlogin-logout"));
@@ -710,6 +740,9 @@ export class BitLoginAuthElement extends HTMLElement {
       this.finishVaultOffer("declined");
       return;
     }
+    // A revealed private key stays on the main thread only while one of the
+    // two screens that display it is showing.
+    if (screen !== "export" && screen !== "save-key") this.exportedNsec = "";
     this.screen = screen;
     this.errorMessage = undefined;
     this.render();
@@ -811,8 +844,12 @@ export class BitLoginAuthElement extends HTMLElement {
       case "goto-recover":
         this.offlineExportFile = null;
         this.offlineExportFileNotice = undefined;
+        this.rebuildPreview = null;
+        this.recoverPhraseInput = "";
         this.goto("recover-phrase");
         return;
+      case "rebuild-confirm":
+        return this.handleRebuildConfirm();
       case "goto-welcome":
         this.pendingRollback = null;
         this.pendingExtensionSigner = null;
@@ -928,6 +965,14 @@ export class BitLoginAuthElement extends HTMLElement {
       }
       case "download-recovery-export":
         return this.handleDownloadRecoveryExport();
+      case "download-key-backup":
+        this.handleDownloadKeyBackup();
+        return;
+      case "goto-health":
+      case "health-recheck":
+        return this.loadReplicaHealth();
+      case "health-repair":
+        return this.handleRepairReplicas();
       case "sign-test-event":
         return this.handleSignTestEvent();
       case "reveal-nsec":
@@ -962,7 +1007,9 @@ export class BitLoginAuthElement extends HTMLElement {
         case "create-credential":
           return await this.handleCreateCredentialSubmit();
         case "verify-phrase":
-          return this.handleVerifyPhraseSubmit();
+          return await this.handleVerifyPhraseSubmit();
+        case "save-key":
+          return this.handleSaveKeySubmit();
         case "login":
           return await this.handleLoginSubmit();
         case "recover-phrase":
@@ -1111,6 +1158,7 @@ export class BitLoginAuthElement extends HTMLElement {
         method: "bitlogin"
       };
       this.sessionWarnings = [result.rollbackWarning, result.relayDisagreementWarning].filter((w): w is string => !!w);
+      this.phraseRebuildsIdentity = result.everydayKeyDerived;
       this.busy = false;
       this.passkeySession = true;
       this.noteSignerClaim(this.claimSigner());
@@ -1163,6 +1211,8 @@ export class BitLoginAuthElement extends HTMLElement {
       this.importPreviewNpub = "";
       this.pendingPasskey = null;
       this.loginName = pending.loginName;
+      this.registeredByImport = result.imported;
+      this.phraseRebuildsIdentity = result.everydayKeyDerived;
       this.recoveryPhrase = result.recoveryPhrase;
       const words = this.recoveryPhrase.split(" ");
       const indices = pickRandomIndices(words.length, 3);
@@ -1240,6 +1290,8 @@ export class BitLoginAuthElement extends HTMLElement {
     // The pasted key is now wrapped in the capsules; drop the main-thread copy (§11.10).
     this.importKey = "";
     this.importPreviewNpub = "";
+    this.registeredByImport = result.imported;
+    this.phraseRebuildsIdentity = result.everydayKeyDerived;
     this.recoveryPhrase = result.recoveryPhrase;
     const words = this.recoveryPhrase.split(" ");
     const indices = pickRandomIndices(words.length, 3);
@@ -1260,7 +1312,7 @@ export class BitLoginAuthElement extends HTMLElement {
     void this.offerToSaveCredential(this.loginName, password);
   }
 
-  private handleVerifyPhraseSubmit(): void {
+  private async handleVerifyPhraseSubmit(): Promise<void> {
     const words = this.recoveryPhrase.split(" ");
     for (const slot of this.confirmSlots) {
       const typed = this.field(`confirm-${slot.index}`).trim().toLowerCase();
@@ -1270,6 +1322,33 @@ export class BitLoginAuthElement extends HTMLElement {
         return;
       }
     }
+    if (!this.registeredByImport) {
+      // A generated identity is derived from the phrase just verified, so the
+      // phrase is a complete backup of it (spec §11.6, §15.7).
+      this.finishRegistration();
+      return;
+    }
+    // An imported key is not in the phrase. No session yet: it is granted only
+    // once the key is acknowledged as saved (handleSaveKeySubmit).
+    const { nsec } = await this.worker.exportIdentity();
+    this.keySavedCheckbox = false;
+    this.exportedNsec = nsec;
+    this.goto("save-key");
+  }
+
+  private handleSaveKeySubmit(): void {
+    this.keySavedCheckbox = (this.root.querySelector("#key-saved-check") as HTMLInputElement | null)?.checked ?? false;
+    if (!this.keySavedCheckbox) {
+      this.errorMessage = "Please confirm you saved your private key before continuing.";
+      this.render();
+      return;
+    }
+    this.finishRegistration();
+  }
+
+  /** The one place a brand-new account's session is granted. */
+  private finishRegistration(): void {
+    this.recoveryPhrase = "";
     this.sessionWarnings = [];
     this.noteSignerClaim(this.claimSigner());
     this.dispatchLogin();
@@ -1431,6 +1510,7 @@ export class BitLoginAuthElement extends HTMLElement {
         accountId: result.accountId,
         method: "bitlogin"
       };
+      this.phraseRebuildsIdentity = result.everydayKeyDerived ?? false;
       this.noteSignerClaim(this.claimSigner());
       this.dispatchLogin();
       this.goto("dashboard");
@@ -1452,6 +1532,7 @@ export class BitLoginAuthElement extends HTMLElement {
       this.loginName = loginName;
       this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId, method: "bitlogin" };
       this.sessionWarnings = [result.rollbackWarning, result.relayDisagreementWarning].filter((w): w is string => !!w);
+      this.phraseRebuildsIdentity = result.everydayKeyDerived;
       this.busy = false;
       this.noteSignerClaim(this.claimSigner());
       this.dispatchLogin();
@@ -1486,14 +1567,54 @@ export class BitLoginAuthElement extends HTMLElement {
   private async handleRecoverPhraseSubmit(): Promise<void> {
     const phrase = this.field("phrase").trim();
     this.setBusy(true);
-    const result = await this.worker.recover({ phrase, offlineExportFile: this.offlineExportFile ?? undefined });
-    this.recoverPhraseInput = phrase;
+    let result: RecoverResult;
+    try {
+      result = await this.worker.recover({ phrase, offlineExportFile: this.offlineExportFile ?? undefined });
+    } catch (err) {
+      if (!(err instanceof Error) || err.name !== "AccountNotFoundError") throw err;
+      // No relay holds this account. If its identity was derived from the
+      // phrase, the phrase can still rebuild it (spec §17.6). The preview
+      // refuses on its own when relays simply didn't answer, in which case
+      // the original "not found" is the honest message.
+      let preview;
+      try {
+        preview = await this.worker.previewPhraseRebuild({ phrase });
+      } catch {
+        throw err;
+      }
+      this.recoverPhraseInput = phrase;
+      this.rebuildPreview = { npub: preview.npub, profileFound: preview.profileFound, relayListFound: preview.relayListFound };
+      this.busy = false;
+      this.goto("recover-rebuild");
+      return;
+    }
+    this.recoveredByRebuild = false;
+    this.adoptRecoverResult(result);
+  }
+
+  /** The user confirmed the identity shown is theirs (spec §17.6 step 3). */
+  private async handleRebuildConfirm(): Promise<void> {
+    if (this.busy || !this.rebuildPreview || !this.recoverPhraseInput) return;
+    this.setBusy(true);
+    try {
+      const result = await this.worker.rebuildFromPhrase({ phrase: this.recoverPhraseInput });
+      this.recoveredByRebuild = true;
+      this.adoptRecoverResult(result);
+    } catch (err) {
+      this.fail(err);
+    }
+  }
+
+  private adoptRecoverResult(result: RecoverResult): void {
+    this.rebuildPreview = null;
+    this.recoverPhraseInput = "";
     this.recoveredPreview = {
       generalRelaysCount: result.generalRelays.length,
       dmRelaysCount: result.dmRelays.length,
       chainWarning: result.chainWarning
     };
     this.session = { publicKey: result.everydayPublicKey, npub: encodeNpub(result.everydayPublicKey), accountId: result.accountId, method: "bitlogin" };
+    this.phraseRebuildsIdentity = result.everydayKeyDerived;
     this.newCredentialAfterRecovery = generatePassphrase().secret;
     this.busy = false;
     this.goto("recover-new-credentials");
@@ -1551,15 +1672,129 @@ export class BitLoginAuthElement extends HTMLElement {
     }
   }
 
-  private async handleDownloadRecoveryExport(): Promise<void> {
-    const file = await this.worker.buildRecoveryExport();
-    const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+  private downloadTextFile(filename: string, text: string, type: string): void {
+    const blob = new Blob([text], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "bitlogin-recovery-export.json";
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  private async handleDownloadRecoveryExport(): Promise<void> {
+    const file = await this.worker.buildRecoveryExport();
+    this.downloadTextFile("bitlogin-recovery-export.json", JSON.stringify(file, null, 2), "application/json");
+  }
+
+  /** Saves the key already revealed on screen; never fetches it on its own. */
+  private handleDownloadKeyBackup(): void {
+    if (!this.exportedNsec || !this.session) return;
+    this.downloadTextFile(
+      "bitlogin-private-key.txt",
+      buildKeyBackupText({ npub: this.session.npub, nsec: this.exportedNsec, createdAt: new Date() }),
+      "text/plain"
+    );
+  }
+
+  /** Runs the replica health check (§24.4) and shows it. Only ever started by
+   *  the user: it opens a connection to every vault relay. */
+  private async loadReplicaHealth(): Promise<void> {
+    if (this.replicaHealthBusy) return;
+    this.replicaHealth = null;
+    this.replicaRepairNote = "";
+    this.replicaHealthBusy = "checking";
+    this.goto("health");
+    await this.refreshReplicaHealth();
+  }
+
+  private async refreshReplicaHealth(): Promise<void> {
+    try {
+      this.replicaHealth = await this.worker.checkReplicaHealth();
+    } catch (err) {
+      this.replicaHealth = null;
+      this.errorMessage = err instanceof Error ? err.message : String(err);
+    }
+    this.replicaHealthBusy = null;
+    if (this.screen === "health") this.render();
+  }
+
+  /** Re-sends both signed capsules to every vault relay, then checks again.
+   *  Needs no key: relays keep whichever copy is newest, so this can restore
+   *  a dropped account but never roll one back (§24.4). */
+  private async handleRepairReplicas(): Promise<void> {
+    if (this.replicaHealthBusy) return;
+    this.replicaHealthBusy = "repairing";
+    this.replicaRepairNote = "";
+    this.errorMessage = undefined;
+    this.render();
+    try {
+      const repair = await this.worker.repairReplicas();
+      this.replicaRepairNote = `Re-sent to ${repair.relaysTried} relays: ${repair.credentialAcknowledgedCount} accepted the sign-in copy, ${repair.recoveryAcknowledgedCount} accepted the recovery copy.`;
+    } catch (err) {
+      this.replicaHealthBusy = null;
+      this.fail(err);
+      return;
+    }
+    await this.refreshReplicaHealth();
+  }
+
+  /** What this account's backups can and cannot do, from the capsule's own
+   *  record of where its key came from (spec §12.1, §15.7). */
+  private renderBackupAdvice(): string {
+    return this.phraseRebuildsIdentity
+      ? "Relays can drop an account at any time. Your recovery phrase can rebuild your identity even then. It cannot bring back saved wallet connections; the recovery export file keeps those."
+      : "Relays can drop an account at any time, and this account's key is not contained in its recovery phrase (it was imported, or the account predates phrase-derived keys). Keep your recovery phrase <strong>and</strong> your private key: the phrase only works while a relay, or your recovery export file, still holds the account.";
+  }
+
+  private renderReplicaHealth(): string {
+    const busy = this.replicaHealthBusy;
+    const result = this.replicaHealth;
+    const repairNote = this.replicaRepairNote ? `<p class="small">${escapeHtml(this.replicaRepairNote)}</p>` : "";
+    const backupReminder = `<div class="notice info">${this.renderBackupAdvice()} <button class="link-inline" type="button" data-action="goto-export">Open Export identity</button></div>`;
+    if (!result) {
+      return `
+        ${this.renderScreenHead("Account backup health", "goto-dashboard")}
+        ${
+          busy
+            ? `<p class="sub"><span class="spinner"></span>${busy === "repairing" ? "Re-sending your account to every relay…" : "Asking each relay for your account…"}</p>`
+            : ""
+        }
+        ${this.renderError()}
+        ${repairNote}
+        ${busy ? "" : `<button class="secondary" type="button" data-action="health-recheck">Check again</button>`}
+        ${backupReminder}
+      `;
+    }
+    const summary = summarizeReplicaHealth(result);
+    const noticeClass = summary.level === "healthy" ? "info" : summary.level === "lost" || summary.level === "at-risk" ? "error" : "warn";
+    const cell = (label: string, status: ReplicaHealthResult["relays"][number]["credential"]) =>
+      `<span class="health-cell ${status === "current" ? "ok" : "bad"}">${label}: ${escapeHtml(replicaStatusLabel(status))}</span>`;
+    const rows = result.relays
+      .map(
+        (relay) => `
+        <div class="health-row">
+          <span class="health-relay">${escapeHtml(relay.relayUrl.replace(/^wss?:\/\//u, ""))}</span>
+          ${cell("Sign-in", relay.credential)}
+          ${cell("Recovery", relay.recovery)}
+        </div>`
+      )
+      .join("");
+    const repairButton = `<button class="${summary.repairUseful ? "primary" : "secondary"}" type="button" data-action="health-repair" ${busy ? "disabled" : ""}>
+        ${busy === "repairing" ? '<span class="spinner"></span>Re-sending…' : "Re-send my account to every relay"}
+      </button>`;
+    return `
+      ${this.renderScreenHead("Account backup health", "goto-dashboard")}
+      <p class="sub">Your encrypted account lives on public relays. This asks each one for the exact copies this device holds and verifies what comes back.</p>
+      <div class="notice ${noticeClass}"><strong>${escapeHtml(summary.headline)}.</strong> ${escapeHtml(summary.detail)}</div>
+      ${this.renderError()}
+      <div class="health-list">${rows}</div>
+      <p class="small">Checked ${escapeHtml(new Date(result.checkedAt * 1000).toLocaleTimeString())}.</p>
+      ${repairNote}
+      ${summary.level === "stale" || summary.level === "unknown" ? "" : repairButton}
+      <button class="secondary" type="button" data-action="health-recheck" ${busy ? "disabled" : ""}>Check again</button>
+      ${backupReminder}
+    `;
   }
 
   private async handleSignTestEvent(): Promise<void> {
@@ -1903,6 +2138,11 @@ export class BitLoginAuthElement extends HTMLElement {
         return `
           <h2>Save your recovery phrase</h2>
           <p class="sub">These 12 words can recover your identity if you forget your password or lose all your devices. We cannot recover these words for you.</p>
+          <p class="small">${
+            this.registeredByImport
+              ? "Because you imported your own key, it is not contained in these words. The phrase can only find your account on the relays that store it, so after this you'll also confirm your private key is saved."
+              : "Your identity is derived from these words, so they are a complete backup of it: they work even if every relay drops your account."
+          }</p>
           <p class="small">Do not enter a Bitcoin or other cryptocurrency-wallet recovery phrase into BitLogin. This is a BitLogin-only phrase.</p>
           <div class="phrase-grid">
             ${this.recoveryPhrase
@@ -1931,6 +2171,26 @@ export class BitLoginAuthElement extends HTMLElement {
             <button class="primary" type="submit">Confirm and continue</button>
           </form>
           <button class="link" data-action="goto-confirm-phrase">Back to phrase</button>
+        `;
+
+      case "save-key":
+        return `
+          <h2>Keep your private key safe</h2>
+          <p class="sub">Imported accounts are different. An account BitLogin creates can be rebuilt from its recovery phrase alone. Yours can't: this key (your <strong>nsec</strong>) came from outside, so the phrase only works while relays still hold your encrypted account, and relays can drop it. If that happens, this key is the only way back.</p>
+          <p class="small">It's the key you just imported. Make sure the copy you have is stored safely, or save it again here.</p>
+          <div class="credential-box" id="credential-box">${escapeHtml(this.exportedNsec)}</div>
+          <button class="secondary" type="button" data-action="copy-credential">Copy</button>
+          <button class="secondary" type="button" data-action="download-key-backup">Download key file</button>
+          <div class="notice warn">Anyone with this key controls your identity. Store it like your password: in a password manager or offline. Never paste it into a site you don't trust.</div>
+          <button class="link" type="button" data-action="download-recovery-export">Also download the recovery export (safe to store anywhere; useless without your phrase)</button>
+          ${this.renderError()}
+          <form data-form="save-key">
+            <label class="checkbox-row">
+              <input type="checkbox" id="key-saved-check" ${this.keySavedCheckbox ? "checked" : ""} />
+              I have saved both my recovery phrase and my private key.
+            </label>
+            <button class="primary" type="submit">Finish</button>
+          </form>
         `;
 
       case "login":
@@ -1962,7 +2222,8 @@ export class BitLoginAuthElement extends HTMLElement {
             <input type="text" name="phrase" id="phrase" autocomplete="off" required placeholder="12 words separated by spaces" />
             <label for="offlineExportFile" style="margin-top:14px">Recovery export file (optional)</label>
             <input type="file" name="offlineExportFile" id="offlineExportFile" accept=".json,application/json" />
-            <p class="small">Only needed if relays are unreachable -- the phrase above is still required either way. The file alone can never recover an account by itself.</p>
+            <p class="small">Needed if relays are unreachable or have dropped your account; the phrase above is still required either way. The file alone can never recover an account by itself.</p>
+            <p class="small">If no relay holds your account any more, the phrase can still rebuild an identity BitLogin created. An imported key can't be rebuilt this way: go back and choose "Import a Nostr key" with your saved private key instead.</p>
             ${
               this.offlineExportFileNotice
                 ? `<div class="notice ${this.offlineExportFile ? "info" : "warn"}">${escapeHtml(this.offlineExportFileNotice)}</div>`
@@ -1974,14 +2235,39 @@ export class BitLoginAuthElement extends HTMLElement {
           </form>
         `;
 
+      case "recover-rebuild": {
+        const preview = this.rebuildPreview;
+        if (!preview) return `<div class="notice error">No recovery is in progress.</div>`;
+        const trace =
+          preview.profileFound || preview.relayListFound
+            ? `<div class="notice info">Relays still hold a public ${
+                preview.profileFound ? "profile" : "relay list"
+              } signed by this identity, so it has been used before.</div>`
+            : `<div class="notice warn">No trace of this identity was found on the relays. That is expected if they dropped everything, but check the identity above carefully.</div>`;
+        return `
+          ${this.renderScreenHead("Rebuild your account", "goto-recover")}
+          <p class="sub">The relays no longer hold an account for this phrase. Your phrase can still rebuild the identity BitLogin derived from it:</p>
+          <div class="credential-box">${escapeHtml(preview.npub)}</div>
+          ${trace}
+          <div class="notice warn"><strong>Only continue if this is your npub.</strong> If you imported your own key, or created the account before phrase-derived keys, this is a new, empty identity and not yours. Go back and use "Import a Nostr key" with your saved private key instead.</div>
+          <p class="small">Rebuilding restores your identity and lets you set a new login. Saved wallet connections are not restored.</p>
+          ${this.renderError()}
+          <button class="primary" type="button" data-action="rebuild-confirm" ${this.busy ? "disabled" : ""}>
+            ${this.busy ? '<span class="spinner"></span>Rebuilding…' : "This is my identity — rebuild"}
+          </button>
+        `;
+      }
+
       case "recover-new-credentials": {
         const chainWarning = this.recoveredPreview?.chainWarning
           ? `<div class="notice warn">${escapeHtml(this.recoveredPreview.chainWarning)}</div>`
           : "";
         const submitLabel = this.busy ? '<span class="spinner"></span>Finishing recovery…' : "Finish recovery";
         return `
-          <h2>Identity recovered</h2>
-          <p class="sub">Found your account. Restored ${this.recoveredPreview?.generalRelaysCount ?? 0} general relay(s) and ${
+          <h2>${this.recoveredByRebuild ? "Identity rebuilt" : "Identity recovered"}</h2>
+          <p class="sub">${
+            this.recoveredByRebuild ? "Rebuilt your identity from your phrase." : "Found your account."
+          } Restored ${this.recoveredPreview?.generalRelaysCount ?? 0} general relay(s) and ${
             this.recoveredPreview?.dmRelaysCount ?? 0
           } DM relay(s) from your public events.</p>
           ${chainWarning}
@@ -2012,6 +2298,7 @@ export class BitLoginAuthElement extends HTMLElement {
             ? `<p class="small">${altNote} Wallet connections, password rotation, and identity export are features of BitLogin accounts — create one to get your settings on every device.</p>`
             : `
           <button class="secondary" type="button" data-action="goto-vault-manage">Wallet connections</button>
+          <button class="secondary" type="button" data-action="goto-health">Check account backup health</button>
           <button class="secondary" type="button" data-action="goto-change-password">Rotate password</button>
           <button class="secondary" type="button" data-action="goto-export">Export identity</button>`;
         const passkeyStanding = this.passkeySession
@@ -2170,10 +2457,14 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="link" data-action="goto-dashboard">Cancel</button>
         `;
 
+      case "health":
+        return this.renderReplicaHealth();
+
       case "export":
         return `
           <h2>Export identity</h2>
           <p class="sub">Your public identity (npub) is safe to share. Your private key (nsec) is not.</p>
+          <p class="small">${this.renderBackupAdvice()}</p>
           <label>Public key (npub)</label>
           <div class="credential-box">${escapeHtml(this.session?.npub ?? "")}</div>
           <button class="secondary" type="button" data-action="download-recovery-export">Download recovery export</button>
@@ -2181,9 +2472,11 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="secondary" type="button" data-action="reveal-nsec">Reveal private key (nsec)</button>
           ${
             this.exportedNsec
-              ? `<div class="notice warn">Never share this. Anyone with it controls your identity.</div><div class="credential-box">${escapeHtml(
+              ? `<div class="notice warn">Never share this. Anyone with it controls your identity.</div><div class="credential-box" id="credential-box">${escapeHtml(
                   this.exportedNsec
-                )}</div>`
+                )}</div>
+                <button class="secondary" type="button" data-action="copy-credential">Copy</button>
+                <button class="secondary" type="button" data-action="download-key-backup">Download key file</button>`
               : ""
           }
           <button class="link" data-action="goto-dashboard">Back</button>

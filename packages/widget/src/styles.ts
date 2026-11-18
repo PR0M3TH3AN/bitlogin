@@ -332,6 +332,12 @@ button:focus-visible { outline: 2px solid var(--bl-accent); outline-offset: 2px;
 }
 .divider { border-top: 1px solid var(--bl-border); margin: 18px 0; }
 .small { font-size: 12px; color: var(--bl-muted); }
+.health-list { margin: 12px 0 6px; border: 1px solid var(--bl-border); border-radius: 9px; overflow: hidden; }
+.health-row { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 8px 10px; font-size: 12.5px; }
+.health-row + .health-row { border-top: 1px solid var(--bl-border); }
+.health-relay { flex: 1 1 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+.health-cell.ok { color: var(--bl-muted); }
+.health-cell.bad { color: var(--bl-danger); font-weight: 600; }
 .checkbox-row { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0; font-size: 13px; }
 .checkbox-row input { margin-top: 3px; }
 .spinner {

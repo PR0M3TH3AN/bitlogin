@@ -46,6 +46,8 @@ import {
   PROTOCOL_CAPSULE_ENCRYPTION,
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
+  everydayDerivationField,
+  isEverydayKeyDerived,
   type CredentialPayload,
   type RecoveryPayload,
 } from "../capsules/types.js";
@@ -225,6 +227,7 @@ export async function enableConnectionVault(
     protocol: {
       capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
       recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+      ...everydayDerivationField(isEverydayKeyDerived(recoveryPayload)),
     },
   };
   const refreshedRecoveryEvent = await buildRecoveryCapsuleEvent({
@@ -270,6 +273,7 @@ export async function enableConnectionVault(
       password_kdf: PROTOCOL_PASSWORD_KDF,
       capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
       recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+      ...everydayDerivationField(isEverydayKeyDerived(credentialPayload)),
     },
   };
   const newCredentialEvent = await buildCredentialCapsuleEvent({

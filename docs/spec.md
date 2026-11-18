@@ -2,7 +2,7 @@
 
 ## Static, Relay-Backed Portable Account Protocol
 
-**Document version:** 0.6
+**Document version:** 0.7
 **Status:** Revised MVP specification (incorporates external protocol review)
 **Date:** July 21, 2026
 **Client architecture:** Static progressive web application
@@ -11,6 +11,19 @@
 **Daily authentication:** Login name and strong password
 **Recovery:** BIP-39 mnemonic phrase
 **Email dependency:** None
+
+---
+
+## Changes from v0.6
+
+Prompted by a real loss: every vault relay dropped one account's capsules, and neither the password nor the recovery phrase could bring the identity back, because the phrase only located and decrypted a capsule that no longer existed anywhere.
+
+1. **The everyday key is derived from the recovery phrase for newly generated accounts.** `ScalarExpand(recovery_prk, "bitlogin/everyday-identity/v1")` replaces the random key of v0.6 (§7.2, §11.6). The phrase alone now restores the identity with no relay holding anything (§17.6). This reverses §7.2's "not derived directly from the recovery phrase" for new accounts only. It adds no exposure that did not already exist: the recovery capsule is public, so anyone holding the phrase could already fetch it and read the key (§10.4).
+2. **Imported keys and v0.6 accounts are unchanged, and are told so.** Their everyday key cannot be derived from anything. Capsules record which kind of account they describe (`protocol.everyday_derivation`, §12.1, §12.3), and registration of an imported key does not complete until the user acknowledges a private-key backup (§15.7).
+3. **Rebuild from phrase.** When phrase recovery finds no capsule, the client derives the everyday key, shows the resulting public identity with whatever public trace of it exists, and on confirmation publishes a new recovery capsule and continues recovery (§17.6). Connection Vault roots stay random and are not rebuilt.
+4. **Replica health check.** A logged-in client can check, per relay, whether both capsules are still held and verified, and re-send them (§24.4).
+
+The new derivation is a compatibility contract from the first account created with it, pinned by a known-answer vector like the rest of the chain.
 
 ---
 
@@ -374,7 +387,7 @@ The recovery signing key exists in client memory only while the phrase itself is
 
 ## 7.2 Everyday identity
 
-The everyday identity is a randomly generated secp256k1 Nostr keypair.
+The everyday identity is a secp256k1 Nostr keypair. For an account that generates its own identity, the private key is derived from the recovery phrase (§11.6). For an imported identity (§28.1), and for accounts created under v0.6 or earlier, it is a key that exists independently of the phrase.
 
 It is used for:
 
@@ -385,15 +398,15 @@ It is used for:
 * Signed user events
 * Future BitLogin integrations
 
-The everyday identity is not derived directly from the recovery phrase.
+Whichever way it was produced, the everyday key is stored in both capsules, and every flow other than rebuild-from-phrase (§17.6) reads it from a capsule and never re-derives it. The derivation is a fallback for when no capsule survives; the capsule is authoritative.
 
-This permits BitLogin to:
+Storing the key rather than always deriving it is what still permits BitLogin to:
 
 * Import an existing `nsec`
-* Rotate an operational identity
-* Store multiple identities under one recovery root
-* Add application-specific keys later
-* Change the account structure without changing the recovery phrase
+* Rotate an operational identity (the rotated key is then no longer the derived one, and the capsules record that, §12.3)
+* Add application-specific keys later under further derivation labels
+
+v0.6 generated the everyday key at random so that it had no relationship to the phrase. That made the phrase useless once every relay had dropped the recovery capsule (§19.4), which is the failure this revision removes.
 
 ## 7.3 Password locator identity
 
@@ -583,7 +596,12 @@ A hidden additional passphrase could produce a valid but entirely different reco
 
 BitLogin does not use NIP-06 to derive the everyday identity.
 
-NIP-06 currently describes BIP-39-based Nostr derivation but marks the method as draft, optional, and unrecommended in favor of a single `nsec`. BitLogin instead uses the mnemonic only to derive its hidden recovery root; the everyday `nsec` remains an ordinary random Nostr key.
+NIP-06 currently describes BIP-39-based Nostr derivation but marks the method as draft, optional, and unrecommended in favor of a single `nsec`. BitLogin derives the everyday key from its own recovery root under its own label (§11.6). The consequences are deliberate:
+
+* The derivation uses only primitives the rest of the chain already depends on (HKDF and ScalarExpand), so it adds no dependency to the key path.
+* A BitLogin recovery phrase entered into a NIP-06 wallet or client produces a different, empty identity. The phrase is a BitLogin-only phrase (§27.5); the way to move an identity to another Nostr app is to export its `nsec` (§3.4).
+
+**Exposure.** Deriving the everyday key from the phrase makes the phrase a complete copy of the identity. It already was one in practice: the recovery capsule is a public event, and the phrase locates and decrypts it. The only case in which a leaked v0.6 phrase did not yield the key was the case in which no relay held the capsule, which is also the case in which the owner could not recover.
 
 ---
 
@@ -728,11 +746,22 @@ recovery_capsule_key = HKDF-Expand(
 
 ## 11.6 Everyday identity generation
 
-The client generates 32 random bytes using the browser's cryptographically secure random generator.
+For an account that generates its own identity:
 
-The value is rejected and regenerated if it is not a valid secp256k1 private scalar.
+```text
+everyday_private_key = ScalarExpand(
+  recovery_prk,
+  "bitlogin/everyday-identity/v1"
+)
+```
+
+`recovery_prk` is the value defined in §11.5. The label is distinct from the recovery-signing and capsule-encryption labels, so the three outputs are independent.
+
+An imported identity (§28.1) is used as supplied and is not derived.
 
 The corresponding Nostr public key is calculated and verified before any capsule is published.
+
+This derivation is part of the compatibility contract from the first account created with it: changing the label, the PRK, or ScalarExpand would make every phrase rebuild (§17.6) produce the wrong identity.
 
 ## 11.7 Capsule encryption
 
@@ -819,6 +848,8 @@ v0.3 defines two payload schemas. The credential capsule carries only infrequent
 }
 ```
 
+`protocol.everyday_derivation` is optional. When present with the value `bitlogin-recovery-hkdf-v1`, the everyday key is the one §11.6 derives from the recovery phrase. When absent, the key is imported, rotated, or predates v0.7, and the phrase cannot rebuild it. The field is a hint for clients that do not hold the phrase (it decides what a logged-in client tells the user about backups); a client that does hold the phrase compares the derived key with the stored one instead of trusting the field. Clients that predate the field ignore it and may drop it when they rewrite a capsule, which only loses the hint.
+
 `recovery_capsule_event` is the complete signed recovery event (§14). It exists so that any logged-in client can rebroadcast the recovery capsule to relays that lack it (§24.4) — rebroadcasting a signed event requires no key material. It confers no signing ability.
 
 ## 12.2 What the credential capsule deliberately excludes
@@ -859,6 +890,8 @@ The capsule is rewritten only on credential events — registration, password ch
   }
 }
 ```
+
+The recovery payload carries the same optional `protocol.everyday_derivation` field as the credential payload (§12.1), with the same meaning.
 
 The recovery payload deliberately excludes everything that changes during normal use. `vault_relay_hints` is a best-effort snapshot from the moment of writing; recovery must succeed from bootstrap relays alone. Current relay preferences are restored after recovery from the user's own public kind `10002` and `10050` events on the discovery relays (§17.4, §19.6).
 
@@ -944,7 +977,7 @@ The event is signed by the hidden recovery identity.
 A new recovery capsule may be created only at moments when the recovery phrase is in client memory:
 
 1. Registration (§15).
-2. Completion of a phrase recovery (§17.5).
+2. Completion of a phrase recovery (§17.5), including a rebuild from phrase (§17.6).
 3. Everyday-identity rotation (§18.4), which requires the phrase.
 4. Recovery-derivation migration (§30.2), which requires the phrase.
 
@@ -1032,9 +1065,19 @@ The registration succeeds only when:
 
 After success, the recovery signing key and phrase-derived material are erased from memory (§11.10).
 
-## 15.7 Recovery export
+## 15.7 Backups at registration
 
-The client then offers the encrypted recovery export (§19.5) and strongly encourages the user to save it before continuing.
+What the recovery phrase can restore depends on where the everyday key came from.
+
+**Generated identity.** The phrase derives the everyday key (§11.6), so the phrase alone restores the identity even if every relay has dropped both capsules (§17.6). The phrase ceremony is the only blocking backup step. The client still offers the encrypted recovery export (§19.5), which additionally preserves the Connection Vault roots.
+
+**Imported identity.** The phrase does not contain the key. It derives the recovery identity, which locates and decrypts the recovery capsule on a relay (§17). If every relay has dropped that capsule and the user holds no recovery export, the phrase recovers nothing (§19.4). Before granting the first session for an imported identity, the client therefore shall:
+
+1. Tell the user that this account differs from a generated one: its phrase works only while a relay or a recovery export still holds the account.
+2. Show the everyday private key (`nsec`) and require the user to acknowledge that they have it saved. The client offers to copy it and to download it as a plainly labeled text file.
+3. Offer the encrypted recovery export (§19.5) on the same screen.
+
+A logged-in client uses `protocol.everyday_derivation` (§12.1) to say the same thing later, wherever it discusses backups.
 
 ## 15.8 Initial profile publication
 
@@ -1178,6 +1221,23 @@ Because the phrase is in memory during this flow, the client shall also:
 
 This is one of the only moments the recovery capsule can be legitimately updated (§14.1), so the client must not skip it.
 
+## 17.6 Rebuild from phrase
+
+If the lookup of §17.3 reaches a quorum of relays and finds no recovery capsule that decrypts, and no recovery export supplies one, the account's capsules are gone. For an account whose everyday key was derived from the phrase (§11.6) the identity is not.
+
+The client:
+
+1. Derives the everyday key from the phrase and computes its public key.
+2. Looks for public traces of that identity (kind `0` and kind `10002` events by that public key) on the vault and discovery relays.
+3. Shows the user the public identity and whether any trace was found, and states plainly that this works only for identities BitLogin generated under v0.7 or later. For an imported key or an older account the derived identity is a new, empty one, and the user's real identity is restored by importing its `nsec` instead (§28.1). The client must not proceed without the user's explicit confirmation that the identity shown is theirs.
+4. On confirmation, builds a recovery payload with a new random `account_id`, `recovery_generation` 0, a null `previous_recovery_event_id`, new random Connection Vault roots, and `protocol.everyday_derivation` set; publishes it under the quorum rule of §15.6; and continues with §17.4 step 5 and §17.5.
+
+The client must not offer a rebuild when the relay quorum was not met: absence cannot be concluded from relays that did not answer.
+
+What a rebuild does not restore: the original `account_id`, and the Connection Vault roots, which are random and lived only in the capsules. Stored wallet connections are therefore lost unless a recovery export preserved the old capsule.
+
+If an older recovery capsule for the same recovery identity later reappears on a relay, the rebuilt capsule's later `created_at` wins replacement (§24.6), and the hash chain reports the inconsistency (§12.3). For a derived identity the two capsules hold the same everyday key.
+
 ---
 
 # 18. Password Change and Reset Semantics
@@ -1264,9 +1324,10 @@ If every relay deletes both account capsules and the user has no exported backup
 
 * Password login cannot locate the account.
 * Phrase recovery cannot locate the account.
-* The phrase still derives the recovery identity, but the randomly generated everyday key is unavailable.
+* For an identity derived from the phrase (§11.6), the phrase still rebuilds the identity (§17.6). The Connection Vault roots are lost.
+* For an imported identity, or an account created before v0.7, the phrase derives the recovery identity but the everyday key is unavailable. Only a saved `nsec` restores the identity.
 
-The client must therefore strongly encourage the encrypted offline recovery export at registration (§15.7) and periodically remind users who have not saved one.
+The client must therefore handle backups at registration as §15.7 requires, strongly encourage the encrypted offline recovery export, periodically remind users who have not saved an export, and let a logged-in user check how many relays still hold the capsules (§24.4).
 
 ## 19.5 Recovery export
 
@@ -1462,6 +1523,15 @@ Following successful login, the client should:
 1. Republish the current credential capsule to vault relays that lack it, hold an older generation, or return an invalid copy.
 2. Rebroadcast the embedded signed recovery event (§12.1) to vault relays that lack the recovery capsule or hold a lower `recovery_generation`. This requires no key material and must not involve re-signing.
 
+**Replica health check.** The client shall let a logged-in user check replica health on demand. For each vault relay and each of the two capsule addresses, the client queries the address and classifies what comes back against the signed event the session holds:
+
+* `current` — the relay returned that exact event, and its ID and signature verify.
+* `newer` / `older` — the relay holds a different valid event at the address. `newer` on the credential address usually means the password was changed from another device.
+* `missing` — the relay answered and holds no valid event at the address.
+* `unreachable` — the relay did not answer.
+
+Only events at the requested address with a valid ID and signature count; a relay's claim to hold a capsule is not evidence. The check needs no key material. The client reports, per capsule, the number of relays whose copy is `current`, and offers the repair above when that number is below the relay count. The two addresses are queried over separate connections. The check runs only when the user asks for it, because it contacts every vault relay.
+
 ## 24.5 Corruption detection
 
 AES-GCM authentication, Nostr event signatures, event IDs, and keypair consistency must all pass. There is no partial-recovery mode for corrupted cryptographic data.
@@ -1528,7 +1598,7 @@ Later releases may support NIP-07, NIP-46, native mobile signers, browser extens
 
 ## 27.1 Protocol terminology
 
-The normal onboarding interface should use: login name, password, recovery phrase, account, messages, profile. It should avoid requiring familiarity with `nsec`, `npub`, NIP numbers, event kinds, Argon2id, or relay filters. These may be shown under Advanced Settings.
+The normal onboarding interface should use: login name, password, recovery phrase, account, messages, profile. It should avoid requiring familiarity with `nsec`, `npub`, NIP numbers, event kinds, Argon2id, or relay filters. These may be shown under Advanced Settings. The one exception is the private-key backup step for imported identities (§15.7), which calls the key "your private key" and names `nsec` once so the user can recognize it in other Nostr apps.
 
 ## 27.2 Password disclosure
 
@@ -1565,6 +1635,8 @@ Users who have not saved a recovery export receive a periodic, dismissible remin
 ## 28.1 Import existing identity
 
 The client may allow the user to import an existing raw `nsec`, hexadecimal private key, or `ncryptsec`. The imported identity becomes the everyday identity and is wrapped by newly generated BitLogin password and recovery capsules.
+
+An imported key is not derived from the new account's recovery phrase and cannot be rebuilt from it (§17.6). The client must say so at import and require the private-key backup of §15.7.
 
 Wrapping the key in new capsules must never touch anything the identity already had published under its own name. In particular, the initial-profile-publication step (§15.8) applies its existing-event check here specifically: an imported identity commonly already has a real kind `0` profile and/or relay lists, and the client must leave all of that exactly as it found it rather than replacing it with BitLogin defaults.
 
@@ -1837,7 +1909,8 @@ Recovery:
 12-word English BIP-39 phrase; BIP-39 passphrase disabled
 
 Everyday identity:
-Randomly generated standard Nostr key
+Standard Nostr key, derived from the recovery phrase (BitLogin-specific
+ScalarExpand label) for generated accounts; used as supplied for imports
 
 Recovery identity:
 BitLogin-specific HKDF derivation from BIP-39 seed;

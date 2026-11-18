@@ -1,6 +1,53 @@
 # BitLogin — open items
 
-Updated: 2026-08-04
+Updated: 2026-11-18
+
+## Relay-loss response (2026-11-18)
+
+The owner's own account was dropped by every vault relay. The password and
+the recovery phrase both failed; only a separately stored `nsec` saved the
+identity. Shipped in response as spec v0.7 (see CHANGELOG): new accounts
+derive the everyday key from the recovery phrase (§11.6), a lost account can
+be rebuilt from the phrase alone (§17.6), imported keys get a blocking
+private-key backup step (§15.7), and the dashboard has a replica health check
+with one-tap repair (§24.4).
+
+Owner decisions taken 2026-11-18: derive from the seed for generated accounts;
+imported keys stay as they are and are told they differ. The owner had no
+preference on the derivation, so it is BitLogin-specific
+(`ScalarExpand(recovery_prk, "bitlogin/everyday-identity/v1")`) rather than
+NIP-06: no new dependency in the key path, and the phrase stays BitLogin-only.
+The cost is that a BitLogin phrase does not restore the identity in other
+Nostr apps; the `nsec` export does.
+
+**The new derivation is now part of the standing rule below.** Its vector in
+`knownAnswer.test.ts` is never updated.
+
+Open:
+
+- [ ] **Not yet exercised against public relays or a real device.** Covered
+  by the mock-relay suites and headless Chromium only.
+- [ ] **Accounts created before v0.7 are no safer than before.** Their key is
+  random, so only a saved `nsec` or a recovery export survives total relay
+  loss. They get the health check and an Export identity screen that says so,
+  but nothing prompts them. The §27.6 reminder is still unimplemented; it
+  needs a place to remember "saved" that is not the element (which must stay
+  storage-free). Rotating such an account onto a derived key would change its
+  npub, so there is no silent migration.
+- [ ] **A rebuild cannot tell whose phrase it has.** With no capsule left,
+  nothing distinguishes a derived account from an imported or pre-v0.7 one,
+  so the rebuild screen shows the derived npub and relies on the user
+  recognising it. If the wrong user confirms, a capsule for an empty identity
+  is published at their recovery address and outranks an older genuine
+  capsule from a recovery export. Worth an external look.
+- [ ] **Connection Vault roots are still random.** A rebuild mints new ones,
+  so stored wallet connections are lost unless a recovery export kept the old
+  capsule. Deriving them from the phrase is possible but touches the vault's
+  security model, which is gated on the external review.
+- [ ] **Automatic repair after login** (§24.4 says "should"). Today repair
+  runs only from the health screen.
+- [ ] **Health check for the Connection Vault records**, which live at other
+  addresses and are not covered.
 
 ## Login-surface expansion (2026-08-04) — shipped, with owner follow-ups
 
@@ -139,7 +186,8 @@ locked out permanently, with no server-side record to migrate from.
 
 `packages/core/src/crypto/knownAnswer.test.ts` pins HKDF-Extract, HKDF-Expand,
 ScalarExpand (scalar, counter, and resulting public key), BIP-39 phrase and
-seed, base64url framing, and JCS ordering.
+seed, the recovery signing and capsule keys for a phrase, the everyday key a
+phrase derives (v0.7), base64url framing, and JCS ordering.
 
 **A failure there is never "update the expected value".** It means the change
 being attempted is account-breaking and needs a migration plan or rejection.

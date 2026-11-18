@@ -6,17 +6,14 @@ import {
 } from "../crypto/random.js";
 import { bytesToBase64url, hexToBytes } from "../crypto/encoding.js";
 import { wipe } from "../crypto/memory.js";
-import {
-  generatePrivateKey,
-  getPublicKeyHex,
-  isValidScalar,
-} from "../crypto/secp256k1.js";
+import { getPublicKeyHex, isValidScalar } from "../crypto/secp256k1.js";
 import { decodeNsec } from "../nostr/nip19.js";
 import {
   entropyToRecoveryPhrase,
   recoveryPhraseToSeed,
 } from "../crypto/bip39.js";
 import {
+  deriveEverydayPrivateKey,
   derivePasswordKeys,
   deriveRecoveryKeys,
   normalizeLoginName,
@@ -34,6 +31,7 @@ import {
   PROTOCOL_CAPSULE_ENCRYPTION,
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
+  everydayDerivationField,
 } from "../capsules/types.js";
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
@@ -51,9 +49,10 @@ export interface RegisterAccountParams {
   vaultRelayUrls: string[];
   /**
    * Optional existing everyday identity to wrap instead of generating a fresh one (§28.1, §SF10).
-   * The everyday key is never derived from any BitLogin secret (§7.2), so an imported key is
-   * indistinguishable to the rest of the protocol — only the origin differs. Must be a valid
-   * 32-byte secp256k1 scalar; the caller is responsible for decoding an `nsec` first.
+   * A generated identity is derived from the recovery phrase (§11.6) and the phrase alone can
+   * rebuild it; an imported one cannot be rebuilt from anything but its own `nsec`, and the
+   * capsules record the difference (§12.1). Must be a valid 32-byte secp256k1 scalar; the
+   * caller is responsible for decoding an `nsec` first.
    */
   everydayPrivateKey?: Uint8Array;
   minAcknowledgements?: number;
@@ -72,6 +71,8 @@ export interface RegisterAccountResult {
   accountId: string;
   /** True when the everyday identity was imported (§SF10) rather than freshly generated. */
   imported: boolean;
+  /** True when the recovery phrase alone can rebuild the everyday key (§11.6, §17.6). */
+  everydayKeyDerived: boolean;
   /** Connection Vault root (§CV5.2, §CV6): derives the vault identity and connectable-tier record keys. */
   connectionVaultRoot: Uint8Array;
   /** Sudo key (§CV5.2): additional IKM for personal-tier records. Hold only inside a sudo window. */
@@ -137,16 +138,19 @@ export async function registerAccount(
     const bip39Seed = await recoveryPhraseToSeed(recoveryPhrase);
     let recoveryPrivateKey: Uint8Array;
     let recoveryCapsuleKey: Uint8Array;
+    let everydayPrivateKey: Uint8Array;
     try {
       ({ recoveryPrivateKey, capsuleKey: recoveryCapsuleKey } =
         deriveRecoveryKeys(bip39Seed));
+      // §11.6 — a generated identity comes from the phrase, so the phrase can
+      // rebuild it with no relay's help (§17.6). An imported key stays as given.
+      everydayPrivateKey = imported
+        ? params.everydayPrivateKey!
+        : deriveEverydayPrivateKey(bip39Seed);
     } finally {
       wipe(bip39Seed);
     }
-
-    const everydayPrivateKey = imported
-      ? params.everydayPrivateKey!
-      : generatePrivateKey();
+    const everydayKeyDerived = !imported;
     const connectionVaultRoot = randomBytes(32);
     const vaultSudoKey = randomBytes(32);
     let completed = false;
@@ -175,6 +179,7 @@ export async function registerAccount(
         protocol: {
           capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
           recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+          ...everydayDerivationField(everydayKeyDerived),
         },
       };
       const recoveryEvent = await buildRecoveryCapsuleEvent({
@@ -222,6 +227,7 @@ export async function registerAccount(
           password_kdf: PROTOCOL_PASSWORD_KDF,
           capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
           recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+          ...everydayDerivationField(everydayKeyDerived),
         },
       };
       const credentialEvent = await buildCredentialCapsuleEvent({
@@ -263,6 +269,7 @@ export async function registerAccount(
         locatorPublicKey,
         accountId,
         imported,
+        everydayKeyDerived,
         connectionVaultRoot,
         vaultSudoKey,
         credentialEvent,

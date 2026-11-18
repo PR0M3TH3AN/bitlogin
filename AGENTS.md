@@ -6,7 +6,7 @@ BitLogin is a static, relay-backed portable Nostr account protocol and
 embeddable login widget: a login name + password (plus a 12-word recovery
 phrase) unlocks a portable Nostr identity, with encrypted account material on
 public relays — no account server or database. Implements `docs/spec.md`
-(v0.6).
+(v0.7).
 
 ## Repository map
 

@@ -10,6 +10,7 @@ import type {
   LoginPayload,
   RecoverPayload,
   CompleteRecoveryPayload,
+  PhraseRebuildPayload,
   ChangePasswordPayload,
   PublishProfilePayload,
   SignEventPayload,
@@ -188,6 +189,15 @@ export class WorkerClient {
   }
   repairReplicas() {
     return this.call("repairReplicas", {});
+  }
+  previewPhraseRebuild(payload: PhraseRebuildPayload) {
+    return this.call("previewPhraseRebuild", payload);
+  }
+  rebuildFromPhrase(payload: PhraseRebuildPayload) {
+    return this.call("rebuildFromPhrase", payload);
+  }
+  checkReplicaHealth() {
+    return this.call("checkReplicaHealth", {});
   }
   getSessionStatus() {
     return this.call("getSessionStatus", {});
