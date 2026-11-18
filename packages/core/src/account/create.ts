@@ -32,6 +32,7 @@ import {
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
   everydayDerivationField,
+  vaultRelayHints,
 } from "../capsules/types.js";
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
@@ -175,7 +176,7 @@ export async function registerAccount(
         connection_vault_root: bytesToBase64url(connectionVaultRoot),
         vault_sudo_key: bytesToBase64url(vaultSudoKey),
         created_at: now,
-        vault_relay_hints: params.vaultRelayUrls,
+        vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
         protocol: {
           capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
           recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
@@ -222,7 +223,7 @@ export async function registerAccount(
         recovery_capsule_event: recoveryEvent,
         connection_vault_root: bytesToBase64url(connectionVaultRoot),
         created_at: now,
-        vault_relay_hints: params.vaultRelayUrls,
+        vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
         protocol: {
           password_kdf: PROTOCOL_PASSWORD_KDF,
           capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,

@@ -19,6 +19,7 @@ import {
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
   everydayDerivationField,
+  vaultRelayHints,
   isEverydayKeyDerived,
 } from "../capsules/types.js";
 import type { CredentialPayload } from "../capsules/types.js";
@@ -166,7 +167,7 @@ export async function changePassword(
       ? { connection_vault_root: oldPayload.connection_vault_root }
       : {}),
     created_at: now,
-    vault_relay_hints: params.vaultRelayUrls,
+    vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
     protocol: {
       password_kdf: PROTOCOL_PASSWORD_KDF,
       capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,

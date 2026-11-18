@@ -16,7 +16,12 @@ import { AccountNotFoundError, RecoveryFailedError } from "./errors.js";
 import { recoveryPhraseToSeed } from "../crypto/bip39.js";
 import { generatePrivateKey, getPublicKeyHex } from "../crypto/secp256k1.js";
 import { decryptRecoveryCapsuleEvent } from "../capsules/recoveryCapsule.js";
-import { PROTOCOL_EVERYDAY_DERIVATION } from "../capsules/types.js";
+import {
+  MAX_VAULT_RELAY_HINTS,
+  PROTOCOL_EVERYDAY_DERIVATION,
+  vaultRelayHints,
+} from "../capsules/types.js";
+import { BUILTIN_VAULT_RELAYS, maxRemoteAdditions } from "../nostr/bootstrap.js";
 
 const ARGON2_TIMEOUT = 20000;
 
@@ -300,4 +305,53 @@ describe("seed-derived everyday identity (§11.6) and rebuild from phrase (§17.
     },
     ARGON2_TIMEOUT * 2,
   );
+
+  it(
+    "an account fits its fixed-size capsule however long the relay list gets",
+    async () => {
+      // Found live on 2026-11-18: growing the built-in list from eight relays
+      // to thirteen made every registration fail with "exceeds the largest
+      // padding bucket", because the whole list was written into the payload
+      // twice. Three mock relays could never catch that. This uses as many
+      // relays as a client can end up with: the built-in list plus the most a
+      // signed list may add (§19.1).
+      const extra = await Promise.all(
+        Array.from({ length: BUILTIN_VAULT_RELAYS.length * 2 - 1 - relays.length }, () => MockRelay.start()),
+      );
+      try {
+        const many = [...vaultRelayUrls, ...extra.map((r) => r.url)];
+        expect(many.length).toBe(BUILTIN_VAULT_RELAYS.length + maxRemoteAdditions(BUILTIN_VAULT_RELAYS.length));
+        const loginName = "manyrelays";
+        const password = generatePassphrase().secret;
+        const registration = await registerAccount({ loginName, password, vaultRelayUrls: many });
+        expect(registration.credentialPublish.acknowledgedCount).toBe(many.length);
+
+        const { capsuleKey } = deriveRecoveryKeys(await recoveryPhraseToSeed(registration.recoveryPhrase));
+        const payload = await decryptRecoveryCapsuleEvent(registration.recoveryEvent, capsuleKey);
+        expect(payload.vault_relay_hints).toEqual(many.slice(0, MAX_VAULT_RELAY_HINTS));
+
+        // Every later rewrite of the capsules has to fit as well.
+        const newPassword = generatePassphrase().secret;
+        await changePassword({ loginName, oldPassword: password, newPassword, vaultRelayUrls: many });
+        const recovered = await recoverWithPhrase({ phrase: registration.recoveryPhrase, vaultRelayUrls: many, discoveryRelayUrls: [] });
+        await completeRecoveryWithNewCredentials({
+          recovered,
+          newLoginName: "manyrelays-2",
+          newPassword: generatePassphrase().secret,
+          vaultRelayUrls: many,
+        });
+      } finally {
+        await Promise.all(extra.map((r) => r.close()));
+      }
+    },
+    ARGON2_TIMEOUT * 5,
+  );
+
+  it("the real built-in relay addresses leave room in the credential capsule", () => {
+    // The payload is built from fixed-length fields plus the relay hints, so
+    // this is the one input that can push it over. Longest plausible hints:
+    expect(vaultRelayHints(BUILTIN_VAULT_RELAYS).length).toBeLessThanOrEqual(MAX_VAULT_RELAY_HINTS);
+    expect(vaultRelayHints(["wss://" + "a".repeat(80) + ".example", "wss://ok.example", "wss://ok.example"])).toEqual(["wss://ok.example"]);
+    expect(JSON.stringify(vaultRelayHints(Array.from({ length: 30 }, (_, i) => `wss://${"r".repeat(50)}${i}.example`))).length).toBeLessThan(300);
+  });
 });

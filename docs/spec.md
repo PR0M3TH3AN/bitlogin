@@ -1308,6 +1308,16 @@ A pinned list in a static build is the system's most serious long-horizon single
 2. **HTTPS fallback.** The client may additionally fetch the same signed relay-list document from two or more well-known static URLs on independent hosts. The document is verified by the same pinned signature; the transport is untrusted.
 3. Compromise of the maintainer key can add hostile relays but cannot read capsules (ciphertext) or forge them (author signatures). The worst case is availability degradation, and built-in relays remain queried.
 
+The following rules bound what the channel can do (v0.7):
+
+* **Additions are capped.** A signed list may add at most one fewer relay than the client's built-in list holds, per list. Capsule reads need `ceil(N/2)` relays to answer (§16.2); without the cap, whoever held the maintainer key could add enough relays of their own to answer that quorum alone. With it, no read quorum can form without at least one relay that shipped in a reviewed client release.
+* **Versions only go up.** The client remembers the last signed list it accepted and ignores any list whose `version` is not higher, so a relay cannot roll a client back by serving an older genuine list. The remembered list is re-verified against the pinned key every time it is read.
+* **The channel never delays sign-in.** The remembered list applies immediately; looking for a newer one happens in the background and takes effect for later operations.
+* **A host's own relays are left alone.** When the embedding page configures its own vault or discovery relays, the signed list does not extend that list.
+* **With no maintainer key pinned, the channel is off.** A client build that pins no key fetches nothing and uses only its built-in lists.
+
+**Choosing relays.** A relay being online says little about whether it can hold an account. Capsules are signed by keys that exist only for that purpose, so they have no history and are in nobody's web of trust, and many relays refuse or later discard events from such keys. Measured 2026-11-18 across 70 relays: 22 stored capsule-shaped test events, and some of those had dropped half of them within minutes of acknowledging and returning them. Relays are therefore chosen by publishing capsule-shaped events from throwaway keys and reading them back, immediately and again later (`scripts/relay-probe.mjs`). NIP-66 relay-monitor events are a useful source of candidates to test and are never a reason to use a relay untested.
+
 ## 19.2 User vault relays
 
 The decrypted capsule may contain additional user-selected vault relays. Before accepting any relay as a vault relay, the client verifies via its NIP-11 document that advertised size limits can carry the largest capsule bucket (§11.8).

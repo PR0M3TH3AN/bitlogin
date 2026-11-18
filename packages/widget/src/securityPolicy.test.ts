@@ -132,6 +132,21 @@ describe("widget security policy", () => {
     expect(widgetSource).toContain("<strong>Only continue if this is your npub.</strong>");
   });
 
+  it("the signed relay list never delays sign-in and never overrides a host's own relays", () => {
+    // Spec §19.1. Looking for a newer list is a network round trip to every
+    // relay; awaiting it in `configure` would put that in front of every
+    // sign-in on every page load. And a host that names its own relays has
+    // decided where its users' accounts live: a signed list must not add to
+    // that behind its back.
+    const worker = readFileSync(new URL("./worker/cryptoWorker.ts", import.meta.url), "utf8");
+    const configure = worker.slice(worker.indexOf('case "configure": {'), worker.indexOf('case "register": {'));
+    expect(configure).toContain("void refreshBootstrapList(store).then(applyRelaySets");
+    expect(configure).not.toContain("await refreshBootstrapList");
+    const apply = worker.slice(worker.indexOf("function applyRelaySets"), worker.indexOf("const requestQueue"));
+    expect(apply).toContain("if (!hostVaultRelays) vaultRelayUrls = sets.vaultRelays;");
+    expect(apply).toContain("if (!hostDiscoveryRelays) discoveryRelayUrls = sets.discoveryRelays;");
+  });
+
   it("checks relay health only when the user asks", () => {
     // The check opens a connection to every vault relay and asks for both
     // capsule addresses. Running it on every page load of every embedding
