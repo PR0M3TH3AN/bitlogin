@@ -25,8 +25,22 @@ Nostr apps; the `nsec` export does.
 
 Open:
 
-- [ ] **Not yet exercised against public relays or a real device.** Covered
-  by the mock-relay suites and headless Chromium only.
+- [x] **Live run against the built-in public relays, 2026-11-18.** Throwaway
+  accounts, from core (Node) and from the built widget in headless Chromium:
+  sign-up, health check, repair, sign-in, phrase recovery on a clean browser
+  profile, and a rebuild from a phrase with no capsule on any relay all
+  worked and returned the expected identity. Not covered: a real device or
+  platform passkey, and the deployed site's CSP.
+- [ ] **Relay findings from that run, cause not established.** From the test
+  machine (a VPN may have been active), `relay.mostr.pub` and
+  `nostr-pub.wellorder.net` never connected and `relay.damus.io` connected
+  only occasionally, so 3 of the 8 vault relays contributed nothing. In two
+  of four sign-ups `offchain.pub` and `nostr.bitcoiner.social` stored the
+  recovery capsule but not the sign-in capsule, and an immediate re-send did
+  not change that; in the other two they stored both. The refusal text was
+  not captured, because publish results are reduced to counts. Next step:
+  keep each relay's refusal message and show it on the health screen, then
+  review the vault relay list against what it shows.
 - [ ] **Accounts created before v0.7 are no safer than before.** Their key is
   random, so only a saved `nsec` or a recovery export survives total relay
   loss. They now get a standing dashboard notice saying so, the health check,
