@@ -112,7 +112,14 @@ deployment above.
   is NOT revocation -- spending authority is revoked at the wallet.
 - Losing BOTH the password and the recovery phrase is permanent: there is no
   custodial recovery, by design. An account also depends on relays retaining
-  its encrypted capsule; download the recovery export as an offline fallback.
+  its encrypted capsule. For an account BitLogin generates, the identity key
+  is derived from the recovery phrase, so the phrase alone can rebuild the
+  identity when no relay holds the account (saved wallet connections are not
+  rebuilt). An imported nsec is NOT in the phrase: that sign-up requires
+  saving the private key as well, and so do accounts created before
+  phrase-derived keys. The dashboard has a backup health check that counts
+  the relays still holding verified copies and can re-send them, and the
+  recovery export is the offline fallback that preserves everything.
 
 ## Key facts for integration
 

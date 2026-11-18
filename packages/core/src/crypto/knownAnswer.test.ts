@@ -29,6 +29,13 @@ import { getPublicKeyHex } from "./secp256k1.js";
 import { bytesToHex, utf8ToBytes, bytesToBase64url } from "./encoding.js";
 import { entropyToRecoveryPhrase, recoveryPhraseToSeed } from "./bip39.js";
 import { canonicalJson } from "./jcs.js";
+import {
+  deriveEverydayPrivateKey,
+  deriveRecoveryKeys,
+} from "../account/normalize.js";
+
+const KAT_PHRASE =
+  "alpha deal scrub asthma idea logic bright thought alpha deal scrub autumn";
 
 const IKM = "kat-ikm-v1";
 const ROOT_LABEL = "bitlogin/password-root/v1";
@@ -78,6 +85,38 @@ describe("derivation chain known answers (account compatibility)", () => {
     );
     expect(bytesToHex(seed).slice(0, 64)).toBe(
       "8252a324fac1a2960625f829d70d720c912cdf7c683f9772c3a55d57d9f8a983",
+    );
+  });
+
+  it("recovery signing key and capsule key for a phrase are unchanged", async () => {
+    // Captured 2026-11-18 from the implementation that has shipped since
+    // v0.2. These locate and decrypt every existing recovery capsule.
+    const seed = await recoveryPhraseToSeed(KAT_PHRASE);
+    const keys = deriveRecoveryKeys(seed);
+    expect(bytesToHex(keys.recoveryPrivateKey)).toBe(
+      "42308855f8523c58f376444a0b9747495dc3a3e37a4b112c0df694747db96678",
+    );
+    expect(getPublicKeyHex(keys.recoveryPrivateKey)).toBe(
+      "57bae18ca71b05bf243b206cc486b266cc0db9e05526111b1d93c5ad358bc37f",
+    );
+    expect(bytesToHex(keys.capsuleKey)).toBe(
+      "af84477fe028e7024c878023a27331f6bc425d76b111481977cf5eaf7417772b",
+    );
+  });
+
+  it("everyday identity derived from a phrase is unchanged (spec §11.6)", async () => {
+    // Fixed 2026-11-18, when v0.7 began deriving the everyday key from the
+    // recovery phrase. From the first account created with it, this value is
+    // the identity a phrase rebuild (§17.6) produces when no relay holds the
+    // account any more. If it moves, every such user gets back a stranger's
+    // empty identity instead of their own.
+    const seed = await recoveryPhraseToSeed(KAT_PHRASE);
+    const everyday = deriveEverydayPrivateKey(seed);
+    expect(bytesToHex(everyday)).toBe(
+      "e3024452508bbe19cf12284f6bd76275183dd2b11fb7f571b00a35d99d96c397",
+    );
+    expect(getPublicKeyHex(everyday)).toBe(
+      "429f349cfdd5a31ae6fc45a94105375a59a506e2d2c92af0c90215bb71babce6",
     );
   });
 

@@ -32,6 +32,9 @@ export interface CachedSessionData {
    *  a restored session can tell "account predates the vault" apart from
    *  "root missing because this cache entry predates the field". */
   vaultEnabled?: boolean;
+  /** The capsule's hint that the recovery phrase alone rebuilds this identity
+   *  (spec §12.1). Absent in cache entries written before the field existed. */
+  everydayKeyDerived?: boolean;
 }
 
 interface PlainSession {
@@ -42,6 +45,7 @@ interface PlainSession {
   activeRecoveryEvent: NostrEvent;
   connectionVaultRootHex?: string;
   vaultEnabled?: boolean;
+  everydayKeyDerived?: boolean;
 }
 
 interface EncryptedSession {
@@ -98,7 +102,8 @@ export async function saveCachedSession(store: SessionStore, data: CachedSession
           ).join("")
         }
       : {}),
-    ...(data.vaultEnabled !== undefined ? { vaultEnabled: data.vaultEnabled } : {})
+    ...(data.vaultEnabled !== undefined ? { vaultEnabled: data.vaultEnabled } : {}),
+    ...(data.everydayKeyDerived !== undefined ? { everydayKeyDerived: data.everydayKeyDerived } : {})
   };
   // Best-effort: a full disk or a browser blocking IndexedDB (some private-
   // browsing modes) shouldn't break the login/register/rotate call that
@@ -175,7 +180,8 @@ export async function loadCachedSession(store: SessionStore): Promise<CachedSess
             )
           }
         : {}),
-      ...(typeof parsed.vaultEnabled === "boolean" ? { vaultEnabled: parsed.vaultEnabled } : {})
+      ...(typeof parsed.vaultEnabled === "boolean" ? { vaultEnabled: parsed.vaultEnabled } : {}),
+      ...(typeof parsed.everydayKeyDerived === "boolean" ? { everydayKeyDerived: parsed.everydayKeyDerived } : {})
     };
   } catch {
     // Corrupt or unrecognized cache entry -- treat as "no session," not an error.

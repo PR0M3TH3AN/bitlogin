@@ -6,6 +6,26 @@ import { BITLOGIN_ARGON2ID_V1 } from "../crypto/argon2id.js";
 export const PROTOCOL_PASSWORD_KDF = BITLOGIN_ARGON2ID_V1.id;
 export const PROTOCOL_CAPSULE_ENCRYPTION = "aes-256-gcm-v1";
 export const PROTOCOL_RECOVERY_DERIVATION = "bitlogin-bip39-hkdf-v1";
+/**
+ * Marks a capsule whose everyday key is the one §11.6 derives from the
+ * recovery phrase. Absent for imported, rotated, and pre-v0.7 keys, which the
+ * phrase cannot rebuild. A hint only (§12.1): code holding the phrase compares
+ * keys instead of trusting it.
+ */
+export const PROTOCOL_EVERYDAY_DERIVATION = "bitlogin-recovery-hkdf-v1";
+
+/** The `protocol` entry to spread into a payload for a derived everyday key. */
+export function everydayDerivationField(derived: boolean): {
+  everyday_derivation?: string;
+} {
+  return derived ? { everyday_derivation: PROTOCOL_EVERYDAY_DERIVATION } : {};
+}
+
+export function isEverydayKeyDerived(payload: {
+  protocol?: { everyday_derivation?: unknown };
+}): boolean {
+  return payload.protocol?.everyday_derivation === PROTOCOL_EVERYDAY_DERIVATION;
+}
 
 export interface EncryptedEnvelope {
   version: 1;
@@ -52,6 +72,7 @@ export interface CredentialPayload extends VaultCapsuleFields {
     password_kdf: string;
     capsule_encryption: string;
     recovery_derivation: string;
+    everyday_derivation?: string;
   };
 }
 
@@ -69,5 +90,6 @@ export interface RecoveryPayload extends VaultCapsuleFields {
   protocol: {
     capsule_encryption: string;
     recovery_derivation: string;
+    everyday_derivation?: string;
   };
 }

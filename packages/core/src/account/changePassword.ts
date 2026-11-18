@@ -18,6 +18,8 @@ import {
   PROTOCOL_CAPSULE_ENCRYPTION,
   PROTOCOL_PASSWORD_KDF,
   PROTOCOL_RECOVERY_DERIVATION,
+  everydayDerivationField,
+  isEverydayKeyDerived,
 } from "../capsules/types.js";
 import type { CredentialPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
@@ -169,6 +171,7 @@ export async function changePassword(
       password_kdf: PROTOCOL_PASSWORD_KDF,
       capsule_encryption: PROTOCOL_CAPSULE_ENCRYPTION,
       recovery_derivation: PROTOCOL_RECOVERY_DERIVATION,
+      ...everydayDerivationField(isEverydayKeyDerived(oldPayload)),
     },
   };
   const newCredentialEvent = await buildCredentialCapsuleEvent({

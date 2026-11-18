@@ -98,6 +98,23 @@ export interface RecoveryDerivedKeys {
 }
 
 /**
+ * Everyday identity derivation (§11.6), for accounts that generate their own
+ * identity:
+ *   everyday_private_key = ScalarExpand(recovery_prk, "bitlogin/everyday-identity/v1")
+ *
+ * This is what lets the phrase alone rebuild an identity when no relay holds
+ * a capsule any more (§17.6). It is a compatibility contract pinned in
+ * knownAnswer.test.ts: change it and every phrase rebuilds the wrong identity.
+ * The caller owns the returned key and the bip39Seed it passed in.
+ */
+export function deriveEverydayPrivateKey(bip39Seed: Uint8Array): Uint8Array {
+  const recoveryPrk = hkdfExtract(labelSalt("bitlogin/recovery-root/v1"), bip39Seed);
+  const everyday = scalarExpand(recoveryPrk, "bitlogin/everyday-identity/v1");
+  wipe(recoveryPrk);
+  return everyday.scalar;
+}
+
+/**
  * Recovery root derivation (§11.5):
  *   recovery_prk = HKDF-Extract(salt=SHA256("bitlogin/recovery-root/v1"), IKM=bip39_seed)
  *   recovery_signing_material = ScalarExpand(recovery_prk, "bitlogin/recovery-signing/v1")

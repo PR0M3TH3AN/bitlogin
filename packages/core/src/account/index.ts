@@ -8,6 +8,7 @@ export * from "./profileEvents.js";
 export * from "./publish.js";
 export * from "./capsuleReader.js";
 export * from "./repair.js";
+export * from "./health.js";
 export * from "./create.js";
 export * from "./login.js";
 export * from "./recover.js";

@@ -7,7 +7,7 @@ password that unlocks a portable Nostr identity, plus an independent 12-word
 recovery phrase. Encrypted account material lives on public Nostr relays —
 no account server, no password-reset email, no database.
 
-This repo implements the protocol from `docs/spec.md` (v0.6) as a modular
+This repo implements the protocol from `docs/spec.md` (v0.7) as a modular
 system any static site can embed for login and Nostr signing.
 
 ## Layout
@@ -86,13 +86,16 @@ the `nsec`, and can synthesize UI events (the widget rejects untrusted ones,
 and can still be visually overlaid by host CSS). This is inherent to an
 embedded same-origin component — the same reason `docs/connection-vault.md`
 §12.3 says wallet credentials are _revealed_, not brokered. Treat the host
-page as trusted; embed BitLogin only in sites you control, and prefer the
-recovery phrase (never the exported nsec) as the durable backup. A
+page as trusted; embed BitLogin only in sites you control. For an account
+BitLogin creates, the recovery phrase is a complete backup of the identity:
+the key is derived from it and can be rebuilt even if every relay drops the
+account (spec §11.6, §17.6). An imported key is not in the phrase, so that
+sign-up does not finish until the key itself is saved too (spec §15.7). A
 cross-origin or extension build is what would change this, and is not
 shipped. See `packages/demo/public/docs.html` for the full integration
 guide, and `packages/demo/public/account.html` for a working example
-(create → confirm recovery phrase → sign an event → rotate password →
-export identity).
+(create → confirm recovery phrase → sign an event → check backup health →
+rotate password → export identity).
 
 **Sessions persist across a page reload.** After a successful sign-in, the
 everyday private key is cached in IndexedDB for that origin, so a later
@@ -475,7 +478,9 @@ and the load-bearing parts of Phase 1 (account MVP), verified two ways:
 Implemented: registration (§15), any-device password login with rollback and
 relay-disagreement detection (§16), phrase recovery with recovery-capsule
 refresh (§17), known-password change with mandatory tombstone + NIP-09
-deletion (§18), replica repair (§24.4), recovery export (§19.5), NIP-19
+deletion (§18), everyday keys derived from the recovery phrase with
+rebuild-from-phrase when no relay holds the account (§11.6, §17.6), replica
+health check and repair (§24.4), recovery export (§19.5), NIP-19
 nsec/npub encoding, importing an existing Nostr `nsec` as the everyday
 identity (§28.1, §SF10 — with a preview-before-commit UI step), a NIP-44 v2
 implementation for the `window.nostr.nip44` surface, bootstrap/discovery

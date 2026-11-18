@@ -8,11 +8,14 @@ import {
   registerAccount,
   loginWithPassword,
   recoverWithPhrase,
+  previewPhraseRebuild,
+  rebuildAccountFromPhrase,
   completeRecoveryWithNewCredentials,
   changePassword as changePasswordFlow,
   publishInitialProfile,
   buildRecoveryExport,
-  repairReplicas,
+  rebroadcastCapsules,
+  checkReplicaHealth,
   importAccount,
   decodeEverydayPrivateKey,
   NostrSigner,
@@ -53,6 +56,8 @@ import type {
   LoginPayload,
   RecoverPayload,
   CompleteRecoveryPayload,
+  PhraseRebuildPayload,
+  RecoverResult,
   ChangePasswordPayload,
   PublishProfilePayload,
   SignEventPayload,
@@ -73,6 +78,9 @@ interface SessionState {
   activeCredentialEvent: NostrEvent | null;
   activeRecoveryEvent: NostrEvent | null;
   pendingRecovery: RecoveredIdentity | null;
+  /** The capsule's hint that the recovery phrase alone rebuilds this identity
+   *  (spec §12.1). False for imported, rotated, pre-v0.7 and unknown. */
+  everydayKeyDerived: boolean;
   /** Connection Vault root (§CV5.2), or null when the account predates the
    *  vault OR the restored cache predates the field — vaultKnown tells the
    *  two apart. The SUDO key is deliberately NOT session state: personal-tier
@@ -91,6 +99,7 @@ const session: SessionState = {
   activeCredentialEvent: null,
   activeRecoveryEvent: null,
   pendingRecovery: null,
+  everydayKeyDerived: false,
   connectionVaultRoot: null,
   vaultKnown: false,
   vault: null
@@ -118,6 +127,7 @@ function clearSession(): void {
   session.recoveryPublicKey = null;
   session.activeCredentialEvent = null;
   session.activeRecoveryEvent = null;
+  session.everydayKeyDerived = false;
   session.vault?.destroy();
   session.vault = null;
   if (session.connectionVaultRoot) session.connectionVaultRoot.fill(0);
@@ -128,6 +138,33 @@ function clearSession(): void {
     session.pendingRecovery.everydayPrivateKey.fill(0);
     session.pendingRecovery = null;
   }
+}
+
+/** Shared by phrase recovery and rebuild-from-phrase (spec §17.4, §17.6): holds
+ *  the recovered identity until completeRecovery sets new login credentials. */
+function adoptRecoveredIdentity(recovered: RecoveredIdentity): RecoverResult {
+  clearSession();
+  session.pendingRecovery = recovered;
+  session.signer = new NostrSigner(recovered.everydayPrivateKey);
+  session.everydayPrivateKey = recovered.everydayPrivateKey;
+  session.accountId = recovered.accountId;
+  session.recoveryPublicKey = recovered.recoveryPublicKey;
+  session.activeRecoveryEvent = recovered.currentRecoveryEvent;
+  session.everydayKeyDerived = recovered.everydayKeyDerived;
+  // §CV13.2 — the roots ride the recovery capsule; the sudo copy is not retained.
+  adoptVaultMaterial(
+    recovered.currentRecoveryPayload.connection_vault_root
+      ? base64urlToBytes(recovered.currentRecoveryPayload.connection_vault_root)
+      : undefined
+  );
+  return {
+    everydayPublicKey: recovered.everydayPublicKey,
+    accountId: recovered.accountId,
+    generalRelays: recovered.generalRelays,
+    dmRelays: recovered.dmRelays,
+    chainWarning: recovered.chainWarning,
+    everydayKeyDerived: recovered.everydayKeyDerived
+  };
 }
 
 /** Adopts vault material from a login/register/recovery result: keeps the
@@ -161,7 +198,8 @@ async function persistSession(): Promise<void> {
     activeCredentialEvent: session.activeCredentialEvent,
     activeRecoveryEvent: session.activeRecoveryEvent,
     ...(session.connectionVaultRoot ? { connectionVaultRoot: session.connectionVaultRoot } : {}),
-    ...(session.vaultKnown ? { vaultEnabled: session.connectionVaultRoot !== null } : {})
+    ...(session.vaultKnown ? { vaultEnabled: session.connectionVaultRoot !== null } : {}),
+    everydayKeyDerived: session.everydayKeyDerived
   });
   await persistPublicSession();
 }
@@ -452,6 +490,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeCredentialEvent = result.credentialEvent;
       session.activeRecoveryEvent = result.recoveryEvent;
+      session.everydayKeyDerived = result.everydayKeyDerived;
       adoptVaultMaterial(result.connectionVaultRoot, result.vaultSudoKey);
       await persistSession();
       return {
@@ -460,6 +499,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         recoveryPublicKey: result.recoveryPublicKey,
         accountId: result.accountId,
         imported: result.imported,
+        everydayKeyDerived: result.everydayKeyDerived,
         credentialEventId: result.credentialEvent.id,
         recoveryEventId: result.recoveryEvent.id
       };
@@ -492,12 +532,27 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.recoveryPublicKey = result.recoveryPublicKey;
       session.activeCredentialEvent = result.credentialEvent;
       session.activeRecoveryEvent = result.recoveryCapsuleEvent;
+      session.everydayKeyDerived = result.everydayKeyDerived;
       adoptVaultMaterial(result.connectionVaultRoot, result.vaultSudoKey);
       await persistSession();
+      // Replica repair after sign-in (spec §24.4): top up any relay that has
+      // dropped a capsule, so relays losing the account one at a time never
+      // add up to losing it everywhere. Not awaited, and never an error the
+      // user sees. Skipped when this sign-in looked stale in any way: a
+      // capsule the relays disagree about, or one older than this device has
+      // seen, must not be spread further.
+      if (!result.rollbackWarning && !result.relayDisagreementWarning) {
+        void rebroadcastCapsules({
+          relayUrls: vaultRelayUrls,
+          credentialEvent: result.credentialEvent,
+          recoveryEvent: result.recoveryCapsuleEvent
+        }).catch(() => undefined);
+      }
       return {
         everydayPublicKey: result.everydayPublicKey,
         accountId: result.accountId,
         generation: result.generation,
+        everydayKeyDerived: result.everydayKeyDerived,
         rollbackWarning: result.rollbackWarning,
         relayDisagreementWarning: result.relayDisagreementWarning
       };
@@ -511,26 +566,21 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         discoveryRelayUrls,
         offlineRecoveryCapsuleEvents: p.offlineExportFile?.recovery_capsule_events
       });
-      clearSession();
-      session.pendingRecovery = recovered;
-      session.signer = new NostrSigner(recovered.everydayPrivateKey);
-      session.everydayPrivateKey = recovered.everydayPrivateKey;
-      session.accountId = recovered.accountId;
-      session.recoveryPublicKey = recovered.recoveryPublicKey;
-      session.activeRecoveryEvent = recovered.currentRecoveryEvent;
-      // §CV13.2 — the roots ride the recovery capsule; the sudo copy is not retained.
-      adoptVaultMaterial(
-        recovered.currentRecoveryPayload.connection_vault_root
-          ? base64urlToBytes(recovered.currentRecoveryPayload.connection_vault_root)
-          : undefined
-      );
-      return {
-        everydayPublicKey: recovered.everydayPublicKey,
-        accountId: recovered.accountId,
-        generalRelays: recovered.generalRelays,
-        dmRelays: recovered.dmRelays,
-        chainWarning: recovered.chainWarning
-      };
+      return adoptRecoveredIdentity(recovered);
+    }
+
+    case "previewPhraseRebuild": {
+      // Publishes nothing and unlocks nothing: the user has to confirm the
+      // identity shown before rebuildFromPhrase runs (spec §17.6 step 3).
+      const p = payload as PhraseRebuildPayload;
+      const preview = await previewPhraseRebuild({ phrase: p.phrase, vaultRelayUrls, discoveryRelayUrls });
+      return { ...preview, npub: encodeNpub(preview.everydayPublicKey) };
+    }
+
+    case "rebuildFromPhrase": {
+      const p = payload as PhraseRebuildPayload;
+      const rebuilt = await rebuildAccountFromPhrase({ phrase: p.phrase, vaultRelayUrls, discoveryRelayUrls });
+      return adoptRecoveredIdentity(rebuilt);
     }
 
     case "completeRecovery": {
@@ -653,10 +703,22 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!session.activeCredentialEvent || !session.activeRecoveryEvent) {
         throw new Error("No active capsule events are known in this session yet.");
       }
-      const pool = new RelayPool(vaultRelayUrls);
-      const result = await repairReplicas(pool, session.activeCredentialEvent, session.activeRecoveryEvent);
-      pool.closeAll();
-      return result;
+      return rebroadcastCapsules({
+        relayUrls: vaultRelayUrls,
+        credentialEvent: session.activeCredentialEvent,
+        recoveryEvent: session.activeRecoveryEvent
+      });
+    }
+
+    case "checkReplicaHealth": {
+      if (!session.activeCredentialEvent || !session.activeRecoveryEvent) {
+        throw new Error("No active capsule events are known in this session yet.");
+      }
+      return checkReplicaHealth({
+        relayUrls: vaultRelayUrls,
+        credentialEvent: session.activeCredentialEvent,
+        recoveryEvent: session.activeRecoveryEvent
+      });
     }
 
     case "getSessionStatus": {
@@ -678,6 +740,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.recoveryPublicKey = cached.recoveryPublicKey;
       session.activeCredentialEvent = cached.activeCredentialEvent;
       session.activeRecoveryEvent = cached.activeRecoveryEvent;
+      session.everydayKeyDerived = cached.everydayKeyDerived ?? false;
       session.connectionVaultRoot = cached.connectionVaultRoot ?? null;
       // vaultKnown only when the cache recorded a definitive answer; an old
       // cache entry leaves it false so requireVault says "sign in again"
@@ -687,7 +750,12 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       // encrypted entry but no cleartext one. Writing it here means the very
       // next lightweight read sees the identity, no re-login required.
       await persistPublicSession();
-      return { restored: true, everydayPublicKey: session.signer.getPublicKey(), accountId: cached.accountId };
+      return {
+        restored: true,
+        everydayPublicKey: session.signer.getPublicKey(),
+        accountId: cached.accountId,
+        everydayKeyDerived: session.everydayKeyDerived
+      };
     }
 
     case "logout": {
@@ -854,10 +922,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 }
 
 const KNOWN_ACTIONS = new Set<string>([
-  "configure", "register", "previewImportKey", "login", "recover", "completeRecovery",
+  "configure", "register", "previewImportKey", "login", "recover", "previewPhraseRebuild",
+  "rebuildFromPhrase", "completeRecovery",
   "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
-  "buildRecoveryExport", "repairReplicas", "getSessionStatus", "restoreSession", "logout",
+  "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",
