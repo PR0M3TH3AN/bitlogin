@@ -24,6 +24,7 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { getPublicKeyHex } from "@bitlogin/core/crypto";
 import { mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
+import { cleanRelays } from "../embedded/takeBack.js";
 import { grantSite } from "./signerGrant.js";
 
 /**
@@ -59,6 +60,9 @@ export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "appDecryptEvent",
   // A room pass for the site the hand-off was sealed for, built whole in the worker (§SW16).
   "roomPass",
+  // Asking the user's relays whether this site was taken back (docs/take-back.md). It reads one record and the
+  // user's relay list, and can only end the grant or leave it be.
+  "signerCheck",
   // Remembering a site, so the user is not asked on every page load (signerGrant.ts).
   "signerKeep",
   "signerRestore",
@@ -90,7 +94,7 @@ export function sealHandoff(
   senderPrivateKey: Uint8Array,
   app?: { site: unknown; permissions: unknown },
   /** The site the hand-off is for, as the window was told by the signer, and the person's own profile. */
-  also: { site?: unknown; profile?: unknown; /** The user ticked "remember" in the window. */ remember?: unknown; /** The lock is on: nothing is kept for any site. */ visitOnly?: boolean } = {}
+  also: { site?: unknown; profile?: unknown; /** The user ticked "remember" in the window. */ remember?: unknown; /** The lock is on: nothing is kept for any site. */ visitOnly?: boolean; /** When Allow was pressed, in seconds, by the sealing worker's clock. */ at?: number; /** The user's own write relays (NIP-65). */ relays?: unknown } = {}
 ): SealedHandoff {
   if (!HEX64.test(recipientPublicKey)) throw new Error("The hand-off has no usable recipient key.");
   if (everydayPrivateKey.length !== 32) throw new Error("No identity is unlocked in this session.");
@@ -113,7 +117,7 @@ export function sealHandoff(
   // A signer wipes the key it was given when it is destroyed. It is given a copy: the caller's is the caller's to wipe.
   const sender = new NostrSigner(senderPrivateKey.slice());
   try {
-    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}), ...(forSite ? { site: forSite } : {}), ...(profile ? { profile } : {}), ...(remember ? { remember: true } : {}) });
+    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}), ...(forSite ? { site: forSite } : {}), ...(profile ? { profile } : {}), ...(remember ? { remember: true } : {}), ...(typeof also.at === "number" && Number.isFinite(also.at) ? { at: Math.floor(also.at) } : {}), ...(cleanRelays(also.relays).length ? { relays: cleanRelays(also.relays) } : {}) });
     return { senderPublicKey: sender.getPublicKey(), payload: sender.nip44Encrypt(recipientPublicKey, plaintext) };
   } finally {
     sender.destroy();
@@ -138,7 +142,7 @@ export function openHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Arr
 export function openAppHandoff(
   sealed: SealedHandoff,
   recipientPrivateKey: Uint8Array
-): { key: Uint8Array; app: HandoffApp | null; /** The site it was sealed for, or null where it names none. */ site: string | null; profile: Profile | null; /** Whether it may be kept across page loads. */ remember: boolean } {
+): { key: Uint8Array; app: HandoffApp | null; /** The site it was sealed for, or null where it names none. */ site: string | null; profile: Profile | null; /** Whether it may be kept across page loads. */ remember: boolean; /** When it was allowed, in seconds, or null where it does not say. */ at: number | null; /** The user's own write relays, cleaned. */ relays: string[] } {
   if (!sealed || !HEX64.test(sealed.senderPublicKey) || typeof sealed.payload !== "string") {
     throw new Error("That is not a signer hand-off.");
   }
@@ -151,7 +155,7 @@ export function openAppHandoff(
   } finally {
     recipient.destroy();
   }
-  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown; site?: unknown; profile?: unknown; remember?: unknown };
+  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown; site?: unknown; profile?: unknown; remember?: unknown; at?: unknown; relays?: unknown };
   try {
     parsed = JSON.parse(plaintext) as typeof parsed;
   } catch {
@@ -176,7 +180,9 @@ export function openAppHandoff(
   }
   const profile = readProfile(parsed.profile);
   const remember = parsed.remember === true && !!named;
-  if (parsed.app === undefined) return { key, app: null, site: named, profile, remember };
+  const at = typeof parsed.at === "number" && Number.isFinite(parsed.at) && parsed.at > 0 ? Math.floor(parsed.at) : null;
+  const relays = cleanRelays(parsed.relays);
+  if (parsed.app === undefined) return { key, app: null, site: named, profile, remember, at, relays };
   const a = parsed.app as { site?: unknown; permissions?: unknown } | null;
   const site = a && typeof a === "object" ? grantSite(a.site) : "";
   const permissions = a && typeof a === "object" ? readPermissions(a.permissions) : null;
@@ -184,5 +190,5 @@ export function openAppHandoff(
     key.fill(0);
     throw new Error("The hand-off carried a permission set that cannot be read.");
   }
-  return { key, app: { site, permissions }, site, profile, remember };
+  return { key, app: { site, permissions }, site, profile, remember, at, relays };
 }

@@ -273,11 +273,13 @@ describe("widget security policy", () => {
   it("lets other sites frame the embedded signer, and nothing else", () => {
     const signer = ruleFor("/signer/(.*)");
     const csp = signer.get("Content-Security-Policy") ?? "";
-    // It may be framed by an https site. It loads nothing from anywhere else and reaches no network but its own files.
+    // It may be framed by an https site. It loads nothing from anywhere else. Beyond its own files it reaches
+    // relays, over TLS, and nothing else: to ask whether its site was taken back (docs/take-back.md). That was
+    // `connect-src 'self'` alone until the owner agreed to open it for this, on 2026-11-19.
     expect(csp).toContain("frame-ancestors https:");
     expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("connect-src 'self'");
-    expect(csp).not.toMatch(/connect-src[^;]*(wss:|https:)/u);
+    expect(csp).toMatch(/(^|; )connect-src 'self' wss:(;|$)/u);
+    expect(csp).not.toMatch(/connect-src[^;]*(https:|http:|ws:|\*)/u);
     expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'");
     expect(csp).not.toContain(" 'unsafe-eval'");
     expect(csp).not.toMatch(/style-src|img-src|font-src/u);

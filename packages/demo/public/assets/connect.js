@@ -45,8 +45,9 @@ const prepare = () =>
     const session = await theWorker();
     const restored = await session.restore();
     if (!restored || restored.pubkey !== who.pubkey) throw new Error("no session");
-    // Only a world is told who someone is. An application is held to what it asked, and this is not in it.
-    if (!found.wants) profileLoaded = session.loadProfile().catch(() => null);
+    // Only a world is told who someone is: an application is held to what it asked, and this is not in it. Their
+    // relay list is read for every site: it is where the signer later looks for a take-back (docs/take-back.md).
+    profileLoaded = session.loadProfile({ profile: !found.wants }).catch(() => null);
     return session;
   })());
 /** How long Allow waits for relays to answer about the profile. Without one, the site is told the key alone. */

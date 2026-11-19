@@ -8,6 +8,23 @@ would plausibly want. Newest first.
 
 ## 2026-11-19
 
+**A site can be taken back from one place (`docs/take-back.md`).** For
+sites that sign in through the window.
+
+- **"Take it back" and "Sign out of every site" at `/sites/`** publish a
+  record, sealed to the user's own key, on their relays. Every embedded
+  signer asks for it on its first page load after Allow and then once a
+  day, and forgets its site if the record says so. It is not instant.
+- **A deployment must change one header:** the embedded signer's page
+  needs `connect-src 'self' wss:` where it had `connect-src 'self'`.
+  Without it the check cannot run, and a remembered site locks after three
+  days.
+- **A grant kept more than three days without a check that succeeded is
+  locked** until a relay answers.
+- **New on the headless signer:** `takeBack()`, `checkTakenBack()`;
+  `loadProfile()` takes `{ profile: false }` and also reads the user's
+  relay list (kind 10002). `startEmbeddedSigner()` takes relay options.
+
 **An optional lock (`docs/spec.md` §21.5, `docs/sign-in-window.md` §SW12).**
 Off unless the user turns it on, from the account screen.
 

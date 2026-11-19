@@ -21,18 +21,26 @@
   <section class="connect-card">
     <h1>Sites you allowed to sign as you</h1>
     <p>Every site you pressed Allow for, from this browser, at this address.</p>
+    <p id="said" class="connect-status" role="status" hidden></p>
     <p id="empty" class="connect-small" hidden>None yet. A site appears here when you allow it in BitLogin's sign-in window.</p>
     <ul id="sites" class="sites-list"></ul>
   </section>
 
   <section class="connect-card" style="margin-top:1rem">
-    <h1>What this page can and can't do</h1>
+    <h1>Sign out of every site</h1>
+    <p>Takes back every site you have allowed, on every browser and device, including any this list does not show. Use it for a device you no longer have.</p>
+    <div class="cta-row"><button id="all" class="btn secondary" type="button">Sign out of every site</button></div>
+  </section>
+
+  <section class="connect-card" style="margin-top:1rem">
+    <h1>How taking a site back works</h1>
     <ul>
-      <li><strong>To stop a site now, open it and sign out there.</strong> That removes what it was given, at once.</li>
-      <li>Everything here also ends by its date, and when you clear this browser's data.</li>
-      <li>This page can't switch a site off from here, and can't see how often a site signed. A browser keeps what a site was given in storage that only that site's own pages can reach, and no page of BitLogin's can look into it.</li>
-      <li>"Remove from this list" takes a line off this page. It does not stop the site.</li>
+      <li><strong>"Take it back" is not instant.</strong> It publishes a note, sealed so only you can read it, on your relays. The site stops when its signer next reads that note: usually within a day, and three days at most if your relays can't be reached.</li>
+      <li><strong>To stop a site this minute, open it and sign out there.</strong></li>
+      <li>You can allow a site again afterwards. Nothing has to be undone.</li>
+      <li>This page can't see how often a site signed. A browser keeps what a site was given in storage that only that site's own pages can reach.</li>
       <li>The list is kept in this browser only. Another browser or device has its own.</li>
+      <li>You need to be signed in here, and unlocked, to take a site back.</li>
     </ul>
   </section>
 </main>

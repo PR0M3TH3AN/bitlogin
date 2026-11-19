@@ -1478,6 +1478,30 @@ recovered.
    guessed quickly offline, and a count kept in software can be put back.
    An interface that offers the lock shall say so where it is turned on.
 
+## 21.6 Taking back what a site was given
+
+A key kept for an asking site (`docs/sign-in-window.md` §SW11) is in
+storage the sign-in address cannot reach. It is taken back with a record
+(`docs/take-back.md`):
+
+1. **The record** is a kind 30078 event signed by the everyday key, `d`
+   tag `bitlogin:taken-back:v1`, its content NIP-44 encrypted to that same
+   key: `{ "v": 1, "all_before": <seconds>, "sites": [{ "site": <origin>,
+   "before": <seconds> }] }`.
+2. **The rule.** A key kept for a site at time *t* shall be discarded if
+   `all_before >= t`, or the site is listed with `before >= t`.
+3. **A writer** shall publish the join of every record it can find and the
+   change it is making, so that no record gives back what an earlier one
+   took, and shall date it later than the one it replaces.
+4. **A reader** shall believe only a validly signed record by the same
+   key, take the newest, not believe one dated more than ten minutes
+   ahead, and not believe one older than the newest it has already seen.
+5. **A kept key shall be checked** against the record on its first use
+   after it was kept and then at least once a day, and shall not be used
+   once three days have passed with no relay answering.
+6. **No asking site** may have an event signed under a `d` tag beginning
+   `bitlogin:`.
+
 ---
 
 # 22. Static Client Security

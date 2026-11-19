@@ -29,11 +29,13 @@ import type {
   WorkerNotification,
   HandoffExportPayload,
   HandoffSealed,
+  LoadProfilePayload,
   LockDevicePayload,
   LockOpenPayload,
   LockPinPayload,
   RoomPassPayload,
   SignerKeepPayload,
+  TakeBackPayload,
   SignerSitePayload,
   AppCryptPayload,
   AppDecryptEventPayload,
@@ -225,8 +227,14 @@ export class WorkerClient {
   handoffAccept(payload: HandoffSealed) {
     return this.call("handoffAccept", payload);
   }
-  loadProfile() {
-    return this.call("loadProfile", {});
+  loadProfile(payload: LoadProfilePayload = {}) {
+    return this.call("loadProfile", payload);
+  }
+  takeBack(payload: TakeBackPayload) {
+    return this.call("takeBack", payload);
+  }
+  signerCheck(payload: SignerSitePayload) {
+    return this.call("signerCheck", payload);
   }
   lockStatus() {
     return this.call("lockStatus", {});

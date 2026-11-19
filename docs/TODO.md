@@ -187,12 +187,16 @@ that moved.
   - [x] **The list of sites allowed (§SW18):** `/sites/` at the sign-in
     address. On `beta`. It cannot switch a site off or show how often one
     signed: a browser does not let it.
-  - [ ] **A real "remove": designed, not built** (`docs/take-back.md`).
-    The user publishes an encrypted record of sites taken back; every
-    embedded signer reads it about once a day and forgets its site. It
-    needs the signer's page to be allowed to contact the vault relays,
-    which changes §SW6. **Five owner decisions in §TB9** before building;
-    then the order in §TB8.
+  - [x] **A real "remove"** (`docs/take-back.md`). "Take it back" and
+    "Sign out of every site" at `/sites/` publish a sealed record on the
+    user's relays; every embedded signer reads it on its first page load
+    and then daily, and forgets its site. The signer's page may now contact
+    relays (`connect-src 'self' wss:`), by the owner's decision. On `beta`.
+  - [ ] **Try a take-back on public relays.** Some of the vault relays
+    refuse keys they do not know. Tested on mock relays only.
+  - [ ] **Keep a user's relay list alive** (item 10): the take-back check
+    follows their NIP-65 list, and nothing yet repairs a list that has
+    gone stale or looks for live relays (NIP-66).
   - [x] **The lock (§SW12, `spec.md` §21.5):** a PIN, the device's own
     unlock offered first where it was added, five tries, "Lock now", off by
     default. On `beta`. While it is on, no site is remembered.

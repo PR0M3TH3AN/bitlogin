@@ -22,6 +22,7 @@ import {
   type RecoveredIdentity
 } from "@bitlogin/core/account";
 import {
+  countAcknowledgements,
   RelayPool,
   BUILTIN_VAULT_RELAYS,
   BUILTIN_DISCOVERY_RELAYS,
@@ -55,7 +56,23 @@ import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type
 import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeerFor } from "../embedded/permissions.js";
 import { signClass } from "../embedded/policy.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
-import { deleteSignerGrant, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import { deleteSignerGrant, grantedAt, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import {
+  checkDue,
+  cleanRelays,
+  isTakenBack,
+  mergeTakenBack,
+  newestTakeBackEvent,
+  NOTHING_TAKEN_BACK,
+  readTakenBack,
+  RELAY_LIST_KIND,
+  TAKE_BACK_D,
+  TAKE_BACK_KIND,
+  takeBack,
+  writeRelaysFrom,
+  writeTakenBack,
+  type TakenBack
+} from "../embedded/takeBack.js";
 import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { SerialQueue } from "./serialQueue.js";
 import type { VaultConnectionSummary } from "./protocol.js";
@@ -82,6 +99,7 @@ import type {
   HandoffExportPayload,
   AppCryptPayload,
   AppDecryptEventPayload,
+  LoadProfilePayload,
   LockDevicePayload,
   LockOpenPayload,
   LockPinPayload,
@@ -89,6 +107,7 @@ import type {
   RestoreSessionResult,
   RoomPassPayload,
   SignerKeepPayload,
+  TakeBackPayload,
   SignerSitePayload,
   SignerTouchPayload
 } from "./protocol.js";
@@ -129,6 +148,11 @@ interface SessionState {
   /** For a signer-only session: whether it may be kept for its site across page loads (§SW11). True for one
    *  taken up from a kept grant. False for a site allowed for one visit: nothing of it is ever written down. */
   remember: boolean;
+  /** For a signer-only session: when its site was allowed, in seconds (docs/take-back.md). Null where unknown. */
+  grantAt: number | null;
+  /** The user's own write relays (NIP-65). In a full session, what `loadProfile` found; in a signer-only one,
+   *  what the hand-off or the grant carried. Where a signer looks for their take-back record. */
+  relays: string[];
 }
 
 const session: SessionState = {
@@ -147,7 +171,9 @@ const session: SessionState = {
   app: null,
   site: null,
   profile: null,
-  remember: false
+  remember: false,
+  grantAt: null,
+  relays: []
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
@@ -177,6 +203,29 @@ let lockKey: Uint8Array | null = null;
 let lastUsed = Date.now();
 /** Asking these is not using the session, and none of them is refused for being idle. */
 const NOT_USE = new Set(["configure", "lockStatus", "lockOpen", "restoreSession", "getSessionStatus", "logout"]);
+
+// ---- Taking a site back (docs/take-back.md) ----
+
+/** This browser's own copy of the last take-back record it wrote, by account. Not a secret: a list of addresses. */
+const LOCAL_TAKEN_BACK = "bitlogin:taken-back:v1:";
+
+async function loadLocalTakenBack(pubkey: string): Promise<TakenBack> {
+  try {
+    const raw = await store.get(LOCAL_TAKEN_BACK + pubkey);
+    return (raw ? readTakenBack(JSON.parse(raw)) : null) ?? NOTHING_TAKEN_BACK;
+  } catch {
+    return NOTHING_TAKEN_BACK;
+  }
+}
+
+/** A take-back record's content, opened with the key that sealed it to itself. Null for anything else. */
+function openTakenBack(signer: NostrSigner, content: string): TakenBack | null {
+  try {
+    return readTakenBack(JSON.parse(signer.nip44Decrypt(signer.getPublicKey(), content)));
+  } catch {
+    return null;
+  }
+}
 
 /** Lock: the keys go from memory. What is cached stays, sealed, for the next unlock. */
 function lockNow(): void {
@@ -229,6 +278,8 @@ function clearSession(): void {
   session.site = null;
   session.profile = null;
   session.remember = false;
+  session.grantAt = null;
+  session.relays = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
@@ -590,7 +641,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
           ...(p.remember === true ? { remember: true } : {}),
           // With the lock on, nothing is kept for any site: a key at rest in a site's storage would be a key
           // the lock does not cover. Every site is allowed for the visit, and asks at the sign-in address again.
-          ...(lockKey ? { visitOnly: true } : {})
+          ...(lockKey ? { visitOnly: true } : {}),
+          // When it was allowed, by this worker's clock, and where the user writes: what a signer needs to
+          // find out later whether the site was taken back (docs/take-back.md).
+          at: Date.now() / 1000,
+          relays: session.relays
         });
       } finally {
         wipe(sender);
@@ -622,6 +677,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
             until: p.until,
             ...(p.name ? { name: p.name } : {}),
             ...(session.profile ? { profile: session.profile } : {}),
+            at: session.grantAt ?? Math.floor(now),
+            ...(session.relays.length ? { relays: session.relays } : {}),
             signed: [],
             ...(session.app ? { permissions: session.app.permissions, signedSensitive: [] } : {})
           },
@@ -644,6 +701,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.site = grant.site;
       session.profile = grant.profile ?? null;
       session.remember = true;
+      session.grantAt = grantedAt(grant);
+      session.relays = grant.relays ?? [];
       return {
         restored: true,
         everydayPublicKey: session.signer.getPublicKey(),
@@ -652,6 +711,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         ...(grant.profile ? { profile: grant.profile } : {}),
         signed: grant.signed,
         ...(grant.signedPass ? { signedPass: grant.signedPass } : {}),
+        check: checkDue(Date.now() / 1000, grantedAt(grant), grant.checkedAt ?? 0),
         ...(grant.permissions ? { permissions: grant.permissions, signedSensitive: grant.signedSensitive ?? [] } : {})
       };
     }
@@ -697,6 +757,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.site = opened.site;
       session.profile = opened.profile;
       session.remember = opened.remember;
+      session.grantAt = opened.at;
+      session.relays = opened.relays;
       return {
         everydayPublicKey: session.signer.getPublicKey(),
         ...(opened.app ? { app: opened.app } : {}),
@@ -714,18 +776,126 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "loadProfile": {
       const { signer } = requireUnlocked();
       const me = signer.getPublicKey();
+      const wantProfile = (payload as LoadProfilePayload).profile !== false;
       const relayUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
       if (relayUrls.length === 0) return {};
       const pool = new RelayPool(relayUrls);
       try {
-        const result = await pool.queryQuorum({ kinds: [0], authors: [me], limit: 2 }, 4000);
-        // Still the same session: a sign-out while relays were answering must not leave a profile behind.
+        // Their profile (only for a site that is to be told who they are), and their relay list (NIP-65), which
+        // every hand-off carries: it is where a signer later looks for their take-back record.
+        const [profiles, lists] = await Promise.all([
+          wantProfile ? pool.queryQuorum({ kinds: [0], authors: [me], limit: 2 }, 4000) : Promise.resolve(null),
+          pool.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)
+        ]);
+        // Still the same session: a sign-out while relays were answering must not leave any of it behind.
         if (session.signer !== signer) return {};
-        session.profile = newestProfile(result.outcomes.flatMap((outcome) => outcome.events), me);
+        session.profile = profiles ? newestProfile(profiles.outcomes.flatMap((outcome) => outcome.events), me) : null;
+        session.relays = writeRelaysFrom(lists.outcomes.flatMap((outcome) => outcome.events), me);
       } finally {
         pool.closeAll();
       }
-      return session.profile ? { profile: session.profile } : {};
+      return { ...(session.profile ? { profile: session.profile } : {}), relays: session.relays };
+    }
+
+    // ---- Taking a site back (docs/take-back.md) ----
+
+    // At the sign-in address, with a full session: publish the record that says a site, or every site, is taken
+    // back as of now. It carries everything an earlier record said, from the relays and from this browser's own
+    // copy, so a record built here can never give a site back.
+    case "takeBack": {
+      const { signer } = requireUnlocked();
+      const p = payload as TakeBackPayload;
+      const me = signer.getPublicKey();
+      const now = Date.now() / 1000;
+      const what = p.all === true ? ({ all: true } as const) : { site: String(p.site ?? "") };
+      const finder = new RelayPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
+      let mine: string[];
+      try {
+        mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+      } finally {
+        finder.closeAll();
+      }
+      // Their own write relays, and BitLogin's, which every signer knows without being told.
+      const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
+      const pool = new RelayPool(relayUrls);
+      try {
+        const found = await pool.queryQuorum({ kinds: [TAKE_BACK_KIND], authors: [me], "#d": [TAKE_BACK_D], limit: 2 }, 5000);
+        // With no relay answering, an earlier record made on another device could not be carried forward.
+        if (found.respondedCount === 0) return { ok: false, accepted: 0, of: relayUrls.length };
+        const newest = newestTakeBackEvent(found.outcomes.flatMap((o) => o.events), me, now);
+        const onRelays = newest ? openTakenBack(signer, newest.content) : null;
+        const local = await loadLocalTakenBack(me);
+        const next = takeBack(mergeTakenBack(onRelays ?? NOTHING_TAKEN_BACK, local, now), what, now);
+        const event = signer.signEvent({
+          kind: TAKE_BACK_KIND,
+          // Later than the one it replaces, whatever the two clocks say.
+          created_at: Math.max(Math.floor(now), (newest?.created_at ?? 0) + 1),
+          tags: [["d", TAKE_BACK_D]],
+          content: signer.nip44Encrypt(me, writeTakenBack(next))
+        });
+        const accepted = countAcknowledgements(await pool.publishAll(event, 6000));
+        const ok = accepted >= Math.min(2, relayUrls.length);
+        // Kept here only once it is out: this browser's copy is what the next record is built on.
+        if (ok) await store.set(LOCAL_TAKEN_BACK + me, writeTakenBack(next)).catch(() => {});
+        return { ok, accepted, of: relayUrls.length };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    // In the embedded signer, for a kept grant: ask the user's relays whether this site was taken back. Asked at
+    // most once a day. It can end the grant or leave it be, and nothing else.
+    case "signerCheck": {
+      const { signer } = requireUnlocked();
+      if (!session.signerOnly || !session.site) return { state: "ok" };
+      const site = session.site;
+      const now = Date.now() / 1000;
+      const grant = await loadSignerGrant(store, site, now);
+      // Allowed for one visit: held in memory, ends with the page, and is not checked.
+      if (!grant) return { state: "ok" };
+      const me = signer.getPublicKey();
+      const at = grantedAt(grant);
+      const due = checkDue(now, at, grant.checkedAt ?? 0);
+      if (due === "fresh") return { state: "ok" };
+      const relayUrls = [...new Set([...cleanRelays(grant.relays), ...vaultRelayUrls])].slice(0, 12);
+      const pool = new RelayPool(relayUrls);
+      let records: Awaited<ReturnType<RelayPool["queryQuorum"]>>;
+      let lists: Awaited<ReturnType<RelayPool["queryQuorum"]>>;
+      try {
+        [records, lists] = await Promise.all([
+          pool.queryQuorum({ kinds: [TAKE_BACK_KIND], authors: [me], "#d": [TAKE_BACK_D], limit: 2 }, 5000),
+          pool.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 5000)
+        ]);
+      } finally {
+        pool.closeAll();
+      }
+      // No relay answered: nothing was learned. A grant too long unchecked is locked until one does.
+      if (records.respondedCount === 0) return { state: due === "overdue" ? "stale" : "ok" };
+      // The page was closed, or the site signed out of, while relays were answering.
+      if (session.signer !== signer) return { state: "ok" };
+      const newest = newestTakeBackEvent(records.outcomes.flatMap((o) => o.events), me, now);
+      // An older record than one already seen is a relay behind the times, or one holding the newer one back.
+      // The newer one was read when it was seen, and did not end this grant.
+      const record = newest && newest.created_at >= (grant.seenAt ?? 0) ? openTakenBack(signer, newest.content) : null;
+      if (record && isTakenBack(record, site, at)) {
+        await deleteSignerGrant(store, site);
+        clearSession();
+        return { state: "ended" };
+      }
+      // They may have changed where they write since: the next check follows their list as it is now.
+      const theirs = writeRelaysFrom(lists.outcomes.flatMap((o) => o.events), me);
+      await saveSignerGrant(
+        store,
+        {
+          ...grant,
+          checkedAt: Math.floor(now),
+          seenAt: Math.max(grant.seenAt ?? 0, record && newest ? newest.created_at : 0),
+          ...(theirs.length ? { relays: theirs } : {})
+        },
+        now
+      );
+      if (theirs.length) session.relays = theirs;
+      return { state: "ok" };
     }
 
     // A room pass (NSWP kind 27300) for the site this session serves, and for no other. The site, the time, how
@@ -1372,6 +1542,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass",
+  "takeBack", "signerCheck",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",

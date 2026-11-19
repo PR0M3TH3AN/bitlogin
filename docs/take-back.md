@@ -2,7 +2,8 @@
 
 **Document version:** 0.1
 **Date:** 2026-11-19
-**Status:** Design only. Nothing here is built. Written on `beta`.
+**Status:** Built on `beta` (2026-11-19), with the answers in TB9. Not on
+`main`.
 **Depends on:** `docs/sign-in-window.md` §SW5, §SW6, §SW11, §SW12, §SW18;
 `docs/spec.md` §16.2, §19, §22.
 
@@ -204,34 +205,59 @@ newest record seen. Neither is secret.
 6. **`spec.md`:** the record beside the capsules (§12), and §22 for the
    policy.
 
-# TB9. Decisions that are the owner's
+# TB9. What the owner decided (2026-11-19)
 
-1. **May the signer's page contact the vault relays?** Proposed: yes, as a
-   written-out list, never `wss:`. Without this there is no design.
-2. **How long may a grant go unchecked?** Proposed: checked once a day;
-   locked after three days without a check that succeeded.
-3. **"Sign out of every site"?** Proposed: yes. It costs nothing more to
-   build and is the only thing that reaches a device the user no longer
-   has.
-4. **Should the widget inside an application honour it too?** Proposed:
-   later, and only `all_before`. It would mean every application's page
-   asking relays once a day, which they already may.
-5. **With this built, should memory get longer again?** Proposed: no.
-   Seven days for a site BitLogin does not know is cheap, and it is the
-   backstop when the record cannot be read.
-6. **Which relays does the signer read from?** The owner asked that relay
-   choice follow the user's own relay list (NIP-65). For writing, yes
-   (TB4). For the signer's reading, proposed: the vault relays only. A
-   user's relay list can name any relay at all, so reading from it would
-   mean letting the page that holds the key connect to any address
-   (`connect-src wss:`), which question 1 was written to avoid; and a
-   record that is on the vault relays is one every signer can find without
-   being told where to look. A BitLogin account's own relay list is the
-   vault relays today, so for most accounts the two are the same relays.
-   The other way round (carry the user's cleaned write relays inside the
-   hand-off, and open the policy to any relay) is possible, and is the
-   looser choice.
+1. **May the signer's page contact relays?** Yes.
+2. **Which relays?** The user's own, not a fixed list. The first proposal
+   was a written-out list of the vault relays in the page's policy. The
+   owner asked what would keep working without anyone maintaining a list:
+   relays come and go, and a fixed list has to be re-released every time
+   one does. So the policy is `connect-src 'self' wss:`, and the signer
+   asks the user's own write relays (NIP-65) and BitLogin's vault relays
+   together. What the fixed list would have bought was small: its relays
+   are public, so anything sent to one can be read by anyone.
+   - Up to four of the user's write relays are read by the window at Allow
+     and sealed into the hand-off.
+   - **The signer follows the list as it changes:** every check also reads
+     their current kind 10002 and keeps it for the next check.
+   - Only `wss://` addresses with no credentials, query or fragment are
+     carried.
+   - A check needs one relay to answer. Dead relays cost nothing but time.
+3. **How long may a grant go unchecked?** Checked on its first page load
+   after Allow, then once a day; locked after three days with no check that
+   succeeded.
+4. **"Sign out of every site"?** Yes.
+5. **Should the widget inside an application honour it too?** Not built.
+6. **Longer memory again?** No. Seven days for a site BitLogin does not
+   know stays, as the backstop.
 
-Reported by the NSWP session on 2026-11-19: the owner answered question 1
-there, "yes use relays". The rest are open, and question 1 is still to be
-confirmed in BitLogin's own session before anything is built.
+# TB10. What is built, and where it stops short
+
+- The record, the rule, the merge: `embedded/takeBack.ts`.
+- Written by the worker action `takeBack`, from `/sites/`. It reads the
+  newest record on the relays and this browser's own copy of the last one
+  it wrote, joins them, and publishes to the user's write relays and the
+  vault relays. Two relays must accept it, or the page says nothing was
+  taken back.
+- Read by the worker action `signerCheck`, in the embedded signer.
+- **Not built: finding live relays.** The signer uses the relays the user
+  lists and BitLogin's own. It does not yet measure which relays are alive
+  or look for better ones (NIP-66). An account whose relay list has gone
+  stale relies on BitLogin's vault relays alone, and those were chosen by a
+  release. Keeping a user's relay list alive is `docs/relay-broadcast.md`
+  (§RB4, §RB8), a design and not built.
+- **Not built: the widget inside an application.** An application that
+  embeds the widget holds a full session, can sign anything, and is not
+  reached by a take-back. It could also publish a newer, emptier record.
+  Applications that sign in through the window cannot: BitLogin's own
+  record names are refused to them, whatever they were approved for.
+- **Tested** against mock relays in Chromium: a site allowed, taken back
+  before its signer had asked, and found locked on its next page load;
+  allowed again afterwards and still allowed; and one taken back after its
+  signer had just asked, which keeps signing until the next day's check,
+  as the page says. The day and three-day clocks are tested as arithmetic,
+  not by waiting.
+- **Not tried:** public relays. Several of BitLogin's vault relays refuse
+  events from keys they do not know (`docs/TODO.md`, "Relay-loss
+  response"), and may refuse this record the same way. The page reports how
+  many accepted.

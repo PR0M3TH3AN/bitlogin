@@ -73,8 +73,9 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
             `<bitlogin-auth id="bitlogin-widget" vault-relays="${relayList}" discovery-relays="${relayList}">`
           );
       }
-      // The sign-in window asks relays for a profile. It is given the mock ones, as the account page is.
-      if (relative === "/connect/index.html") {
+      // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
+      // signer reads it. Each is given the mock relays, as the account page is.
+      if (relative === "/connect/index.html" || relative === "/sites/index.html" || relative === "/signer/index.html") {
         body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}">`);
       }
       res.writeHead(200, {
@@ -631,10 +632,18 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(await row.textContent()).toContain("Remembered on this device");
         // Its link to the site gives the site no way back to this page.
         expect(await row.locator("a").getAttribute("rel")).toBe("noopener noreferrer");
+        // Taken back (docs/take-back.md): a record goes to the relays, sealed, and the line leaves the list.
+        expect(await row.locator("button").textContent()).toBe("Take it back");
         await row.locator("button").click();
+        await listing.locator("#said", { hasText: "Taken back" }).waitFor({ timeout: 30_000 });
         expect(await listing.locator("#sites li").count()).toBe(0);
         expect(await listing.locator("#empty").isVisible()).toBe(true);
-        // Taking a line off the list stops nothing, as the page says: the site is still allowed.
+        expect(relays.every((relay) => relay.storedEventKinds().filter((kind) => kind === 30078).length >= 3)).toBe(true);
+        // It is not instant, as the page says. This site's signer asked the relays a moment ago, when its page
+        // was last loaded, and does not ask again for a day: until then it still signs.
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        await page.waitForTimeout(1500);
         expect(await ask({ t: "state" })).toMatchObject({ unlocked: true });
         await listing.close();
 
@@ -647,6 +656,54 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         // The sign-in address itself is still signed in, with a full session: handing over took nothing from it.
         expect(await account.evaluate(() => window.bitlogin?.activeSession()?.publicKey)).toBe(me);
         expect(errors).toEqual([]);
+
+        // A site allowed and then taken back before its signer has ever asked: the next time its page is loaded,
+        // the signer asks, finds the record, and is locked. Nobody signed out at the site.
+        const allowAgain = async () => {
+          const [again] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+          await again.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+          await again.waitForTimeout(1000);
+          await again.locator("#allow").click();
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+          if (!again.isClosed()) await again.waitForEvent("close", { timeout: 10_000 }).catch(() => again.close());
+        };
+        const lockedSoon = () =>
+          page.waitForFunction(async () => (await (window as any).ask({ t: "state" })).unlocked === false, null, { timeout: 30_000, polling: 500 });
+        await allowAgain();
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true, remembered: true });
+        const takingBack = await context.newPage();
+        await takingBack.goto(`${origin}/sites/index.html`);
+        await takingBack.locator("#sites li[data-site] button").click();
+        await takingBack.locator("#said", { hasText: "Taken back" }).waitFor({ timeout: 30_000 });
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        await lockedSoon();
+        expect((await ask({ t: "sign", event: { kind: 1, content: "after it was taken back", tags: [] } })).t).toBe("refused");
+        // And it stays gone: the grant was removed, not paused.
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+        // The site never learns why, and nothing of the record reaches it.
+        expect(JSON.stringify(await page.evaluate(() => (window as any).heard))).not.toMatch(/taken-back|all_before/u);
+
+        // Allowed again afterwards, it is allowed: the record ends what came before it, and nothing after.
+        await allowAgain();
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        await page.waitForTimeout(2000);
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true, remembered: true });
+
+        // "Sign out of every site" ends it too, though this browser's signer for it checked a moment ago: so
+        // here it shows only at the sign-in address, where the list is emptied and the record is published.
+        await takingBack.reload();
+        await takingBack.locator("#sites li[data-site]").first().waitFor({ timeout: 30_000 });
+        await takingBack.locator("#all").click();
+        await takingBack.locator("#said", { hasText: "Every site is taken back" }).waitFor({ timeout: 30_000 });
+        expect(await takingBack.locator("#sites li").count()).toBe(0);
+        await takingBack.close();
+        expect(await ask({ t: "lock" })).toMatchObject({ unlocked: false });
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
 
         // With the lock on (§SW12), the window asks for it before anything is handed over, and nothing is kept
         // for the site whatever is ticked: a key at rest in a site's storage is one the lock would not cover.

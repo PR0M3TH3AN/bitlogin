@@ -45,7 +45,13 @@ export interface EmbeddedSignerHandle {
   stop(): void;
 }
 
-export function startEmbeddedSigner(): EmbeddedSignerHandle {
+export interface EmbeddedSignerOptions {
+  /** Relays other than BitLogin's own list. The live page names none. */
+  vaultRelays?: string[];
+  discoveryRelays?: string[];
+}
+
+export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): EmbeddedSignerHandle {
   if (typeof window === "undefined" || window.parent === window) return { embedded: false, stop() {} };
   const me = location.origin;
   /** The site this page is embedded in: the browser's word for it. */
@@ -81,7 +87,33 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   let asking: { nonce: string; from: MessageEventSource } | null = null;
 
   // Never restore(): this origin's own session is not the asking site's to use.
-  const load = async (): Promise<HeadlessSigner> => (headless ??= await createHeadlessSigner());
+  const load = async (): Promise<HeadlessSigner> => (headless ??= await createHeadlessSigner(options));
+  /** No longer unlocked, with nothing forgotten: the grant is gone already (taken back), or is to be kept (too
+   *  long unchecked, and no relay answered). */
+  const drop = () => {
+    const held = headless;
+    headless = null;
+    pubkey = null;
+    name = null;
+    profile = null;
+    until = 0;
+    remembered = false;
+    app = null;
+    held?.destroy();
+  };
+  /**
+   * Ask the user's relays whether this site was taken back (docs/take-back.md). The worker asks at most once a
+   * day, and says what it found. Taken back, or too long unchecked with no relay answering: this stops signing,
+   * and the site is told only that it is locked.
+   */
+  const checkTakenBack = async (): Promise<void> => {
+    const held = headless;
+    if (!held || !pubkey || !remembered || !site) return;
+    const found = await held.checkTakenBack(site).catch(() => "ok" as const);
+    if (found === "ok" || headless !== held) return;
+    drop();
+    say(state());
+  };
   /** Lock: the site is forgotten, and the key goes with the worker that held it. */
   const lock = () => {
     const held = headless;
@@ -115,6 +147,9 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
         app = kept.permissions ?? null;
         if (app) gates = appGates(kept.signed, kept.signedSensitive);
         else gate = createSignGate(SIGN_LIMITS, kept.signed);
+        // Too long unchecked: the answer waits for the check. Otherwise the check is made behind the answer.
+        if (kept.check === "overdue") await checkTakenBack();
+        else if (kept.check === "due") void checkTakenBack();
         passGate = createSignGate(passLimits, kept.signedPass);
       } catch {
         /* nothing kept, or no storage here: the user is asked, as before */
@@ -268,6 +303,8 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     if (e.origin === me && e.source !== window) void fromWindow(e);
   };
   window.addEventListener("message", onMessage);
+  // While the page stays open, the worker is asked hourly whether a check is due. It is, once a day.
+  const watch = setInterval(() => void checkTakenBack(), 3_600_000);
   // Said to the page that embeds this, where the browser says which page that is: it is here. Nothing is ever sent
   // to an address this doesn't know. Where the browser doesn't say (no ancestorOrigins), nothing is said: the site
   // asks "state" once the frame has loaded, and the answer goes to the address that question came from.
@@ -281,6 +318,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   return {
     embedded: true,
     stop() {
+      clearInterval(watch);
       window.removeEventListener("message", onMessage);
       lock();
     }

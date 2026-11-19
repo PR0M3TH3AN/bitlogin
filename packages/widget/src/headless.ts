@@ -78,7 +78,18 @@ export interface HeadlessSigner {
    * next hand-off by the worker. Resolves null when there is none, or no
    * relay answered. Refused in a session that arrived by a hand-off.
    */
-  loadProfile(): Promise<Profile | null>;
+  loadProfile(options?: { profile?: boolean }): Promise<Profile | null>;
+  /**
+   * At the sign-in address: take a site back, or every site
+   * (docs/take-back.md). Publishes the record every embedded signer obeys.
+   * `ok` false means nothing was taken back.
+   */
+  takeBack(what: { site: string } | { all: true }): Promise<{ ok: boolean; accepted: number; of: number }>;
+  /**
+   * In the embedded signer: ask the user's relays whether this site was
+   * taken back, if it is time to. "ended" means the grant is gone.
+   */
+  checkTakenBack(site: string): Promise<"ok" | "ended" | "stale">;
   /**
    * In a session that arrived by a hand-off for a site that declared no
    * permissions: a room pass (NSWP kind 27300) for that site, naming the
@@ -119,7 +130,7 @@ export interface HeadlessSigner {
    */
   restoreSignerGrant(
     site: string
-  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
+  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
@@ -197,9 +208,16 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       pubkey = res.ok && res.everydayPublicKey ? res.everydayPublicKey : null;
       return { ok: res.ok, left: res.left, removed: res.removed };
     },
-    async loadProfile() {
+    async loadProfile(options = {}) {
       await requirePubkey();
-      return (await client.loadProfile()).profile ?? null;
+      return (await client.loadProfile(options)).profile ?? null;
+    },
+    async takeBack(what) {
+      await requirePubkey();
+      return client.takeBack(what);
+    },
+    async checkTakenBack(site) {
+      return (await client.signerCheck({ site })).state;
     },
     async roomPass(sessionKey) {
       return client.roomPass({ session: sessionKey });
@@ -235,6 +253,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         ...(res.profile ? { profile: res.profile } : {}),
         signed: res.signed ?? [],
         ...(res.signedPass ? { signedPass: res.signedPass } : {}),
+        ...(res.check ? { check: res.check } : {}),
         ...(res.permissions ? { permissions: res.permissions, signedSensitive: res.signedSensitive ?? [] } : {})
       };
     },

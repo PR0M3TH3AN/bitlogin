@@ -158,6 +158,13 @@ the version an application's permissions will need (§SW9).
 
 - The embedded signer's page, and only that page, may be framed by other
   sites. It must have no interface.
+- **The embedded signer's page may contact relays, over TLS, and nothing
+  else but its own address** (`connect-src 'self' wss:`). Until 2026-11-19
+  it could contact only its own address. The owner opened it so that a
+  signer can find out whether its site was taken back
+  (`docs/take-back.md`, which says what that costs). It is the worker that
+  connects, to ask two questions about the user's own key; nothing is
+  published from this page.
 - The window's page must keep its link to the page that opened it (no
   `Cross-Origin-Opener-Policy: same-origin` on that one page).
 - Every other page keeps `frame-ancestors 'none'` and the rest of the
@@ -691,7 +698,9 @@ place: their own signed profile (kind 0).
   picture only at an `https` address with no credentials, at most 300
   characters; a line about them of at most 280.
 - It is sealed into the hand-off with the key, and kept with the site's
-  grant. The embedded signer asks no relay anything, then or later.
+  grant. The embedded signer does not fetch it, then or later. (What it
+  does ask relays, since `docs/take-back.md`: whether its site was taken
+  back, and where the user writes.)
 - The world never supplies it and never fetches it. A world still asks no
   relay about its visitors.
 - If no relay answers within a few seconds, the site is handed the key
@@ -762,9 +771,10 @@ when it ends, and whether it is remembered or was for one visit. The record
 is written by the window at Allow, in the sign-in address's own storage. It
 holds no key and lets nothing sign.
 
-**Not possible from that page, and said on it:**
+**Not possible from that page by itself** (see the end of this section
+for what was built to get round the first):
 
-- **Switching a site off.** What lets a site sign is the grant the embedded
+- **Switching a site off at once.** What lets a site sign is the grant the embedded
   signer keeps (§SW11), in storage a browser walls off by the site the
   signer is embedded in. No page of the sign-in address can read or remove
   it. A site is stopped by signing out at that site, by its date, or by
@@ -774,9 +784,10 @@ holds no key and lets nothing sign.
 
 "Remove from this list" takes a line off the page and stops nothing.
 
-**What a real "remove" would need.** The owner asked for the first of
-these to be designed (2026-11-19): it is `docs/take-back.md`, a design and
-not built. Two ways, each the owner's to choose:
+**A real "remove" is built on `beta`** (2026-11-19): `docs/take-back.md`.
+"Take it back" and "Sign out of every site" on this page publish a record
+that every embedded signer reads and obeys. It is not instant, and the page
+says so. What follows is how the choice was put:
 
 1. **A record on relays that every signer checks.** The sign-in address
    publishes "this site is taken back"; the embedded signer reads it when

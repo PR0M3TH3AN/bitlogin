@@ -2,6 +2,7 @@
 // read from this origin's own storage. Everything a site supplied is written as text, never as markup.
 import { describeAllowed, describePermissions, loadAllowed, removeAllowed, saveAllowed } from "../vendor/bitlogin/bitlogin-window.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
+import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, text, className) => {
@@ -14,6 +15,47 @@ const day = (seconds) => new Date(seconds * 1000).toLocaleString(undefined, { da
 const shortKey = (hex) => `${hex.slice(0, 8)}…${hex.slice(-4)}`;
 
 const me = await readCachedSession().catch(() => null);
+
+const say = (text) => {
+  $("said").textContent = text;
+  $("said").hidden = !text;
+};
+/** Relays other than BitLogin's own list, where the page names them. The live page names none. */
+const relayList = (value) => (value || "").split(",").map((url) => url.trim()).filter(Boolean);
+
+/**
+ * Publish the record that takes a site back, or every site (docs/take-back.md). It is signed in BitLogin's
+ * worker, by the account signed in here. Resolves true only when enough relays accepted it to be found.
+ */
+const publish = async (what, pubkey) => {
+  let session = null;
+  try {
+    session = await createHeadlessSigner({
+      vaultRelays: relayList(document.documentElement.dataset.vaultRelays),
+      discoveryRelays: relayList(document.documentElement.dataset.discoveryRelays)
+    });
+    const restored = await session.restore();
+    if (!restored) {
+      say("Sign in on your account page first, and unlock BitLogin if you have a lock on. Nothing was taken back.");
+      return false;
+    }
+    if (pubkey && restored.pubkey !== pubkey) {
+      say("That site was allowed as another account. Sign in as that account to take it back. Nothing was taken back.");
+      return false;
+    }
+    const result = await session.takeBack(what);
+    if (!result.ok) {
+      say(`Only ${result.accepted} of ${result.of} relays accepted it, which is not enough to rely on. Nothing was taken back. Try again, or open the site and sign out there.`);
+      return false;
+    }
+    return true;
+  } catch {
+    say("That didn't work, and nothing was taken back. Open the site and sign out there.");
+    return false;
+  } finally {
+    session?.destroy();
+  }
+};
 
 const draw = () => {
   const now = Date.now() / 1000;
@@ -45,9 +87,18 @@ const draw = () => {
         open.rel = "noopener noreferrer";
         row.append(open);
       }
-      const remove = el("button", "Remove from this list", "btn secondary");
+      const remove = el("button", words.ended ? "Remove from this list" : "Take it back", "btn secondary");
       remove.type = "button";
-      remove.addEventListener("click", () => {
+      remove.addEventListener("click", async () => {
+        if (!words.ended) {
+          remove.disabled = true;
+          say("Taking it back.");
+          if (!(await publish({ site: entry.site }, entry.pubkey))) {
+            remove.disabled = false;
+            return;
+          }
+          say(`Taken back: ${entry.site}. It stops when its signer next checks, usually within a day. To stop it this minute, open it and sign out there.`);
+        }
         saveAllowed(removeAllowed(loadAllowed(Date.now() / 1000), entry.site, entry.pubkey));
         draw();
       });
@@ -58,3 +109,15 @@ const draw = () => {
   );
 };
 draw();
+
+$("all").addEventListener("click", async () => {
+  $("all").disabled = true;
+  say("Signing out of every site.");
+  if (await publish({ all: true })) {
+    // Everything on the list was allowed before now, so all of it is taken back.
+    saveAllowed([]);
+    draw();
+    say("Every site is taken back, on every device. Each stops when its signer next checks, usually within a day.");
+  }
+  $("all").disabled = false;
+});

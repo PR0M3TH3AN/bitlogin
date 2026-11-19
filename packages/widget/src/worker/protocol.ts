@@ -190,6 +190,30 @@ export interface HandoffExportPayload {
   remember?: boolean;
 }
 
+// ---- Taking a site back (docs/take-back.md) ----
+
+export interface LoadProfilePayload {
+  /** False to fetch only the relay list: for an application, which is not told who someone is. */
+  profile?: boolean;
+}
+export interface TakeBackPayload {
+  /** The site to take back. */
+  site?: string;
+  /** Every site, on every device: "sign out of every site". */
+  all?: boolean;
+}
+export interface TakeBackResult {
+  /** Enough relays accepted the record for it to be found. False: nothing was taken back. */
+  ok: boolean;
+  accepted: number;
+  of: number;
+}
+export interface SignerCheckResult {
+  /** "ok": carry on. "ended": the site was taken back; the grant is gone. "stale": too long unchecked, and no
+   *  relay answered: locked until one does. */
+  state: "ok" | "ended" | "stale";
+}
+
 export interface HandoffSealed {
   senderPublicKey: string;
   payload: string;
@@ -257,6 +281,8 @@ export interface SignerRestoreResult {
   profile?: Profile;
   signed?: number[];
   signedPass?: number[];
+  /** Whether the take-back check is fresh, due behind the answer, or overdue and to be made before answering. */
+  check?: "fresh" | "due" | "overdue";
   permissions?: AppPermissions;
   signedSensitive?: number[];
 }
@@ -443,7 +469,9 @@ export type WorkerActionMap = {
   appEncrypt: [AppCryptPayload, { text: string }];
   appDecrypt: [AppCryptPayload, { text: string }];
   appDecryptEvent: [AppDecryptEventPayload, { text: string }];
-  loadProfile: [Record<string, never>, { profile?: Profile }];
+  loadProfile: [LoadProfilePayload, { profile?: Profile; relays?: string[] }];
+  takeBack: [TakeBackPayload, TakeBackResult];
+  signerCheck: [SignerSitePayload, SignerCheckResult];
   lockStatus: [Record<string, never>, LockStatusResult];
   lockEnable: [LockPinPayload, LockStatusResult];
   lockSetDevice: [LockDevicePayload, LockStatusResult];

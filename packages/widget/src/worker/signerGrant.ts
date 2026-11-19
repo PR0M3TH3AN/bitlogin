@@ -17,6 +17,7 @@
 import type { KeyValueStore } from "@bitlogin/core/storage";
 import { APP_LIMITS, knownAppName, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
+import { cleanRelays } from "../embedded/takeBack.js";
 
 const GRANT_PREFIX = "bitlogin:signer-grant:v1:";
 const GRANT_DEVICE_KEY = "bitlogin:signer-grant-device-key:v1";
@@ -50,7 +51,18 @@ export interface SignerGrant {
   signedSensitive?: number[];
   /** When the last room passes for this site were made, counted apart from notes (§SW16). */
   signedPass?: number[];
+  /** When it was allowed, in seconds (docs/take-back.md). Absent in a grant kept before this was recorded. */
+  at?: number;
+  /** The user's own write relays, where a signer looks for their take-back record. */
+  relays?: string[];
+  /** When their relays were last asked, and answered, whether this site was taken back. In seconds. */
+  checkedAt?: number;
+  /** The date of the newest take-back record seen: an older one served later is not believed. */
+  seenAt?: number;
 }
+
+/** When a grant was made: what it says, or, for one kept before that was recorded, the start of its life. */
+export const grantedAt = (grant: SignerGrant): number => grant.at ?? grant.until - keepSecFor(grant.site);
 
 /** How long a site may be kept from now, in seconds: by its address, never by anything it says of itself. */
 export const keepSecFor = (site: string): number => (knownAppName(site) !== null ? GRANT_LIMITS.keepSec : GRANT_LIMITS.unknownKeepSec);
@@ -109,6 +121,10 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       // An application's public signatures are counted up to its own hourly limit, so more of them are kept.
       signed: grant.signed.filter((t) => Number.isFinite(t)).slice(-(grant.permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept)),
       ...(grant.permissions ? { permissions: grant.permissions } : {}),
+      ...(typeof grant.at === "number" ? { at: Math.floor(grant.at) } : {}),
+      ...(cleanRelays(grant.relays).length ? { relays: cleanRelays(grant.relays) } : {}),
+      ...(typeof grant.checkedAt === "number" ? { checkedAt: Math.floor(grant.checkedAt) } : {}),
+      ...(typeof grant.seenAt === "number" ? { seenAt: Math.floor(grant.seenAt) } : {}),
       ...(grant.signedPass?.length ? { signedPass: grant.signedPass.filter((t) => Number.isFinite(t)).slice(-GRANT_LIMITS.passKept) } : {}),
       ...(grant.permissions && grant.signedSensitive
         ? { signedSensitive: grant.signedSensitive.filter((t) => Number.isFinite(t)).slice(-APP_LIMITS.sensitive.hourly) }
@@ -134,7 +150,8 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown };
+    const when = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
     const profile = readProfile(p.profile);
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
     // again, and sees what is asked. It is never restored as a narrower or a wider one.
@@ -158,6 +175,10 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       ...(profile ? { profile } : {}),
       signed: times(p.signed, permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept),
       ...(times(p.signedPass, GRANT_LIMITS.passKept).length ? { signedPass: times(p.signedPass, GRANT_LIMITS.passKept) } : {}),
+      ...(when(p.at) ? { at: when(p.at)! } : {}),
+      ...(cleanRelays(p.relays).length ? { relays: cleanRelays(p.relays) } : {}),
+      ...(when(p.checkedAt) ? { checkedAt: when(p.checkedAt)! } : {}),
+      ...(when(p.seenAt) ? { seenAt: when(p.seenAt)! } : {}),
       ...(permissions ? { permissions, signedSensitive: times(p.signedSensitive, APP_LIMITS.sensitive.hourly) } : {})
     };
   } catch {
