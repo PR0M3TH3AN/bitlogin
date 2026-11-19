@@ -526,13 +526,37 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow").click();
         await page.waitForTimeout(400);
         expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+        // BitLogin does not know this address, so it is allowed for this visit unless "remember" is ticked. It
+        // is never ticked for them, and the window says which it will be.
+        expect(await popup.locator("#remember-row").isVisible()).toBe(true);
+        expect(await popup.locator("#remember").isChecked()).toBe(false);
+        expect(await popup.locator("#lasts").textContent()).toContain("for this visit");
         await popup.waitForTimeout(800);
         await popup.locator("#allow").click();
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        const visit = await ask({ t: "state" });
+        expect(visit).toMatchObject({ t: "state", unlocked: true, pubkey: me, remembered: false });
+        expect(visit.until - Date.now() / 1000).toBeLessThanOrEqual(12 * 3600);
+        expect((await ask({ t: "sign", event: { kind: 1, content: "on a visit", tags: [] } })).t).toBe("signed");
+        // The page is loaded again: the visit is over, nothing was kept, and nothing is signed.
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await ask({ t: "state" })).toMatchObject({ t: "state", unlocked: false });
+        expect((await ask({ t: "sign", event: { kind: 1, content: "after the visit", tags: [] } })).t).toBe("refused");
+
+        // Asked again, and this time told to remember. The first window closes itself a moment after Allow.
+        if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 10_000 }).catch(() => popup.close());
+        const [popupAgain] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await popupAgain.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+        await popupAgain.locator("#remember").check();
+        expect(await popupAgain.locator("#lasts").textContent()).toContain("30 days");
+        await popupAgain.waitForTimeout(1000);
+        await popupAgain.locator("#allow").click();
         await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
 
         // Unlocked, as the account that is signed in at the sign-in address.
         const state = await ask({ t: "state" });
-        expect(state).toMatchObject({ t: "state", unlocked: true, pubkey: me });
+        expect(state).toMatchObject({ t: "state", unlocked: true, pubkey: me, remembered: true });
         // Who they are: from the newest profile their own key signed, tidied. Not the older one, not the forged one.
         expect({ name: state.name, picture: state.picture, about: state.about }).toEqual({
           name: "Ada Lovelace",
@@ -569,24 +593,42 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await page.reload();
         await page.waitForFunction(() => typeof (window as any).ask === "function");
         const afterReload = await ask({ t: "state" });
-        expect(afterReload).toMatchObject({ t: "state", unlocked: true, pubkey: me });
+        expect(afterReload).toMatchObject({ t: "state", unlocked: true, pubkey: me, remembered: true });
         expect(afterReload.until - Date.now() / 1000).toBeGreaterThan(29 * 24 * 3600);
         // No window was opened. (Not "the same number": the sign-in window may only now be closing.)
         expect(context.pages().length).toBeLessThanOrEqual(pagesBefore);
         const again = await ask({ t: "sign", event: { kind: 1, content: "after a reload", tags: [] } });
         expect(again.event).toMatchObject({ kind: 1, content: "after a reload", pubkey: me, tags: [["nswp:world", site]] });
         expect(afterReload).toMatchObject({ name: "Ada Lovelace", picture: "https://pictures.example/ada.png", about: "Line one line two" });
-        // Loading the page again is not a way round the count: six a minute, with the pass and the one signed
-        // before. A pass is counted like a signature.
+        // Loading the page again is not a way round the count: three a minute, and that was the third, with the
+        // pass and the one signed before. A pass is counted like a signature.
         let more = 0;
-        for (let i = 0; i < 8; i++) if ((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t === "signed") more++;
-        expect(more).toBe(3);
+        for (let i = 0; i < 4; i++) if ((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t === "signed") more++;
+        expect(more).toBe(0);
         expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
         await page.reload();
         await page.waitForFunction(() => typeof (window as any).ask === "function");
         expect((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("refused");
         // What is kept is not the key in the clear, and the site still can't read any of it.
         expect(await page.evaluate(() => (window as any).tryToRead().frame)).toBe("refused: SecurityError");
+
+        // The sign-in address's own list (§SW18) has the site once, as it was last allowed: remembered.
+        const listing = await context.newPage();
+        await listing.goto(`${origin}/sites/index.html`);
+        const row = listing.locator("#sites li[data-site]");
+        await row.first().waitFor({ timeout: 30_000 });
+        expect(await row.count()).toBe(1);
+        expect(await row.getAttribute("data-site")).toBe(site);
+        expect(await row.locator(".connect-site").textContent()).toBe(site);
+        expect(await row.textContent()).toContain("Remembered on this device");
+        // Its link to the site gives the site no way back to this page.
+        expect(await row.locator("a").getAttribute("rel")).toBe("noopener noreferrer");
+        await row.locator("button").click();
+        expect(await listing.locator("#sites li").count()).toBe(0);
+        expect(await listing.locator("#empty").isVisible()).toBe(true);
+        // Taking a line off the list stops nothing, as the page says: the site is still allowed.
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true });
+        await listing.close();
 
         // Lock: nothing more is signed, and the site is forgotten, across a reload too.
         expect(await ask({ t: "lock" })).toMatchObject({ t: "state", unlocked: false });
@@ -872,6 +914,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           "read its own saved data"
         ]);
         expect(await popup.locator("#app-sensitive li").allTextContents()).toEqual(["change your profile", "delete what you have posted"]);
+        // An application BitLogin does not know is remembered only if they say so.
+        expect(await popup.locator("#app-lasts").textContent()).toContain("for this visit");
+        await popup.locator("#remember-app").check();
         await popup.waitForTimeout(1000);
         await popup.locator("#allow-app").click();
         expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
@@ -907,7 +952,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         // And it may not encrypt to a stranger: it asked for no peers and no messages.
         expect((await attempt("nip44.encrypt", "c".repeat(64), "hello")).ok).toBe(false);
 
-        // In the background, at an application's pace: forty proofs in a row, where a world gets six a minute.
+        // In the background, at an application's pace: forty proofs in a row, where a world gets three a minute.
         const burst = await page.evaluate(async (u) => {
           let ok = 0;
           for (let i = 0; i < 40; i++) if ((await (window as any).attempt("signEvent", { kind: 27235, content: "", tags: [["u", u], ["method", "GET"]] })).ok) ok++;

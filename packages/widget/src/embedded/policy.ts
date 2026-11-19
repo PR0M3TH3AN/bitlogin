@@ -23,13 +23,15 @@ export const SIGN_LIMITS = {
   tags: 60,
   tagItems: 8,
   tagChars: 400,
-  /** How long a site stays allowed, in seconds: thirty days from Allow, unless the user signs out of it sooner. */
+  /** How long a remembered site stays allowed, in seconds: thirty days from Allow, unless the user signs out of it sooner. */
   grantSec: 30 * 24 * 3600,
-  /** No more than this many signatures for one site in `perMs`. */
-  burst: 6,
+  /** How long a site that is not remembered stays allowed while its page stays open, in seconds (§SW11). */
+  visitSec: 12 * 3600,
+  /** No more than this many signatures for one site in `perMs`. The same numbers as NSWP's own (kit 0.28.0). */
+  burst: 3,
   perMs: 60_000,
   /** And no more than this many in an hour. */
-  hourly: 60
+  hourly: 20
 } as const;
 
 /** "ordinary": allowed once the user has unlocked the signer for that site. "careful": only with their say each
@@ -155,7 +157,7 @@ export type SignerRequest =
 
 export type SignerReply =
   | { t: "ready" }
-  | { t: "state"; id?: string; unlocked: boolean; pubkey?: string; name?: string; picture?: string; about?: string; until?: number; permissions?: AppPermissions }
+  | { t: "state"; id?: string; unlocked: boolean; pubkey?: string; name?: string; picture?: string; about?: string; until?: number; remembered?: boolean; permissions?: AppPermissions }
   | { t: "signed"; id: string; event: NostrEvent }
   | { t: "text"; id: string; text: string }
   | { t: "refused"; id: string };

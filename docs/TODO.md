@@ -173,27 +173,21 @@ that moved.
   - [ ] A profile is as it was when the site was allowed: it is not fetched
     again until the user is next asked. Decide whether that is fresh enough.
 
-- [ ] **13. Four tightenings relayed by the NSWP session** (2026-11-19; the
-  owner told that session to work them out with BitLogin). None is built.
-  Each waits on the owner's word here.
-  - [ ] **Slower limits for a world:** 3 a minute and 20 an hour, where
-    `SIGN_LIMITS` has 6 and 60. NSWP is changing its protocol text and its
-    own `SIGN_LIMITS` to 3 and 20 in kit 0.28.0, so the two should move
-    together. A room pass counts against it. Applications' limits (§SW9.6)
-    are separate and not part of this.
-  - [ ] **Remember by trust:** a site BitLogin knows (`KNOWN_APPS`) is
-    remembered 30 days as now; an unknown site is allowed for this visit
-    only, unless the visitor ticks "remember" in the window. Changes §SW11.
-    To settle: every world is unknown today, so every world would ask on
-    each visit unless ticked; and in a headset nothing can ask (see below),
-    so a world meant for VR needs the tick made on the flat browser first.
-  - [ ] **The revoke list first** among what is planned: item 7 above, with
-    when each site last signed and how many times. Bounded by what §SW11
-    says the sign-in address can see of grants kept in another site's
-    partition.
-  - [ ] **Device unlock before the PIN:** item 3 above, with the browser's
-    own user verification first and the PIN as the fallback, a few tries
-    before it signs out, both off by default, and a "Lock now".
+- [ ] **13. Four tightenings relayed by the NSWP session** (2026-11-19).
+  The owner said yes to all four the same day.
+  - [x] **Slower limits for a world:** 3 a minute and 20 an hour, the same
+    as NSWP's kit 0.28.0. A room pass counts. On `beta`.
+  - [x] **Remember by trust (§SW11):** a site on `KNOWN_APPS` is remembered
+    30 days; any other is allowed for the visit unless "remember" is ticked
+    in the window. Decided and enforced in the workers. On `beta`.
+  - [x] **The list of sites allowed (§SW18):** `/sites/` at the sign-in
+    address. On `beta`. It cannot switch a site off or show how often one
+    signed: a browser does not let it.
+  - [ ] **OWNER'S DECISION: a real "remove".** Either the embedded signer is
+    allowed to read a take-back record from relays (it lifts §SW6's rule
+    that the page holding the key contacts nothing), or memory is made
+    shorter. §SW18 has both.
+  - [ ] **Device unlock before the PIN (§SW12).**
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound

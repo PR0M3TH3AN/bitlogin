@@ -186,6 +186,8 @@ export interface HandoffExportPayload {
   app?: { site: string; permissions: unknown };
   /** The site the hand-off is for. Sealed with the key, so the worker that opens it knows which site it serves. */
   site?: string;
+  /** The user ticked "remember" in the window. A site BitLogin knows is remembered whatever this says. */
+  remember?: boolean;
 }
 
 export interface HandoffSealed {
@@ -201,6 +203,8 @@ export interface HandoffAcceptResult {
   site?: string;
   /** The person's own signed profile, as the sending worker fetched and checked it. */
   profile?: Profile;
+  /** Whether the hand-off may be kept for the site across page loads (§SW11). */
+  remember?: boolean;
 }
 
 /** A world's session public key. Everything else in a room pass is the worker's own (§SW16). */

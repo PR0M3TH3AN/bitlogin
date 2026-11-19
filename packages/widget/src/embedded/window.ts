@@ -15,6 +15,8 @@ import { handoffMessage, readHandoffMessage } from "./policy.js";
 import { describePermissions, knownAppName, mayHold, type AppPermissions, type PermissionWords } from "./permissions.js";
 
 export { describePermissions, knownAppName, type AppPermissions, type PermissionWords };
+export { describeAllowed, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
+export { SIGN_LIMITS } from "./policy.js";
 
 export interface FoundSigner {
   /** The site the signer is embedded in, as the browser reported it to the signer. Show this, exactly. */
@@ -27,10 +29,14 @@ export interface FoundSigner {
   readonly wants: AppPermissions | null;
   /**
    * Hand the signer the session's key, sealed inside the workers. Call it
-   * only after the user pressed Allow on a page that showed `site`. Resolves
+   * only after the user pressed Allow on a page that showed `site`. `remember`
+   * is whether they ticked it; a known site is remembered either way. Resolves
    * true once the signer says it is unlocked.
    */
-  grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string): Promise<boolean>;
+  grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string, remember?: boolean): Promise<boolean>;
+  /** Whether BitLogin knows this address. A known site is remembered for thirty days; any other only if the user
+   *  ticks "remember" (§SW11). */
+  readonly known: boolean;
 }
 
 export interface FindSignerOptions {
@@ -89,9 +95,10 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       resolve({
         site: world,
         wants,
-        async grant(session, name) {
+        known: knownAppName(world) !== null,
+        async grant(session, name, remember) {
           // What is sealed is exactly what this page was given to show: the set, for the site the browser named.
-          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world);
+          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world, remember === true);
           const answered = new Promise<boolean>((done) => {
             onDone = done;
             setTimeout(() => done(false), 8000);

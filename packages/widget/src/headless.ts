@@ -60,7 +60,9 @@ export interface HeadlessSigner {
     recipientPublicKey: string,
     app?: { site: string; permissions: unknown },
     /** The site the hand-off is for, as the signer reported it. Sealed with the key. */
-    site?: string
+    site?: string,
+    /** The user ticked "remember" in the window. A site BitLogin knows is remembered whatever this says. */
+    remember?: boolean
   ): Promise<{ senderPublicKey: string; payload: string }>;
   /**
    * At the sign-in address, before a hand-off: fetch this account's own
@@ -82,7 +84,7 @@ export interface HeadlessSigner {
    */
   acceptHandoff(
     sealed: { senderPublicKey: string; payload: string }
-  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile }>;
+  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean }>;
   /**
    * For a session an application was approved for (docs/sign-in-window.md
    * §SW9.5). Each rejects unless the session carries a permission set that
@@ -175,9 +177,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async beginHandoff() {
       return (await client.handoffBegin()).recipientPublicKey;
     },
-    async exportHandoff(recipientPublicKey, app, site) {
+    async exportHandoff(recipientPublicKey, app, site, remember) {
       await requirePubkey();
-      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}), ...(site ? { site } : {}) });
+      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}), ...(site ? { site } : {}), ...(remember ? { remember: true } : {}) });
     },
     async loadProfile() {
       await requirePubkey();
@@ -189,7 +191,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async acceptHandoff(sealed) {
       const res = await client.handoffAccept(sealed);
       pubkey = res.everydayPublicKey;
-      return { pubkey, ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}) };
+      return { pubkey, ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}) };
     },
     async appEncrypt(peerPublicKey, text, scheme = "nip44") {
       return (await client.appEncrypt({ peerPublicKey, text, scheme })).text;

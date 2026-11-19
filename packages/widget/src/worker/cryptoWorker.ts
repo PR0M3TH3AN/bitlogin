@@ -120,6 +120,9 @@ interface SessionState {
   /** The person's own signed profile (kind 0), fetched and checked here. In a full session it is what
    *  `loadProfile` found; in a signer-only one it is what the hand-off or the grant carried. */
   profile: Profile | null;
+  /** For a signer-only session: whether it may be kept for its site across page loads (§SW11). True for one
+   *  taken up from a kept grant. False for a site allowed for one visit: nothing of it is ever written down. */
+  remember: boolean;
 }
 
 const session: SessionState = {
@@ -137,7 +140,8 @@ const session: SessionState = {
   signerOnly: false,
   app: null,
   site: null,
-  profile: null
+  profile: null,
+  remember: false
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
@@ -190,6 +194,7 @@ function clearSession(): void {
   session.app = null;
   session.site = null;
   session.profile = null;
+  session.remember = false;
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
@@ -425,7 +430,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         // The profile is this worker's own finding (loadProfile), never a page's word.
         return sealHandoff(everydayPrivateKey, p.recipientPublicKey, sender, p.app, {
           ...(p.site !== undefined ? { site: p.site } : {}),
-          ...(session.profile ? { profile: session.profile } : {})
+          ...(session.profile ? { profile: session.profile } : {}),
+          ...(p.remember === true ? { remember: true } : {})
         });
       } finally {
         wipe(sender);
@@ -444,6 +450,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!session.signerOnly) throw new Error("Only a signer-only session can be remembered for a site.");
       const p = payload as SignerKeepPayload;
       const now = Date.now() / 1000;
+      // Allowed for this visit only: nothing is kept, whatever the page asks.
+      if (!session.remember) return { kept: false };
       // An application's grant is for the site its hand-off was sealed for, and no other.
       if ((session.app && session.app.site !== p.site) || (session.site && session.site !== p.site)) throw new Error("This hand-off was for another site.");
       return {
@@ -476,6 +484,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.app = grant.permissions ? { site: grant.site, permissions: grant.permissions } : null;
       session.site = grant.site;
       session.profile = grant.profile ?? null;
+      session.remember = true;
       return {
         restored: true,
         everydayPublicKey: session.signer.getPublicKey(),
@@ -527,11 +536,13 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.app = opened.app;
       session.site = opened.site;
       session.profile = opened.profile;
+      session.remember = opened.remember;
       return {
         everydayPublicKey: session.signer.getPublicKey(),
         ...(opened.app ? { app: opened.app } : {}),
         ...(opened.site ? { site: opened.site } : {}),
-        ...(opened.profile ? { profile: opened.profile } : {})
+        ...(opened.profile ? { profile: opened.profile } : {}),
+        ...(opened.remember ? { remember: true } : {})
       };
     }
 

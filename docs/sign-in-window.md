@@ -125,7 +125,7 @@ Unlocking is not agreeing to everything. `embedded/policy.ts` is the list.
 - **The signer finishes the event.** It sets `created_at` itself and adds
   `["nswp:world", "<the site's origin>"]`, dropping any such tag the site
   wrote. What is signed for a site says which site asked.
-- **Limits:** 8,000 characters, 60 tags; six signatures a minute and sixty
+- **Limits:** 8,000 characters, 60 tags; three signatures a minute and twenty
   an hour for one site.
 - **A refusal never says why.** Locked, over the limit, the wrong kind and
   a malformed request all answer `refused`, with the request's id and
@@ -461,9 +461,23 @@ So the signer remembers. When a hand-off is accepted, the worker keeps a
 - **For one site.** The record is filed under the site's origin and names
   it inside; one moved under another site's name opens nothing. Another
   address of the same site finds nothing.
+- **Only for a site BitLogin knows, or one the user ticked "remember"
+  for** (owner, 2026-11-19). The window shows the box for an address that
+  is not on BitLogin's list, and never ticks it for them. Any other site is
+  allowed for the visit: the key is held in memory, nothing is written
+  down, and it ends when the site's page is closed or loaded again, and
+  after twelve hours at the latest. Which it is to be is decided in the
+  worker that seals the hand-off, from the site's address, and travels
+  inside the seal; the worker that opens it keeps nothing unless the seal
+  says so. The signer's `state` reply says `remembered: true` or `false`.
+- **What this costs a world:** every world is an unknown address today, so
+  each asks on every visit unless the box was ticked. In a headset nothing
+  can ask, so a world meant for a headset needs the box ticked on a flat
+  browser first.
 - **Thirty days from Allow,** never longer whatever is asked, and removed
   when it is past its date.
-- **The count goes with it.** Six signatures a minute and sixty an hour are
+- **The count goes with it.** Three signatures a minute and twenty an hour
+  (NSWP's own numbers, from its kit 0.28.0; they were six and sixty) are
   counted across page loads, so loading the page again is not a way round
   them.
 - **Signing out of the site forgets it.** `lock` deletes the grant.
@@ -675,7 +689,7 @@ then `name`, `picture`, `about` where the profile has them. Content empty.
 - **Refused** when the signer is locked, for an application, for a session
   key that is the identity key, for a hand-off that named no site (one made
   before this was built), and over the limit. A refusal says nothing.
-- **Counted like a signature:** six a minute and sixty an hour, with notes
+- **Counted like a signature:** three a minute and twenty an hour, with notes
   and reactions, across page loads.
 - **`sign` still refuses kind 27300.** The never-sign list is as it was.
   A pass for some other site is still BitPortal's alone to make (§SW9.4).
@@ -698,3 +712,46 @@ another.
   no frame, and offers no Allow.
 - Spending. The wallet mode in which BitLogin pays and the site never sees
   the connection is `nwc-connections.md`'s broker mode, and is not built.
+
+# SW18. The list of sites allowed (built on `beta`)
+
+Asked for by the owner on 2026-11-19: one page showing every site that can
+sign as them, when it last did and how many times, with a remove button.
+Part of that can be built, and part cannot without a decision.
+
+**Built:** a page at the sign-in address, `/sites/`. It lists every site
+Allow was pressed for from this browser: the address, the name BitLogin
+knows it by if any, which account, what it may do, when it was allowed,
+when it ends, and whether it is remembered or was for one visit. The record
+is written by the window at Allow, in the sign-in address's own storage. It
+holds no key and lets nothing sign.
+
+**Not possible from that page, and said on it:**
+
+- **Switching a site off.** What lets a site sign is the grant the embedded
+  signer keeps (§SW11), in storage a browser walls off by the site the
+  signer is embedded in. No page of the sign-in address can read or remove
+  it. A site is stopped by signing out at that site, by its date, or by
+  clearing the browser's data. The page links to the site for the first.
+- **When a site last signed, and how often.** That count is in the same
+  walled-off storage.
+
+"Remove from this list" takes a line off the page and stops nothing.
+
+**What a real "remove" would need.** Two ways, neither built, each the
+owner's to choose:
+
+1. **A record on relays that every signer checks.** The sign-in address
+   publishes "this site is taken back"; the embedded signer reads it when
+   it loads and forgets the site. It works everywhere and on every device.
+   Its cost is the one §SW6 was written to refuse: the page that holds the
+   key would have to be allowed to contact relays (`connect-src`), where
+   today it can contact nothing but its own address.
+2. **Shorter memory.** Thirty days becomes a few; a site that is used keeps
+   being asked for now and then, and one that is not falls away soon. It
+   takes nothing back at once, and costs presses.
+
+Opening the site from the list and telling its signer to forget was looked
+at and left out: the opened site would hold a link back to a page of the
+sign-in address, and could send that page somewhere else.
+

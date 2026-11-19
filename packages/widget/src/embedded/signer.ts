@@ -57,6 +57,8 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   let profile: Profile | null = null;
   /** When what the user allowed stops, in seconds. */
   let until = 0;
+  /** Whether this site is kept across page loads, or allowed for this visit only (§SW11). */
+  let remembered = false;
   let gate: SignGate = createSignGate();
   /** What an application was approved for (§SW9), as BitLogin's worker read it out of the sealed hand-off or the
    *  grant kept from one. Null for a site that declared nothing: a note and a reaction, as §SW5 has it. */
@@ -86,6 +88,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     name = null;
     profile = null;
     until = 0;
+    remembered = false;
     app = null;
     if (held) void (forSite ? held.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => held.destroy());
   };
@@ -105,6 +108,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
         name = kept.name ?? null;
         profile = kept.profile ?? null;
         until = kept.until;
+        remembered = true;
         app = kept.permissions ?? null;
         if (app) gates = appGates(kept.signed, kept.signedSensitive);
         else gate = createSignGate(SIGN_LIMITS, kept.signed);
@@ -121,7 +125,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       t: "state",
       ...(id ? { id } : {}),
       unlocked: !!pubkey,
-      ...(pubkey ? { pubkey, until } : {}),
+      ...(pubkey ? { pubkey, until, remembered } : {}),
       // The name in their own signed profile, where they have one; else the name the sign-in address knew them by.
       ...(pubkey && (profile?.name || name) ? { name: profile?.name || name! } : {}),
       ...(pubkey && profile?.picture ? { picture: profile.picture } : {}),
@@ -237,11 +241,13 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       gates = appGates();
       pubkey = got.pubkey;
       name = msg.name ?? null;
-      until = Math.floor(Date.now() / 1000) + SIGN_LIMITS.grantSec;
       gate = createSignGate();
-      // Remembered for this site, so the user is not asked again when its page is next loaded. Where it can't be
-      // kept (a browser that gives an embedded page no storage), it lasts as long as the page does.
-      await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false);
+      // A site BitLogin knows, or one the user ticked "remember" for, is kept, so they are not asked again when
+      // its page is next loaded. Any other is allowed for this visit: it lasts as long as the page does, and
+      // nothing is written down. So does one that can't be kept (a browser that gives an embedded page no storage).
+      until = Math.floor(Date.now() / 1000) + (got.remember ? SIGN_LIMITS.grantSec : SIGN_LIMITS.visitSec);
+      remembered = got.remember === true && (await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false));
+      if (!remembered) until = Math.min(until, Math.floor(Date.now() / 1000) + SIGN_LIMITS.visitSec);
       back({ t: "done", nonce: msg.nonce, ok: true });
     } catch {
       lock();

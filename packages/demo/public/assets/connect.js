@@ -4,7 +4,7 @@
 // BitLogin's workers, as a key that can only sign.
 //
 // This page never holds the key, and speaks only to pages of its own origin.
-import { describePermissions, findEmbeddedSigner, knownAppName } from "../vendor/bitlogin/bitlogin-window.js";
+import { describePermissions, findEmbeddedSigner, knownAppName, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -60,6 +60,23 @@ const leave = () => {
   status("You can close this window.");
 };
 
+/**
+ * How long it lasts (§SW11). A site BitLogin knows is remembered for thirty days. Any other is allowed for this
+ * visit, and remembered only if the box is ticked: it is never ticked for them.
+ */
+const lasting = (what, row, box, line) => {
+  const say = () => {
+    $(line).textContent =
+      found.known || $(box).checked
+        ? `It lasts until you sign out of that ${what}, or 30 days, on this device.`
+        : `It lasts for this visit: until that ${what}'s page is closed or loaded again. Then you are asked again.`;
+  };
+  $(row).hidden = found.known;
+  $(box).checked = false;
+  $(box).onchange = say;
+  say();
+};
+
 /** A list, written as text: nothing a site sent is ever put on this page as markup. */
 const fill = (id, lines) => {
   const list = $(id);
@@ -86,6 +103,7 @@ const askApp = () => {
   $("app-name-line").hidden = !found.wants.name || !!known;
   $("app-who").textContent = who.name || shortKey(who.npub);
   $("app-who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
+  lasting("application", "remember-app-row", "remember-app", "app-lasts");
   fill("app-ordinary", words.ordinary);
   fill("app-sensitive", words.sensitive);
   $("app-sensitive-block").hidden = words.sensitive.length === 0;
@@ -102,6 +120,7 @@ const ask = () => {
   $("site").textContent = found.site;
   $("who").textContent = who.name || shortKey(who.npub);
   $("who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
+  lasting("site", "remember-row", "remember", "lasts");
   status("A site is asking to sign notes as you. Check the address.");
   $("ask").hidden = false;
   // Allow is never given the keys unasked: a key meant for the site, pressed as this window came up, must not land on it.
@@ -130,11 +149,16 @@ const allow = async (button) => {
   try {
     session = await prepare();
     await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
-    const ok = await found.grant(session, who.name);
+    const remember = found.known || $(found.wants ? "remember-app" : "remember").checked;
+    const ok = await found.grant(session, who.name, remember);
     $("ask").hidden = true;
     $("ask-app").hidden = true;
     if (!ok) return status("That didn't work, and nothing was handed over. Close this window and try again from the site that opened it.");
-    status(found.wants ? "Done. That application can act as you, as you allowed, until you sign out of it." : "Done. That site can sign notes as you until you sign out of it.");
+    // Written down at the sign-in address, for the list of sites allowed. A record only: it lets nothing sign.
+    const at = Math.floor(Date.now() / 1000);
+    recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (remember ? SIGN_LIMITS.grantSec : SIGN_LIMITS.visitSec), remembered: remember, ...(found.wants ? { wants: found.wants } : {}) });
+    const how = remember ? "until you sign out of it" : "for this visit";
+    status(found.wants ? `Done. That application can act as you, as you allowed, ${how}.` : `Done. That site can sign notes as you ${how}.`);
     setTimeout(leave, 700);
   } catch {
     $("ask").hidden = true;

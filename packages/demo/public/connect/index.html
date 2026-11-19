@@ -25,12 +25,13 @@
     <p class="connect-small">Only allow a site you meant to visit. This is its address exactly as your browser reports it.</p>
     <p>Signing as <strong id="who"></strong><span id="who-key" class="connect-key"></span>.</p>
     <ul>
-      <li>It can post notes and reactions as you: a few a minute at most.</li>
+      <li>It can post notes and reactions as you: three a minute at most, and twenty an hour.</li>
       <li>Each one is marked with this site's address.</li>
       <li>It can tell the other people there who you are: your name, picture and the line about you from your Nostr profile. That is good at this site only, for four hours at a time.</li>
       <li>It can't read your messages, change your profile or who you follow, or touch your account or anything in it.</li>
-      <li>It lasts until you sign out of that site, or 30 days, on this device.</li>
+      <li id="lasts">It lasts until you sign out of that site, or 30 days, on this device.</li>
     </ul>
+    <label id="remember-row" class="connect-remember" hidden><input id="remember" type="checkbox" /> Remember this site on this device for 30 days</label>
     <p class="connect-small">Your key stays with BitLogin. The site never sees it, and nothing is typed there.</p>
     <div class="cta-row">
       <button id="allow" class="btn primary" type="button">Allow</button>
@@ -54,8 +55,9 @@
     <ul>
       <li>Everything it does as you is marked with its address.</li>
       <li>It can't take your key, sign in anywhere else as you, or touch your BitLogin account.</li>
-      <li>It lasts until you sign out of that application, or 30 days, on this device.</li>
+      <li id="app-lasts">It lasts until you sign out of that application, or 30 days, on this device.</li>
     </ul>
+    <label id="remember-app-row" class="connect-remember" hidden><input id="remember-app" type="checkbox" /> Remember this application on this device for 30 days</label>
     <p class="connect-small">Your key stays with BitLogin. The application never sees it, and nothing is typed there.</p>
     <div class="cta-row">
       <button id="allow-app" class="btn primary" type="button">Allow</button>

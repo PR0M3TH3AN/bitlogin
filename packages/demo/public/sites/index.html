@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<meta name="robots" content="noindex" />
+<title>BitLogin — sites you allowed</title>
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="../assets/site.css" />
+<link rel="stylesheet" href="../assets/connect.css" />
+</head>
+<body class="connect">
+
+<nav class="nav">
+  <a class="brand" href="../index.html"><img class="lockup" src="../assets/lockup.svg" alt="BitLogin" /></a>
+  <div class="links"><a href="../account.html">Your account</a></div>
+</nav>
+
+<main class="connect-main">
+  <section class="connect-card">
+    <h1>Sites you allowed to sign as you</h1>
+    <p>Every site you pressed Allow for, from this browser, at this address.</p>
+    <p id="empty" class="connect-small" hidden>None yet. A site appears here when you allow it in BitLogin's sign-in window.</p>
+    <ul id="sites" class="sites-list"></ul>
+  </section>
+
+  <section class="connect-card" style="margin-top:1rem">
+    <h1>What this page can and can't do</h1>
+    <ul>
+      <li><strong>To stop a site now, open it and sign out there.</strong> That removes what it was given, at once.</li>
+      <li>Everything here also ends by its date, and when you clear this browser's data.</li>
+      <li>This page can't switch a site off from here, and can't see how often a site signed. A browser keeps what a site was given in storage that only that site's own pages can reach, and no page of BitLogin's can look into it.</li>
+      <li>"Remove from this list" takes a line off this page. It does not stop the site.</li>
+      <li>The list is kept in this browser only. Another browser or device has its own.</li>
+    </ul>
+  </section>
+</main>
+
+<script type="module" src="../assets/sites.js"></script>
+</body>
+</html>
