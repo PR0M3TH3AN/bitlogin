@@ -12,9 +12,9 @@
  */
 import type { HeadlessSigner } from "../headless.js";
 import { handoffMessage, readHandoffMessage } from "./policy.js";
-import { describePermissions, type AppPermissions, type PermissionWords } from "./permissions.js";
+import { describePermissions, knownAppName, mayHold, type AppPermissions, type PermissionWords } from "./permissions.js";
 
-export { describePermissions, type AppPermissions, type PermissionWords };
+export { describePermissions, knownAppName, type AppPermissions, type PermissionWords };
 
 export interface FoundSigner {
   /** The site the signer is embedded in, as the browser reported it to the signer. Show this, exactly. */
@@ -84,7 +84,8 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       clearTimeout(giveUp);
       settled = true;
       const { world, recipient } = msg;
-      const wants = msg.wants ?? null;
+      // Checked again here, on the page that shows it: a set this site may not hold is no request at all.
+      const wants = msg.wants && mayHold(world, msg.wants) ? msg.wants : null;
       resolve({
         site: world,
         wants,

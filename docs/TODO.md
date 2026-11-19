@@ -51,8 +51,9 @@ it covers only a note and a reaction. Item 1 is what extends it.
 that moved.
 
 - [ ] **1. What an application declares (§SW9).** **Built on `beta`
-  2026-11-19, not promoted.** Still to do before it is: the owner's five
-  decisions in §SW9.10; move one real application onto it (Tessera is the
+  2026-11-19, not promoted.** The owner's five decisions are taken and
+  built (§SW9.10). Still to do before it is promoted: move one real
+  application onto it (Tessera is the
   smallest: six kinds, one service key, no background signing outside a
   purchase); try it by hand on the beta site; and a wallet connection
   through the window (§SW9.9), which bitunlock and Satisfied need. Moved

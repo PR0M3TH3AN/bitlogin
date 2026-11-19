@@ -37,17 +37,65 @@ export const RESERVED_APP_DATA_PREFIX = "bitlogin:";
 
 /**
  * Never signed for a site, whatever it declares and whatever the user
- * presses: remote-signer and wallet traffic, and NSWP's passes, grants and
- * room signals. Kinds 27302 and 27303 give a world a terminal on the user's
- * own computer.
+ * presses: remote-signer and wallet traffic, and NSWP's room signals.
  */
-export const NEVER_FOR_APPS: readonly number[] = [13194, 23194, 23195, 24133, 27300, 27301, 27302, 27303];
+export const NEVER_FOR_APPS: readonly number[] = [13194, 23194, 23195, 24133, 27301];
+
+/**
+ * Applications BitLogin knows by their address (owner's decision,
+ * 2026-11-19; §SW9.10). Two things follow from being here, and nothing else:
+ *
+ * - The window says so. A look-alike of one of these, at another address,
+ *   is shown as an application BitLogin does not know.
+ * - `reserved` kinds may be asked for only by the address they are reserved
+ *   to. NSWP's passes and grants (27300, 27302, 27303) can give a world a
+ *   terminal on the user's own computer, so no other site may have them
+ *   signed, whatever it declares and whatever the user presses.
+ *
+ * It is a list in the code of the sign-in address, changed only by a
+ * reviewed release. Someone who serves their own sign-in address serves
+ * their own list.
+ */
+export const KNOWN_APPS: Readonly<Record<string, { name: string; reserved?: readonly number[] }>> = {
+  "https://bitvid.network": { name: "Bitvid" },
+  "https://beta.bitvid.network": { name: "Bitvid (beta)" },
+  "https://unstable.bitvid.network": { name: "Bitvid (unstable)" },
+  "https://bitunlock.network": { name: "BitUnlock" },
+  "https://portal.bitblocks.network": { name: "BitPortal", reserved: [27300, 27302, 27303] },
+  "https://imsatisfied.app": { name: "Satisfied" },
+  "https://adzaps.net": { name: "AdZap" },
+  "https://www.adzaps.net": { name: "AdZap" },
+  "https://tessera.bitblocks.network": { name: "Tessera" },
+  "https://bitroad.network": { name: "BitRoad" },
+  "https://www.bitroad.network": { name: "BitRoad" }
+};
+
+/** Kinds that only a named address may ask for. */
+export const RESERVED_KINDS: readonly number[] = [27300, 27302, 27303];
+
+/** The name BitLogin knows an address by, or null. */
+export function knownAppName(site: string): string | null {
+  return Object.hasOwn(KNOWN_APPS, site) ? KNOWN_APPS[site]!.name : null;
+}
+
+const reservedFor = (site: string): readonly number[] => (Object.hasOwn(KNOWN_APPS, site) ? (KNOWN_APPS[site]!.reserved ?? []) : []);
+
+/**
+ * Whether this site may be given this set at all. A set is read without
+ * knowing who sent it; this is the question of who. False when it names a
+ * reserved kind the site is not the named address for.
+ */
+export function mayHold(site: string, perms: AppPermissions): boolean {
+  const mine = reservedFor(site);
+  return [...perms.sign, ...perms.read].every((kind) => !RESERVED_KINDS.includes(kind) || mine.includes(kind));
+}
 
 /** Kinds that change how others see the user, or what reaches them. Listed apart in the window. */
 export const SENSITIVE_KINDS: readonly number[] = [0, 3, 5, 10000, 10002, 10050, KIND_RELAY_PROOF];
 
-/** Listed with the sensitive kinds in the window, though counted with the quiet ones: a file-host proof can delete. */
-const WARNED_KINDS: readonly number[] = [...SENSITIVE_KINDS, KIND_FILE_PROOF];
+/** Listed with the sensitive kinds in the window, though not counted with them: a file-host proof can delete, and
+ *  a pass or a grant lets a world in. */
+const WARNED_KINDS: readonly number[] = [...SENSITIVE_KINDS, KIND_FILE_PROOF, ...RESERVED_KINDS];
 
 /** Reading any of these is reading the user's private messages. */
 export const MESSAGE_KINDS: readonly number[] = [4, KIND_SEAL, 1059];
@@ -185,6 +233,8 @@ export function prepareForApp(perms: AppPermissions, input: unknown, siteInput: 
   if (!site || !input || typeof input !== "object") return null;
   const e = input as { kind?: unknown; content?: unknown; tags?: unknown; created_at?: unknown };
   if (!isKind(e.kind) || NEVER_FOR_APPS.includes(e.kind) || !perms.sign.includes(e.kind)) return null;
+  // A reserved kind is signed only for the address it is reserved to, whatever set this session was given.
+  if (RESERVED_KINDS.includes(e.kind) && !reservedFor(site).includes(e.kind)) return null;
   if (typeof e.content !== "string" || e.content.length > APP_SIGN_LIMITS.contentChars) return null;
   if (!Array.isArray(e.tags) || e.tags.length > APP_SIGN_LIMITS.tags) return null;
   const tags: string[][] = [];
@@ -263,6 +313,9 @@ const KIND_WORDS: Readonly<Record<number, string>> = {
   20002: "show when you are typing",
   22242: "sign in to relays as you",
   24242: "upload, list and delete your files at file hosts",
+  27300: "give worlds a pass that says who you are",
+  27302: "let a world open a terminal on a computer of yours",
+  27303: "give a world access you have granted it",
   30000: "change your lists",
   30015: "change your interests",
   34235: "post videos",

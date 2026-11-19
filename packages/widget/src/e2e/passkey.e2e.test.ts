@@ -764,6 +764,10 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(new URL(popup.url()).origin).toBe(origin);
         expect(await popup.locator("#app-site").textContent()).toBe(site);
         expect(await popup.locator("#app-name").textContent()).toBe("Test App");
+        // An address BitLogin has no name for is said to be unknown, and its own name for itself is shown as only that.
+        expect(await popup.locator("#app-known").isVisible()).toBe(false);
+        expect(await popup.locator("#app-unknown").isVisible()).toBe(true);
+        expect(await popup.locator("#app-name-line").isVisible()).toBe(true);
         expect(await popup.locator("#ask").isVisible()).toBe(false);
         expect(await popup.locator("#app-ordinary li").allTextContents()).toEqual([
           `prove who you are to ${new URL(site).host}, api.testapp.example`,

@@ -22,7 +22,7 @@
  */
 import { NostrSigner } from "@bitlogin/core/account";
 import { getPublicKeyHex } from "@bitlogin/core/crypto";
-import { readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 import { grantSite } from "./signerGrant.js";
 
 /**
@@ -95,7 +95,7 @@ export function sealHandoff(
   if (app !== undefined) {
     const site = grantSite(app.site);
     const permissions = readPermissions(app.permissions);
-    if (!site || !permissions) throw new Error("That is not a permission set an application may be given.");
+    if (!site || !permissions || !mayHold(site, permissions)) throw new Error("That is not a permission set an application may be given.");
     sealedApp = { site, permissions };
   }
   // A signer wipes the key it was given when it is destroyed. It is given a copy: the caller's is the caller's to wipe.
@@ -157,7 +157,7 @@ export function openAppHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8
   const a = parsed.app as { site?: unknown; permissions?: unknown } | null;
   const site = a && typeof a === "object" ? grantSite(a.site) : "";
   const permissions = a && typeof a === "object" ? readPermissions(a.permissions) : null;
-  if (!site || !permissions) {
+  if (!site || !permissions || !mayHold(site, permissions)) {
     key.fill(0);
     throw new Error("The hand-off carried a permission set that cannot be read.");
   }

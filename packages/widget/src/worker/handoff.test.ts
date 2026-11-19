@@ -113,7 +113,8 @@ describe("a session that arrived by a hand-off", () => {
     const everyday = generatePrivateKey();
     const recipient = generatePrivateKey();
     const to = getPublicKeyHex(recipient);
-    // A grant that gives a world a terminal on the user's computer, BitLogin's own data, a site that is not one.
+    // A grant that gives a world a terminal on the user's computer, asked for by an address it is not reserved
+    // to; BitLogin's own data; a site that is not one.
     for (const app of [
       { site: "https://app.example", permissions: { sign: [1, 27302] } },
       { site: "https://app.example", permissions: { sign: [30078], appData: ["bitlogin:"] } },
@@ -131,6 +132,9 @@ describe("a session that arrived by a hand-off", () => {
     };
     expect(() => openAppHandoff(forged, recipient)).toThrow(/cannot be read/u);
     expect(() => openHandoff(forged, recipient)).toThrow(/cannot be read/u);
+    // The one address those kinds are reserved to may be given them.
+    const portal = { site: "https://portal.bitblocks.network", permissions: { sign: [27300, 27302, 27303] } };
+    expect(openAppHandoff(sealHandoff(everyday, to, generatePrivateKey(), portal), recipient).app?.permissions.sign).toEqual([27300, 27302, 27303]);
   });
 
   it("lets a handed-over session ask for nothing beyond signing, the grant, and what an application was approved for", () => {

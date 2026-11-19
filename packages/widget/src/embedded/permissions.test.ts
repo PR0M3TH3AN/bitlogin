@@ -4,8 +4,12 @@ import {
   APP_SITE_TAG,
   describePermissions,
   limitClass,
+  KNOWN_APPS,
+  knownAppName,
   mayDecryptFrom,
   mayEncryptTo,
+  mayHold,
+  RESERVED_KINDS,
   NEVER_FOR_APPS,
   prepareForApp,
   readPeerFor,
@@ -32,8 +36,8 @@ describe("readPermissions", () => {
 
   it("refuses a set that names anything on the never list, whole", () => {
     for (const kind of NEVER_FOR_APPS) expect(readPermissions({ sign: [1, kind] })).toBeNull();
-    // Passes and the grants that give a world a terminal on the user's computer.
-    expect(NEVER_FOR_APPS).toEqual(expect.arrayContaining([27300, 27302, 27303, 24133, 23194]));
+    // Wallet and remote-signer traffic, and room signals.
+    expect(NEVER_FOR_APPS).toEqual(expect.arrayContaining([13194, 23194, 23195, 24133, 27301]));
   });
 
   it("refuses BitLogin's own names under application data, and any prefix that would cover them", () => {
@@ -80,7 +84,8 @@ describe("prepareForApp", () => {
 
   it("refuses a kind that was not approved, and a never kind even if a set somehow held one", () => {
     expect(prepareForApp(perms, { kind: 0, content: "{}", tags: [] }, SITE, NOW)).toBeNull();
-    const forged = { ...perms, sign: [...perms.sign, 27302] };
+    const forged = { ...perms, sign: [...perms.sign, 24133, 27302] };
+    expect(prepareForApp(forged, { kind: 24133, content: "", tags: [] }, SITE, NOW)).toBeNull();
     expect(prepareForApp(forged, { kind: 27302, content: "", tags: [] }, SITE, NOW)).toBeNull();
   });
 
@@ -130,6 +135,50 @@ describe("prepareForApp", () => {
     expect(prepareForApp(perms, { kind: 1, content: 5, tags: [] }, SITE, NOW)).toBeNull();
     expect(prepareForApp(perms, null, SITE, NOW)).toBeNull();
     expect(prepareForApp(perms, { kind: 1, content: "", tags: [] }, "not an origin", NOW)).toBeNull();
+  });
+});
+
+describe("kinds reserved to a named address", () => {
+  const PORTAL = "https://portal.bitblocks.network";
+  const passes = readPermissions({ sign: [27300, 27302, 27303] })!;
+
+  it("lets only the named address hold a set with a reserved kind", () => {
+    expect(RESERVED_KINDS).toEqual([27300, 27302, 27303]);
+    expect(mayHold(PORTAL, passes)).toBe(true);
+    // Anyone else: not at all, whatever they declare and whatever a user would press.
+    for (const site of [SITE, "https://portal.bitblocks.network.evil.example", "http://portal.bitblocks.network", "https://bitvid.network", ""]) {
+      expect(mayHold(site, passes), site).toBe(false);
+    }
+    // A set with no reserved kind is anyone's to ask for.
+    expect(mayHold(SITE, set())).toBe(true);
+  });
+
+  it("signs a reserved kind only for the address it is reserved to, even from a set that names it", () => {
+    const grant = { kind: 27302, content: "", tags: [] };
+    expect(prepareForApp(passes, grant, PORTAL, NOW)).not.toBeNull();
+    expect(prepareForApp(passes, grant, SITE, NOW)).toBeNull();
+    expect(prepareForApp(passes, grant, "https://bitvid.network", NOW)).toBeNull();
+  });
+
+  it("knows an application by its address, never by what it calls itself", () => {
+    expect(knownAppName("https://bitvid.network")).toBe("Bitvid");
+    expect(knownAppName(PORTAL)).toBe("BitPortal");
+    expect(knownAppName("https://bitvid.network.evil.example")).toBeNull();
+    expect(knownAppName("http://bitvid.network")).toBeNull();
+    // A name on Object.prototype is not an application.
+    expect(knownAppName("constructor")).toBeNull();
+    expect(knownAppName("__proto__")).toBeNull();
+    // Only BitPortal's address has anything reserved to it.
+    expect(Object.entries(KNOWN_APPS).filter(([, app]) => app.reserved?.length).map(([site]) => site)).toEqual([PORTAL]);
+    for (const site of Object.keys(KNOWN_APPS)) expect(site, site).toMatch(/^https:\/\/[a-z0-9.-]+$/u);
+  });
+
+  it("says in the window what a pass or a grant is, with the sensitive ones", () => {
+    expect(describePermissions(passes, PORTAL).sensitive).toEqual([
+      "give worlds a pass that says who you are",
+      "let a world open a terminal on a computer of yours",
+      "give a world access you have granted it"
+    ]);
   });
 });
 

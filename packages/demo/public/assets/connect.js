@@ -4,7 +4,7 @@
 // BitLogin's workers, as a key that can only sign.
 //
 // This page never holds the key, and speaks only to pages of its own origin.
-import { describePermissions, findEmbeddedSigner } from "../vendor/bitlogin/bitlogin-window.js";
+import { describePermissions, findEmbeddedSigner, knownAppName } from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -47,8 +47,14 @@ const fill = (id, lines) => {
 const askApp = () => {
   const words = describePermissions(found.wants, found.site);
   $("app-site").textContent = found.site;
+  // What BitLogin knows comes from the address, never from what the application says of itself.
+  const known = knownAppName(found.site);
+  $("app-known-name").textContent = known || "";
+  $("app-known").hidden = !known;
+  $("app-unknown").hidden = !!known;
   $("app-name").textContent = found.wants.name || "";
-  $("app-name-line").hidden = !found.wants.name;
+  // Its own name is shown only where BitLogin has none for it: beside a known name it would only confuse.
+  $("app-name-line").hidden = !found.wants.name || !!known;
   $("app-who").textContent = who.name || shortKey(who.npub);
   $("app-who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
   fill("app-ordinary", words.ordinary);

@@ -15,7 +15,7 @@
  * off by the site it is embedded in. The asking site cannot read it.
  */
 import type { KeyValueStore } from "@bitlogin/core/storage";
-import { APP_LIMITS, readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { APP_LIMITS, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 
 const GRANT_PREFIX = "bitlogin:signer-grant:v1:";
 const GRANT_DEVICE_KEY = "bitlogin:signer-grant-device-key:v1";
@@ -124,7 +124,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
     // again, and sees what is asked. It is never restored as a narrower or a wider one.
     const permissions = p.permissions === undefined ? undefined : readPermissions(p.permissions);
-    if (permissions === null) {
+    if (permissions === null || (permissions && !mayHold(site, permissions))) {
       await store.delete(GRANT_PREFIX + site);
       return null;
     }

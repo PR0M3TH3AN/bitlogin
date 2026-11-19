@@ -23,7 +23,7 @@
  * Who is asking is what the browser says, never what the site says.
  */
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
-import { APP_LIMITS, limitClass, prepareForApp, type AppPermissions } from "./permissions.js";
+import { APP_LIMITS, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import {
   cleanOrigin,
   createSignGate,
@@ -138,8 +138,9 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       return say(state(ask.id));
     }
     if (ask.t === "want") {
-      // Remembered for the window to show. It approves nothing: only Allow, in the window, does.
-      wanted = ask.permissions;
+      // Remembered for the window to show. It approves nothing: only Allow, in the window, does. A set this site
+      // may not hold at all (a kind reserved to another address) is not remembered, so the window never shows it.
+      wanted = mayHold(site, ask.permissions) ? ask.permissions : null;
       return say(state(ask.id));
     }
     // Everything else is asked of an unlocked signer. Every way it can fail says the same thing: refused.

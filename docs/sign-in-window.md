@@ -304,20 +304,21 @@ one of BitLogin's workers to the other, and is kept with the grant
 some permissions and not others is not offered: an application that got
 half of what it asked for fails in ways its user cannot see.
 
-## SW9.3 Three tiers of kind
+## SW9.3 Four tiers of kind
 
 | Tier | Kinds | An application |
 |---|---|---|
-| Never | Remote-signer and wallet traffic (24133, 13194, 23194, 23195); passes, grants and room signals (27300 to 27303); kind 30078 under `bitlogin:` | Cannot ask. A set naming one is refused whole |
+| Never | Remote-signer and wallet traffic (24133, 13194, 23194, 23195); room signals (27301); kind 30078 under `bitlogin:` | Cannot ask. A set naming one is refused whole |
+| Reserved | Passes and grants (27300, 27302, 27303) | Only the address they are reserved to may ask (§SW9.10). For any other site the set is no request at all |
 | Sensitive | Profile (0), follows (3), deletion (5), mute and relay lists (10000, 10002, 10050), relay sign-in (22242), kind 30078 under `"*"`, and reading messages (§SW9.5) | May ask. The window lists these apart, under a plain warning |
 | Ordinary | Everything else | May ask |
 
-- **Never is a floor under the user.** No press makes these signable from a
-  site. Kinds 27302 and 27303 give a world a terminal on the user's own
-  computer; one careless Allow must not be able to give that away.
-- **This keeps BitPortal's own sign-in on the embedded widget.** It signs
-  passes and grants. Moving it needs kinds reserved to named origins, which
-  is an open decision (§SW9.10).
+- **Never and Reserved are floors under the user.** No press makes these
+  signable from a site they are not for. Kinds 27302 and 27303 give a world
+  a terminal on the user's own computer; one careless Allow must not be able
+  to give that away.
+- **Reserved is what lets BitPortal's own sign-in move to the window.** It
+  signs passes and grants, and its address is the one they are reserved to.
 - **A world is unchanged.** A site that declares nothing gets what §SW5
   gives: a note and a reaction, under the old limits.
 
@@ -417,21 +418,22 @@ can sign a note and a reaction and nothing else.
   Until it exists, Sensitive kinds are approved once like the rest, and the
   warning in the window is what stands in for it.
 
-## SW9.10 Decisions that are the owner's
+## SW9.10 Decided by the owner (2026-11-19)
 
-1. **Kinds reserved to named sites.** Should BitLogin ship a short list of
-   origins that may ask for passes and grants (BitPortal's)? Without it
-   BitPortal's own sign-in cannot move to the window.
-2. **Approving Sensitive kinds once.** Accept it until the panel exists, or
-   refuse those kinds until then? Refusing keeps bitvid, Satisfied and
-   AdZap on the embedded widget.
-3. **The mark's name**, `bitlogin:site`, and the protocol's
-   (`bitlogin-signer`, version 2).
-4. **The limits** in §SW9.6.
-5. **Known applications.** Should the window say "BitLogin knows this
-   application" for a list shipped with the sign-in address? It would make
-   a look-alike of bitvid easier to spot, and makes BitLogin a gatekeeper of
-   who looks trustworthy.
+1. **Kinds reserved to named addresses: yes.** NSWP's passes and grants
+   (27300, 27302, 27303) may be asked for only by BitPortal's address. Any
+   other site that names one is given nothing, and the window shows it no
+   question. Room signals (27301) stay Never for everyone.
+2. **Sensitive kinds are approved once,** like the rest, under the window's
+   warning, until the lock's panel (§SW12) gives somewhere to ask each time.
+3. **The names stand:** the mark is `bitlogin:site`. The messages keep
+   NSWP's envelope for now, with the new requests added to it.
+4. **The limits in §SW9.6 stand.**
+5. **Known applications: yes, as display only.** The window says "BitLogin
+   knows this address" for a list shipped with the sign-in address
+   (`KNOWN_APPS` in `embedded/permissions.ts`), and that it does not for any
+   other. Being on the list changes nothing a site may do, except item 1.
+   The list is changed only by a reviewed release.
 
 # SW10. (Not used)
 
