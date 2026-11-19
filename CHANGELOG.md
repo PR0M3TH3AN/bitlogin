@@ -8,6 +8,30 @@ would plausibly want. Newest first.
 
 ## 2026-11-19
 
+**The sign-in window and the embedded signer, on BitLogin's own site
+(`docs/sign-in-window.md`).** A site no longer has to embed the widget, and
+so see the password, to have something signed.
+
+- **Two new pages on the site:** `/signer/`, which other sites embed
+  unseen, and `/connect/`, the window a site opens. The password is typed
+  on BitLogin's own page, in that window. The site is handed a signer it
+  can ask, and never a key.
+- **Two new files in the widget build:** `bitlogin-signer.js`
+  (`startEmbeddedSigner()`, the whole of the signer's page) and
+  `bitlogin-window.js` (`findEmbeddedSigner()`, for the window's page).
+  A deployment that serves its own sign-in address ships both.
+- **What the signer signs for a site:** a note and a reaction, once the
+  user has allowed that site. Everything else is refused, without saying
+  why. Six a minute, sixty an hour, four hours at most.
+- **Headers changed for those two pages only** (`vercel.json`): the signer
+  may be framed by an https site, and the window keeps its link to the page
+  that opened it (no `Cross-Origin-Opener-Policy`). Every other page is as
+  it was, and the policy tests pin all three sets.
+- **Nothing changes for a site that embeds the widget today.**
+- **Not built:** permissions an application declares (a note and a
+  reaction are not enough for an app), and a passkey added to an existing
+  account.
+
 **A signer hand-off, for a sign-in window (`docs/sign-in-window.md`).** A
 site that embeds the widget can read the password as it is typed. The way
 out is for the password to be typed at one address the user trusts, and for
@@ -25,8 +49,8 @@ that which belongs here.
   says `signerOnly`.
 - **Nothing existing changes.** No wire format, no stored format, no header.
   A site that never calls these is unaffected.
-- **Not here:** the sign-in window page and the per-site permission list.
-  They are a deployment's own pages.
+- **Not here, at first:** the sign-in window page and the per-site
+  permission list. They followed the same day: see the entry above.
 
 ## 2026-11-18
 

@@ -1,0 +1,12 @@
+/* The sign-in window (docs/sign-in-window.md): one question, and whose site is asking. */
+.connect-main { max-width: 34rem; margin: 0 auto; padding: 1.2rem 1.1rem 3rem; }
+.connect-status { color: var(--muted); margin: 0 0 1rem; }
+.connect-card { background: var(--ink-soft); border: 1px solid var(--line-strong); border-radius: 14px; padding: 1.3rem 1.3rem 1.4rem; }
+.connect-card h1 { font-size: 1.4rem; line-height: 1.2; margin: 0 0 .8rem; }
+.connect-card ul { margin: .7rem 0; padding-left: 1.15rem; display: grid; gap: .35rem; }
+.connect-site { margin: 0 0 .5rem; padding: .7rem .9rem; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--code-bg);
+  font: 1.02rem ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.connect-key { font: .88em ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--muted); }
+.connect-small { font-size: .9rem; color: var(--muted); }
+.connect .cta-row { margin-top: 1.1rem; }
+#widget-slot { margin: 1rem 0 .4rem; }

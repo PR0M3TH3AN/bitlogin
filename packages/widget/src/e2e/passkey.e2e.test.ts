@@ -393,6 +393,129 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
+    "a site on another origin gets a signer through the sign-in window, and never the key (sign-in-window.md)",
+    async () => {
+      // A site that asks: its own origin, a hidden frame of BitLogin's signer, and everything it hears kept.
+      const asking = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(`<!doctype html><meta charset="utf-8"><title>a site that asks</title><button id="open">Sign in with BitLogin</button>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  document.getElementById("open").onclick = () => { window.popup = window.open(SIGNIN + "/connect/index.html", "bitlogin-connect", "popup,width=460,height=660"); };
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+  window.tryToRead = () => {
+    const out = {};
+    try { out.frame = frame.contentWindow.document.body ? "READ" : "?"; } catch (err) { out.frame = "refused: " + err.name; }
+    try { out.popup = window.popup.document.body ? "READ" : "?"; } catch (err) { out.popup = "refused: " + err.name; }
+    return out;
+  };
+</script>`);
+      });
+      await new Promise<void>((resolve) => asking.listen(0, "127.0.0.1", () => resolve()));
+      const askingAddress = asking.address();
+      // 127.0.0.1 where the sign-in address is localhost: two different sites, as a browser counts them.
+      const site = `http://127.0.0.1:${typeof askingAddress === "object" && askingAddress ? askingAddress.port : 0}`;
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        // A throwaway account at the sign-in address, made the ordinary way, against the mock relays.
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const session = await account.evaluate(() => window.bitlogin?.activeSession());
+        const me = session!.publicKey;
+
+        // The asking site, in another tab.
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (err) => errors.push(String(err)));
+        await page.goto(`${site}/`);
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+
+        // Locked: it says so, and signs nothing. A refusal carries nothing but its id.
+        expect(await ask({ t: "state" })).toMatchObject({ t: "state", unlocked: false });
+        const locked = await ask({ t: "sign", event: { kind: 1, content: "before", tags: [] } });
+        expect(locked.t).toBe("refused");
+        expect(Object.keys(locked).sort()).toEqual(["id", "nswp", "t", "v"]);
+
+        // The window: BitLogin's own page, naming the site as the browser reports it.
+        const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await popup.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+        expect(new URL(popup.url()).origin).toBe(origin);
+        expect(await popup.locator("#site").textContent()).toBe(site);
+        expect(await page.evaluate(() => (window as any).tryToRead())).toEqual({ frame: "refused: SecurityError", popup: "refused: SecurityError" });
+        // A press that lands at once was meant for the site, and is ignored.
+        await popup.locator("#allow").click();
+        await page.waitForTimeout(400);
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+        await popup.waitForTimeout(800);
+        await popup.locator("#allow").click();
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+
+        // Unlocked, as the account that is signed in at the sign-in address.
+        const state = await ask({ t: "state" });
+        expect(state).toMatchObject({ t: "state", unlocked: true, pubkey: me });
+        const signed = await ask({ t: "sign", event: { kind: 1, content: "from a site that asks", tags: [["t", "x"], ["nswp:world", "https://elsewhere.example"]], created_at: 1 } });
+        expect(signed.t).toBe("signed");
+        expect(signed.event).toMatchObject({ kind: 1, content: "from a site that asks", pubkey: me, tags: [["t", "x"], ["nswp:world", site]] });
+        expect(Math.abs(signed.event.created_at - Date.now() / 1000)).toBeLessThan(120);
+        // What a site may not have signed: a profile, a follow list, a message, a web proof, a pass, an account's own data.
+        for (const kind of [0, 3, 4, 27235, 27300, 30078]) expect((await ask({ t: "sign", event: { kind, content: "{}", tags: [] } })).t, String(kind)).toBe("refused");
+        // The site never heard the key, in any message.
+        const heard = JSON.stringify(await page.evaluate(() => (window as any).heard));
+        expect(heard).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
+
+        // Lock: nothing more is signed.
+        expect(await ask({ t: "lock" })).toMatchObject({ t: "state", unlocked: false });
+        expect((await ask({ t: "sign", event: { kind: 1, content: "after", tags: [] } })).t).toBe("refused");
+        // The sign-in address itself is still signed in, with a full session: handing over took nothing from it.
+        expect(await account.evaluate(() => window.bitlogin?.activeSession()?.publicKey)).toBe(me);
+        expect(errors).toEqual([]);
+
+        // Someone not signed in at the sign-in address is asked to sign in there, with the ordinary widget, and
+        // is offered no Allow.
+        const fresh = await browser.newContext();
+        const visitor = await fresh.newPage();
+        await visitor.goto(`${site}/`);
+        await visitor.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        const [popup2] = await Promise.all([fresh.waitForEvent("page"), visitor.click("#open")]);
+        await popup2.locator("#signin").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await popup2.locator("#widget-slot bitlogin-auth").count()).toBe(1);
+        expect(await popup2.locator("#ask").isVisible()).toBe(false);
+        await fresh.close();
+      } finally {
+        await browser.close();
+        asking.close();
+      }
+    },
+    240_000
+  );
+
+  it(
     "a different passkey derives a DIFFERENT account (PRF is per-credential)",
     async () => {
       const browser = await playwright!.chromium.launch();

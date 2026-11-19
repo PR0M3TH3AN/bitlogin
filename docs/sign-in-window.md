@@ -1,13 +1,16 @@
 # The Sign-In Window and the Signer Hand-Off
 
-**Document version:** 0.1
+**Document version:** 0.2
 **Date:** 2026-11-19
-**Status:** PARTIALLY implemented. The **signer hand-off** (§SW4) is
-implemented: `worker/handoff.ts`, three worker actions, and four methods on
-the headless signer. NOT implemented here: the sign-in window page itself
-and the per-site permission list (§SW3, §SW5). Those are a deployment's own
-pages; the first is being built in BitPortal. Adding a passkey to an
-existing account (§SW7) is design only.
+**Status:** Implemented, not deployed: the **signer hand-off** (§SW4:
+`worker/handoff.ts`, three worker actions, four methods on the headless
+signer); the **embedded signer** and its rules (§SW5: `embedded/signer.ts`,
+`embedded/policy.ts`, built as `bitlogin-signer.js`); the **window's
+finding and handing over** (§SW3: `embedded/window.ts`, built as
+`bitlogin-window.js`); and both pages on BitLogin's own site
+(`/signer/`, `/connect/`), with the headers of §SW6. NOT implemented: what
+an application needs beyond a note and a reaction (§SW9), and adding a
+passkey to an existing account (§SW7). Both are design only.
 **Depends on:** `docs/spec.md` §22.1, §22.4, §26.3; `docs/passkey-login.md`.
 
 ---
@@ -104,14 +107,41 @@ frame worker    handoffAccept({ senderPublicKey, payload })
 A session that did not come from a password or passkey sign-in (an
 extension, a bunker) has no key to hand over, and `handoffExport` refuses.
 
-# SW5. Permissions (a deployment's own)
+# SW5. What the embedded signer signs for a site (implemented)
 
-Unlocking is not agreeing to everything. The embedded signer's page keeps a
-list per asking site of what it may have signed, set in the window. The
-first deployment's list, by Nostr event kind, is in the NSWP repository's
-`docs/plans/signing-in-worlds.md`. BitLogin's part is the floor under it: a
-signer-only session cannot read or export anything, whatever a page's list
-says.
+Unlocking is not agreeing to everything. `embedded/policy.ts` is the list.
+
+| | Kinds | When |
+|---|---|---|
+| Ordinary | A note (1), a reaction (7) | Once the user has allowed that site, in the window |
+| Careful | A profile (0), a follow list (3), a deletion (5), a relay list (10002), and anything not named | Only with their say each time, on a page of the sign-in address. **Not built: refused** |
+| Never | Private messages and their wrappings (4, 13, 14, 15, 1059, 1060); passes and room signals (27300, 27301); proofs of identity (22242, 27235); wallet and remote-signer traffic (13194, 23194, 23195, 24133); application data (30078), which is where an account's capsules live | Refused, whatever anyone says |
+
+- **The signer finishes the event.** It sets `created_at` itself and adds
+  `["nswp:world", "<the site's origin>"]`, dropping any such tag the site
+  wrote. What is signed for a site says which site asked.
+- **Limits:** 8,000 characters, 60 tags; six signatures a minute and sixty
+  an hour for one site.
+- **A refusal never says why.** Locked, over the limit, the wrong kind and
+  a malformed request all answer `refused`, with the request's id and
+  nothing else.
+- **It ends** when the site's page closes, when the site is told to lock
+  (the user's own doing, from the site), or after four hours.
+- **The asking site's address is the browser's word:** `ancestorOrigins`
+  where there is one, and otherwise the origin of the first message from
+  the embedding page. Never anything a message says.
+- **It never restores this origin's session,** and touches no storage: a
+  site that shares a registrable domain with the sign-in address is treated
+  like any other. A test reads the source for this.
+
+Under the list is a floor BitLogin's worker keeps whatever a page does: a
+handed-over session can sign and nothing else (§SW4).
+
+The messages between a site and the signer, and between the window and
+the signer, are those of NSWP-10 ("Signing from a world"), version 1, kept
+exactly so that a site built against that works unchanged. The tag's name
+comes from there too. Both are candidates for names of BitLogin's own in
+the version an application's permissions will need (§SW9).
 
 # SW6. What a deployment must set
 
@@ -132,7 +162,43 @@ profile, so it starts in `spec.md` and goes through the same review as the
 vault. Until it exists, the window's "add a passkey" message can only
 point at passkey sign-in as it is.
 
-# SW8. Not covered
+# SW8. Using it from a site
+
+```html
+<iframe src="https://<sign-in address>/signer/" hidden></iframe>
+<button>Sign in with BitLogin</button>
+```
+
+The button opens `https://<sign-in address>/connect/` with `window.open`,
+from a press, without `noopener`. The site then posts requests to the frame
+and listens for its answers, checking that each came from that frame and
+that origin, and verifying every signature it is handed. The NSWP kit's
+`createWorldSigner({ at: { signer, window } })` does all of that, and its
+flat demo (`docs/plans/signin-demo` in that repository) is a small site
+that uses it.
+
+On the window's page, a press on Allow in the first second is ignored: a
+key meant for the site, pressed as the window came up, must not land on it.
+
+# SW9. Applications (design only)
+
+A note and a reaction are enough for a visitor to a world. They are not
+enough for an application. The owner's own apps ask their signer today for
+web-request proofs, private messages, lists, video events, deletions, zap
+requests, application data, and encrypting and decrypting. Three things
+are needed before an application can sign in this way:
+
+1. **A permission the application declares and the user sees** in the
+   window: which kinds, whether it may read private messages, whether it
+   may spend. The signer holds it to that.
+2. **A session between "can only sign" and "everything".** A handed-over
+   session refuses to decrypt. An application that shows private messages
+   needs one that may, for that application, because the user said so.
+3. **Which address is the sign-in address.** BitLogin's own site is the
+   default. It must not be the only one possible: the site is static, and
+   anyone can serve it themselves.
+
+# SW10. Not covered
 
 - Safari, and phones, where a window is a tab: not tried.
 - An asking site that cuts its link to windows it opens: the window finds
