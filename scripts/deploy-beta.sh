@@ -47,10 +47,26 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 6
 done
 [ "$got" = "$want" ] || refuse "deployed, but $url serves a different widget than $commit builds (got ${got:0:12}, want ${want:0:12})."
+# Each response is read into a variable before it is searched. Piping curl
+# into `grep -q` under `pipefail` fails on a page that DOES match: grep stops
+# at the first hit, curl is cut off mid-write, and its exit code fails the
+# pipe. That refused the first good deploy.
 for page in / /account.html /connect/; do
-  curl -fsSL -m 20 "$url$page" | grep -q 'data-channel="beta"' || refuse "deployed, but $url$page is not marked as beta."
+  body="$(curl -fsSL -m 20 "$url$page")"
+  case "$body" in
+    *'data-channel="beta"'*) ;;
+    *) refuse "deployed, but $url$page is not marked as beta." ;;
+  esac
 done
-curl -fsSI -m 20 "$url/signer/" | grep -qi '^content-security-policy:.*frame-ancestors' || refuse "deployed, but $url/signer/ lacks its frame-ancestors policy."
-curl -fsSI -m 20 "$url/connect/" | grep -qi '^x-frame-options: *DENY' || refuse "deployed, but $url/connect/ can be framed."
+signer_headers="$(curl -fsSI -m 20 "$url/signer/" | tr 'A-Z' 'a-z')"
+case "$signer_headers" in
+  *content-security-policy:*frame-ancestors*) ;;
+  *) refuse "deployed, but $url/signer/ lacks its frame-ancestors policy." ;;
+esac
+connect_headers="$(curl -fsSI -m 20 "$url/connect/" | tr 'A-Z' 'a-z')"
+case "$connect_headers" in
+  *"x-frame-options: deny"*) ;;
+  *) refuse "deployed, but $url/connect/ can be framed." ;;
+esac
 
 echo "BETA IS LIVE: $url is running $commit"
