@@ -56,7 +56,8 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
-      const relative = url.pathname === "/" ? "/index.html" : url.pathname;
+      // A directory is served by its index page, as the real site serves /signer/ and /connect/.
+      const relative = url.pathname.endsWith("/") ? `${url.pathname}index.html` : url.pathname;
       const filePath = join(DIST, normalize(relative).replace(/^(\.\.[/\\])+/u, ""));
       if (!existsSync(filePath)) {
         res.writeHead(404).end("not found");
@@ -496,7 +497,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const afterReload = await ask({ t: "state" });
         expect(afterReload).toMatchObject({ t: "state", unlocked: true, pubkey: me });
         expect(afterReload.until - Date.now() / 1000).toBeGreaterThan(29 * 24 * 3600);
-        expect(context.pages().length).toBe(pagesBefore);
+        // No window was opened. (Not "the same number": the sign-in window may only now be closing.)
+        expect(context.pages().length).toBeLessThanOrEqual(pagesBefore);
         const again = await ask({ t: "sign", event: { kind: 1, content: "after a reload", tags: [] } });
         expect(again.event).toMatchObject({ kind: 1, content: "after a reload", pubkey: me, tags: [["nswp:world", site]] });
         // Loading the page again is not a way round the count: six a minute, with the one signed before.
@@ -677,5 +679,174 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       }
     },
     180_000
+  );
+  it(
+    "an application declares what it wants, the user approves it once, and it then signs in the background (sign-in-window.md §SW9)",
+    async () => {
+      // An application on its own origin, using BitLogin's client the way a real one would: vendored, same-origin.
+      const vendor = join(DIST, "vendor", "bitlogin");
+      const asking = createServer(async (req, res) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (url.pathname.startsWith("/vendor/bitlogin/")) {
+          const file = join(vendor, normalize(url.pathname.slice("/vendor/bitlogin/".length)).replace(/^(\.\.[/\\])+/u, ""));
+          if (!existsSync(file)) return void res.writeHead(404).end("not found");
+          res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+          return void res.end(await readFile(file));
+        }
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(`<!doctype html><meta charset="utf-8"><title>an application</title><button id="open">Sign in with BitLogin</button>
+<script type="module">
+  import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
+  const more = new URLSearchParams(location.search).has("more");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  window.bl = createBitLoginClient({
+    at: "${origin}",
+    permissions: {
+      name: "Test App",
+      sign: [0, 1, 5, 7, 27235, 30078, ...(more ? [3] : [])],
+      appData: ["testapp:"],
+      proofs: ["https://api.testapp.example"],
+      read: [30078]
+    }
+  });
+  window.attempt = async (method, ...args) => {
+    try {
+      const target = method.includes(".") ? window.bl[method.split(".")[0]] : window.bl;
+      return { ok: true, value: await target[method.split(".").pop()](...args) };
+    } catch (err) {
+      return { ok: false, name: err.name };
+    }
+  };
+  document.getElementById("open").onclick = () => { window.signedIn = window.bl.signIn(); };
+  window.isReady = window.bl.ready();
+</script>`);
+      });
+      await new Promise<void>((resolve) => asking.listen(0, "127.0.0.1", () => resolve()));
+      const askingAddress = asking.address();
+      const site = `http://127.0.0.1:${typeof askingAddress === "object" && askingAddress ? askingAddress.port : 0}`;
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (err) => errors.push(String(err)));
+        await page.goto(`${site}/`);
+        const attempt = (method: string, ...args: unknown[]) =>
+          page.evaluate(([m, a]) => (window as any).attempt(m, ...(a as unknown[])), [method, args] as const) as Promise<{ ok: boolean; value?: any; name?: string }>;
+        const sign = (event: Record<string, unknown>) => attempt("signEvent", event);
+
+        // Not allowed yet: nobody is signed in to it, and nothing is signed.
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false });
+        expect(await sign({ kind: 1, content: "before", tags: [] })).toEqual({ ok: false, name: "BitLoginRefused" });
+
+        // The window shows the address, the name it gave itself, and everything it asked, the sensitive apart.
+        const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await popup.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(new URL(popup.url()).origin).toBe(origin);
+        expect(await popup.locator("#app-site").textContent()).toBe(site);
+        expect(await popup.locator("#app-name").textContent()).toBe("Test App");
+        expect(await popup.locator("#ask").isVisible()).toBe(false);
+        expect(await popup.locator("#app-ordinary li").allTextContents()).toEqual([
+          `prove who you are to ${new URL(site).host}, api.testapp.example`,
+          "post notes",
+          "post reactions",
+          "save its own data (testapp:)",
+          "read its own saved data"
+        ]);
+        expect(await popup.locator("#app-sensitive li").allTextContents()).toEqual(["change your profile", "delete what you have posted"]);
+        await popup.waitForTimeout(1000);
+        await popup.locator("#allow-app").click();
+        expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
+        expect(await page.evaluate(() => (window as any).bl.state())).toMatchObject({ signedIn: true, pubkey: me });
+
+        // What it was approved for is signed with no prompt, marked with the application's address.
+        const note = await sign({ kind: 1, content: "from an application", tags: [["t", "x"], ["bitlogin:site", "https://elsewhere.example"]] });
+        expect(note.value).toMatchObject({ kind: 1, pubkey: me, content: "from an application", tags: [["t", "x"], ["bitlogin:site", site]] });
+        expect((await sign({ kind: 0, content: "{}", tags: [] })).ok).toBe(true);
+        // What it did not ask for is refused, and so is anything outside the terms of what it did.
+        expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
+        expect((await sign({ kind: 27302, content: "", tags: [] })).ok).toBe(false);
+        const data = (d: string) => sign({ kind: 30078, content: "x", tags: [["d", d]] });
+        expect((await data("testapp:settings")).ok).toBe(true);
+        expect((await data("otherapp:settings")).ok).toBe(false);
+        expect((await data("bitlogin:password:v1")).ok).toBe(false);
+        const proof = (u: string) => sign({ kind: 27235, content: "", tags: [["u", u], ["method", "GET"]] });
+        expect((await proof(`${site}/v1/me`)).ok).toBe(true);
+        expect((await proof("https://api.testapp.example/v1/orders")).ok).toBe(true);
+        // A proof that would work at someone else's server is not signed.
+        expect((await proof("https://api.bitunlock.network/v1/orders")).ok).toBe(false);
+
+        // Reading is tied to an event of a kind it may read. Its own draft: yes. Raw, against the user's own key: no.
+        const sealed = await attempt("nip44.encrypt", me, "a private draft");
+        expect(sealed.ok).toBe(true);
+        expect(sealed.value).not.toContain("a private draft");
+        const draft = await sign({ kind: 30078, content: sealed.value, tags: [["d", "testapp:draft:1"]] });
+        expect(await attempt("decryptEvent", draft.value)).toEqual({ ok: true, value: "a private draft" });
+        expect(await attempt("nip44.decrypt", me, sealed.value)).toEqual({ ok: false, name: "BitLoginRefused" });
+        // The same ciphertext in a kind it may not read stays closed.
+        const asNote = await sign({ kind: 1, content: sealed.value, tags: [] });
+        expect(await attempt("decryptEvent", asNote.value)).toEqual({ ok: false, name: "BitLoginRefused" });
+        // And it may not encrypt to a stranger: it asked for no peers and no messages.
+        expect((await attempt("nip44.encrypt", "c".repeat(64), "hello")).ok).toBe(false);
+
+        // In the background, at an application's pace: forty proofs in a row, where a world gets six a minute.
+        const burst = await page.evaluate(async (u) => {
+          let ok = 0;
+          for (let i = 0; i < 40; i++) if ((await (window as any).attempt("signEvent", { kind: 27235, content: "", tags: [["u", u], ["method", "GET"]] })).ok) ok++;
+          return ok;
+        }, `${site}/v1/poll`);
+        expect(burst).toBe(40);
+
+        // The page is loaded again: still allowed, for the same things, with no window.
+        const pagesBefore = context.pages().length;
+        await page.reload();
+        expect(await page.evaluate(() => (window as any).isReady)).toMatchObject({ signedIn: true, pubkey: me });
+        // No window was opened. (Not "the same number": the sign-in window may only now be closing.)
+        expect(context.pages().length).toBeLessThanOrEqual(pagesBefore);
+        expect((await sign({ kind: 7, content: "+", tags: [] })).ok).toBe(true);
+        expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
+        expect(await attempt("decryptEvent", draft.value)).toEqual({ ok: true, value: "a private draft" });
+
+        // The application now wants more than was approved: it is not signed in until the user is asked again.
+        await page.goto(`${site}/?more`);
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, needsMore: true });
+        expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
+
+        // Nothing the application heard was a key.
+        expect(JSON.stringify(await page.evaluate(() => (window as any).heard))).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
+
+        // Signing out of the application ends it, across a reload too.
+        await page.goto(`${site}/`);
+        await page.evaluate(() => (window as any).isReady);
+        expect((await attempt("signOut")).ok).toBe(true);
+        await page.reload();
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false });
+        expect((await sign({ kind: 1, content: "after", tags: [] })).ok).toBe(false);
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+        asking.close();
+      }
+    },
+    240_000
   );
 });

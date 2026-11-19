@@ -37,6 +37,29 @@
     </div>
   </section>
 
+  <section id="ask-app" class="connect-card" hidden>
+    <h1>Let this application act as you?</h1>
+    <p id="app-site" class="connect-site"></p>
+    <p class="connect-small">Only allow an application you meant to use. This is its address exactly as your browser reports it.</p>
+    <p id="app-name-line" hidden>It calls itself <strong id="app-name"></strong>. Anyone can call themselves anything: go by the address.</p>
+    <p>Acting as <strong id="app-who"></strong><span id="app-who-key" class="connect-key"></span>, it asks to do these <strong>without asking you again</strong>:</p>
+    <ul id="app-ordinary"></ul>
+    <div id="app-sensitive-block" class="connect-warning" hidden>
+      <p><strong>And these, which deserve a second look:</strong></p>
+      <ul id="app-sensitive"></ul>
+    </div>
+    <ul>
+      <li>Everything it does as you is marked with its address.</li>
+      <li>It can't take your key, sign in anywhere else as you, or touch your BitLogin account.</li>
+      <li>It lasts until you sign out of that application, or 30 days, on this device.</li>
+    </ul>
+    <p class="connect-small">Your key stays with BitLogin. The application never sees it, and nothing is typed there.</p>
+    <div class="cta-row">
+      <button id="allow-app" class="btn primary" type="button">Allow</button>
+      <button id="deny-app" class="btn secondary" type="button">Don't allow</button>
+    </div>
+  </section>
+
   <section id="signin" class="connect-card" hidden>
     <h1>Sign in to BitLogin first</h1>
     <p>A site is asking to sign notes as you, and you aren't signed in on this device. Sign in here, and the question comes next.</p>

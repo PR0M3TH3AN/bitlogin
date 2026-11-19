@@ -31,6 +31,8 @@ import type {
   HandoffSealed,
   SignerKeepPayload,
   SignerSitePayload,
+  AppCryptPayload,
+  AppDecryptEventPayload,
   SignerTouchPayload
 } from "./protocol.js";
 
@@ -230,6 +232,15 @@ export class WorkerClient {
   }
   signerForget(payload: SignerSitePayload) {
     return this.call("signerForget", payload);
+  }
+  appEncrypt(payload: AppCryptPayload) {
+    return this.call("appEncrypt", payload);
+  }
+  appDecrypt(payload: AppCryptPayload) {
+    return this.call("appDecrypt", payload);
+  }
+  appDecryptEvent(payload: AppDecryptEventPayload) {
+    return this.call("appDecryptEvent", payload);
   }
   vaultStatus() {
     return this.call("vaultStatus", {});

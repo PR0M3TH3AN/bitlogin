@@ -50,8 +50,13 @@ it covers only a note and a reaction. Item 1 is what extends it.
 2026-11-19 from the one in pull request #34; the reasons are under each item
 that moved.
 
-- [ ] **1. What an application declares (§SW9).** Moved from fourth to
-  first. Until it exists no real app can use the window, so every app stays
+- [ ] **1. What an application declares (§SW9).** **Built on `beta`
+  2026-11-19, not promoted.** Still to do before it is: the owner's five
+  decisions in §SW9.10; move one real application onto it (Tessera is the
+  smallest: six kinds, one service key, no background signing outside a
+  purchase); try it by hand on the beta site; and a wallet connection
+  through the window (§SW9.9), which bitunlock and Satisfied need. Moved
+  from fourth to first. Until it exists no real app can use the window, so every app stays
   on the embedded widget, which is the path this work exists to retire; the
   lock would be polishing a flow nobody is on. From a read of their code on
   2026-11-19: bitunlock asks its signer for web-request proofs, private

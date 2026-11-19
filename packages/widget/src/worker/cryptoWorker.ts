@@ -33,6 +33,7 @@ import {
   encodeNpub,
   Nip46Client,
   parseBunkerUri,
+  verifyNostrEvent,
   buildNostrconnectUri,
   listenForNostrconnect,
   type NostrEvent
@@ -49,7 +50,9 @@ import {
 } from "@bitlogin/core/vault";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
-import { openHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type SealedHandoff } from "./handoff.js";
+import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
+import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeerFor } from "../embedded/permissions.js";
+import { signClass } from "../embedded/policy.js";
 import { deleteSignerGrant, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { SerialQueue } from "./serialQueue.js";
@@ -75,6 +78,8 @@ import type {
   Nip46ConnectPayload,
   Nip46NostrconnectStartPayload,
   HandoffExportPayload,
+  AppCryptPayload,
+  AppDecryptEventPayload,
   SignerKeepPayload,
   SignerSitePayload,
   SignerTouchPayload
@@ -103,6 +108,10 @@ interface SessionState {
    *  the everyday key and nothing else, held in memory, never cached. Such a
    *  session can sign and can say who it is. It can do nothing else. */
   signerOnly: boolean;
+  /** For a signer-only session: what an application was approved for (§SW9), from inside the sealed hand-off or
+   *  the grant kept from one. Null for a site that declared nothing. Everything such a session is asked is held
+   *  to this here, in the worker, whatever the page that asks says. */
+  app: HandoffApp | null;
 }
 
 const session: SessionState = {
@@ -117,7 +126,8 @@ const session: SessionState = {
   connectionVaultRoot: null,
   vaultKnown: false,
   vault: null,
-  signerOnly: false
+  signerOnly: false,
+  app: null
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
@@ -146,6 +156,11 @@ function requireUnlocked(): { signer: NostrSigner; everydayPrivateKey: Uint8Arra
   return { signer: session.signer, everydayPrivateKey: session.everydayPrivateKey };
 }
 
+function requireApp(): HandoffApp {
+  if (!session.signerOnly || !session.app) throw new Error("refused");
+  return session.app;
+}
+
 function clearSession(): void {
   session.signer?.destroy();
   if (session.everydayPrivateKey) session.everydayPrivateKey.fill(0);
@@ -162,6 +177,7 @@ function clearSession(): void {
   session.connectionVaultRoot = null;
   session.vaultKnown = false;
   session.signerOnly = false;
+  session.app = null;
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
@@ -392,8 +408,9 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "handoffExport": {
       const { everydayPrivateKey } = requireUnlocked();
       const sender = generatePrivateKey();
+      const p = payload as HandoffExportPayload;
       try {
-        return sealHandoff(everydayPrivateKey, (payload as HandoffExportPayload).recipientPublicKey, sender);
+        return sealHandoff(everydayPrivateKey, p.recipientPublicKey, sender, p.app);
       } finally {
         wipe(sender);
       }
@@ -411,7 +428,22 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!session.signerOnly) throw new Error("Only a signer-only session can be remembered for a site.");
       const p = payload as SignerKeepPayload;
       const now = Date.now() / 1000;
-      return { kept: await saveSignerGrant(store, { site: p.site, everydayPrivateKey, until: p.until, ...(p.name ? { name: p.name } : {}), signed: [] }, now) };
+      // An application's grant is for the site its hand-off was sealed for, and no other.
+      if (session.app && session.app.site !== p.site) throw new Error("This hand-off was for another site.");
+      return {
+        kept: await saveSignerGrant(
+          store,
+          {
+            site: p.site,
+            everydayPrivateKey,
+            until: p.until,
+            ...(p.name ? { name: p.name } : {}),
+            signed: [],
+            ...(session.app ? { permissions: session.app.permissions, signedSensitive: [] } : {})
+          },
+          now
+        )
+      };
     }
 
     // The site's page was loaded again: what was kept for that site, if it is still in date, becomes a
@@ -424,7 +456,15 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.signer = new NostrSigner(grant.everydayPrivateKey);
       session.everydayPrivateKey = grant.everydayPrivateKey;
       session.signerOnly = true;
-      return { restored: true, everydayPublicKey: session.signer.getPublicKey(), until: grant.until, ...(grant.name ? { name: grant.name } : {}), signed: grant.signed };
+      session.app = grant.permissions ? { site: grant.site, permissions: grant.permissions } : null;
+      return {
+        restored: true,
+        everydayPublicKey: session.signer.getPublicKey(),
+        until: grant.until,
+        ...(grant.name ? { name: grant.name } : {}),
+        signed: grant.signed,
+        ...(grant.permissions ? { permissions: grant.permissions, signedSensitive: grant.signedSensitive ?? [] } : {})
+      };
     }
 
     // Count a signature against the site, where reloading the page can't lose the count.
@@ -436,7 +476,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const kept = await loadSignerGrant(store, p.site, now);
       // Only a grant that is there, and is this session's, is rewritten.
       if (kept && getPublicKeyHex(kept.everydayPrivateKey) === getPublicKeyHex(everydayPrivateKey)) {
-        await saveSignerGrant(store, { ...kept, signed: Array.isArray(p.signed) ? p.signed : [] }, now);
+        await saveSignerGrant(
+          store,
+          { ...kept, signed: Array.isArray(p.signed) ? p.signed : [], ...(kept.permissions ? { signedSensitive: Array.isArray(p.signedSensitive) ? p.signedSensitive : [] } : {}) },
+          now
+        );
       }
       return {};
     }
@@ -450,17 +494,58 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!pendingHandoff) throw new Error("No hand-off was begun here.");
       const mine = pendingHandoff;
       pendingHandoff = null;
-      let key: Uint8Array;
+      let opened: { key: Uint8Array; app: HandoffApp | null };
       try {
-        key = openHandoff(payload as SealedHandoff, mine);
+        opened = openAppHandoff(payload as SealedHandoff, mine);
       } finally {
         wipe(mine);
       }
       clearSession();
-      session.signer = new NostrSigner(key);
-      session.everydayPrivateKey = key;
+      session.signer = new NostrSigner(opened.key);
+      session.everydayPrivateKey = opened.key;
       session.signerOnly = true;
-      return { everydayPublicKey: session.signer.getPublicKey() };
+      session.app = opened.app;
+      return { everydayPublicKey: session.signer.getPublicKey(), ...(opened.app ? { app: opened.app } : {}) };
+    }
+
+    // ---- What an approved application may ask beyond signing (§SW9.5). Refused without a permission set.
+
+    case "appEncrypt": {
+      const { signer } = requireUnlocked();
+      const app = requireApp();
+      const p = payload as AppCryptPayload;
+      const me = signer.getPublicKey();
+      // To the user's own key, to a key they were shown, or (where they approved sending messages) to whoever
+      // a message is for.
+      const sendsMessages = app.permissions.sign.some((kind) => MESSAGE_KINDS.includes(kind));
+      if (!mayEncryptTo(app.permissions, me, p.peerPublicKey) && !(sendsMessages && /^[0-9a-f]{64}$/u.test(String(p.peerPublicKey)))) {
+        throw new Error("refused");
+      }
+      if (typeof p.text !== "string" || p.text.length > 100_000) throw new Error("refused");
+      return { text: p.scheme === "nip04" ? signer.nip04Encrypt(p.peerPublicKey, p.text) : signer.nip44Encrypt(p.peerPublicKey, p.text) };
+    }
+
+    case "appDecrypt": {
+      const { signer } = requireUnlocked();
+      const app = requireApp();
+      const p = payload as AppCryptPayload;
+      // Only against a key the user was shown. Never the user's own: that would read everything they ever
+      // encrypted to themselves, whatever kind it was kept in.
+      if (!mayDecryptFrom(app.permissions, p.peerPublicKey) || typeof p.text !== "string") throw new Error("refused");
+      return { text: p.scheme === "nip04" ? signer.nip04Decrypt(p.peerPublicKey, p.text) : signer.nip44Decrypt(p.peerPublicKey, p.text) };
+    }
+
+    case "appDecryptEvent": {
+      const { signer } = requireUnlocked();
+      const app = requireApp();
+      const event: unknown = (payload as AppDecryptEventPayload).event;
+      // Reading is tied to an event that really is what it says: signed, of a kind the user approved reading.
+      if (!verifyNostrEvent(event)) throw new Error("refused");
+      const peer = readPeerFor(app.permissions, signer.getPublicKey(), event);
+      if (!peer) throw new Error("refused");
+      // Kind 4 is the older scheme, and says so in its content.
+      const text = event.kind === 4 || /\?iv=[A-Za-z0-9+/=]+$/u.test(event.content) ? signer.nip04Decrypt(peer, event.content) : signer.nip44Decrypt(peer, event.content);
+      return { text };
     }
 
     case "nip46Connect": {
@@ -781,6 +866,19 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "signEvent": {
       const { signer } = requireUnlocked();
       const p = payload as SignEventPayload;
+      if (session.signerOnly) {
+        // The floor under the embedded signer's page (§SW5, §SW9.8): a session that arrived by a hand-off
+        // signs only what its site may have signed, decided again here whatever that page prepared. For an
+        // application that is its permission set, applied in full. For a site that declared nothing it is the
+        // kind alone, a note or a reaction: this worker is never told which site a plain hand-off was for, so
+        // the rest of that site's rules stay with the page.
+        if (session.app) {
+          const allowed = prepareForApp(session.app.permissions, p, session.app.site, Date.now() / 1000);
+          if (!allowed) throw new Error("refused");
+          return signer.signEvent(allowed);
+        }
+        if (signClass(p.kind) !== "ordinary") throw new Error("refused");
+      }
       return signer.signEvent({ kind: p.kind, tags: p.tags, content: p.content, created_at: p.created_at });
     }
 
@@ -1057,6 +1155,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
+  "appEncrypt", "appDecrypt", "appDecryptEvent",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

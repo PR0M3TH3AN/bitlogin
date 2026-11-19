@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey, getPublicKeyHex } from "@bitlogin/core/crypto";
-import { HANDOFF_PURPOSE, openHandoff, sealHandoff } from "./handoff.js";
+import { HANDOFF_PURPOSE, openAppHandoff, openHandoff, sealHandoff, SIGNER_ONLY_ACTIONS } from "./handoff.js";
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
@@ -94,5 +94,52 @@ describe("a session that arrived by a hand-off", () => {
     // Ending any session ends being signer-only with it.
     const clear = source.slice(source.indexOf("function clearSession()"), source.indexOf("function clearSession()") + 900);
     expect(clear).toContain("session.signerOnly = false");
+  });
+
+  it("carries what an application was approved for inside the seal, read again on both sides", () => {
+    const everyday = generatePrivateKey();
+    const recipient = generatePrivateKey();
+    const app = { site: "https://app.example", permissions: { name: "Example", sign: [7, 1, 1], extra: "ignored" } };
+    const sealed = sealHandoff(everyday, getPublicKeyHex(recipient), generatePrivateKey(), app);
+    const opened = openAppHandoff(sealed, recipient);
+    expect(hex(opened.key)).toBe(hex(everyday));
+    // What comes out is what readPermissions made of it, not what a page passed in.
+    expect(opened.app).toEqual({ site: "https://app.example", permissions: { name: "Example", sign: [1, 7], appData: [], proofs: [], read: [], peers: [] } });
+    // A plain hand-off carries none: the session it makes can sign a note and a reaction and nothing else.
+    expect(openAppHandoff(sealHandoff(everyday, getPublicKeyHex(recipient), generatePrivateKey()), recipient).app).toBeNull();
+  });
+
+  it("refuses to seal, or to open, a set an application may not be given", () => {
+    const everyday = generatePrivateKey();
+    const recipient = generatePrivateKey();
+    const to = getPublicKeyHex(recipient);
+    // A grant that gives a world a terminal on the user's computer, BitLogin's own data, a site that is not one.
+    for (const app of [
+      { site: "https://app.example", permissions: { sign: [1, 27302] } },
+      { site: "https://app.example", permissions: { sign: [30078], appData: ["bitlogin:"] } },
+      { site: "https://app.example/path", permissions: { sign: [1] } },
+      { site: "https://app.example", permissions: {} },
+      { site: "https://app.example", permissions: null }
+    ]) {
+      expect(() => sealHandoff(everyday, to, generatePrivateKey(), app), JSON.stringify(app)).toThrow(/permission set/u);
+    }
+    // One forged past the sending side is still refused by the receiving one, whole.
+    const sender = new NostrSigner(generatePrivateKey());
+    const forged = {
+      senderPublicKey: sender.getPublicKey(),
+      payload: sender.nip44Encrypt(to, JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: hex(everyday), app: { site: "https://app.example", permissions: { sign: [27302] } } }))
+    };
+    expect(() => openAppHandoff(forged, recipient)).toThrow(/cannot be read/u);
+    expect(() => openHandoff(forged, recipient)).toThrow(/cannot be read/u);
+  });
+
+  it("lets a handed-over session ask for nothing beyond signing, the grant, and what an application was approved for", () => {
+    expect([...SIGNER_ONLY_ACTIONS].sort()).toEqual(
+      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "signEvent", "signerForget", "signerKeep", "signerRestore", "signerTouch"]
+    );
+    // Never: exporting the key, raw decrypting, the vault, the account, or handing the key on again.
+    for (const never of ["exportIdentity", "nip44Decrypt", "nip04Decrypt", "nip44Encrypt", "handoffExport", "vaultRevealNwc", "changePassword", "buildRecoveryExport"]) {
+      expect(SIGNER_ONLY_ACTIONS.has(never), never).toBe(false);
+    }
   });
 });

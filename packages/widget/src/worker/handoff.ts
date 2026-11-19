@@ -22,6 +22,19 @@
  */
 import { NostrSigner } from "@bitlogin/core/account";
 import { getPublicKeyHex } from "@bitlogin/core/crypto";
+import { readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { grantSite } from "./signerGrant.js";
+
+/**
+ * What an application was approved for (docs/sign-in-window.md §SW9): the
+ * site, and the permission set the user saw in the window. It travels inside
+ * the seal, from one of BitLogin's workers to the other, so nothing between
+ * them can widen it.
+ */
+export interface HandoffApp {
+  site: string;
+  permissions: AppPermissions;
+}
 
 export const HANDOFF_PURPOSE = "bitlogin:signer-handoff:v1";
 
@@ -38,6 +51,11 @@ export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "logout",
   "handoffBegin",
   "handoffAccept",
+  // What an approved application may ask beyond signing (§SW9.5). Each is refused unless the session carries a
+  // permission set, and then held to it (cryptoWorker.ts).
+  "appEncrypt",
+  "appDecrypt",
+  "appDecryptEvent",
   // Remembering a site, so the user is not asked on every page load (signerGrant.ts).
   "signerKeep",
   "signerRestore",
@@ -66,14 +84,24 @@ function fromHex(hex: string): Uint8Array {
 export function sealHandoff(
   everydayPrivateKey: Uint8Array,
   recipientPublicKey: string,
-  senderPrivateKey: Uint8Array
+  senderPrivateKey: Uint8Array,
+  app?: { site: unknown; permissions: unknown }
 ): SealedHandoff {
   if (!HEX64.test(recipientPublicKey)) throw new Error("The hand-off has no usable recipient key.");
   if (everydayPrivateKey.length !== 32) throw new Error("No identity is unlocked in this session.");
+  // An application's set is read again here, in the worker that holds the key: what is sealed is what
+  // readPermissions made of it, never what a page passed in.
+  let sealedApp: HandoffApp | null = null;
+  if (app !== undefined) {
+    const site = grantSite(app.site);
+    const permissions = readPermissions(app.permissions);
+    if (!site || !permissions) throw new Error("That is not a permission set an application may be given.");
+    sealedApp = { site, permissions };
+  }
   // A signer wipes the key it was given when it is destroyed. It is given a copy: the caller's is the caller's to wipe.
   const sender = new NostrSigner(senderPrivateKey.slice());
   try {
-    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey) });
+    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}) });
     return { senderPublicKey: sender.getPublicKey(), payload: sender.nip44Encrypt(recipientPublicKey, plaintext) };
   } finally {
     sender.destroy();
@@ -86,6 +114,16 @@ export function sealHandoff(
  * hand-off carrying a usable key: there is no partial acceptance.
  */
 export function openHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Array): Uint8Array {
+  return openAppHandoff(sealed, recipientPrivateKey).key;
+}
+
+/**
+ * The same, with what the hand-off says an application was approved for.
+ * `app` is null for a hand-off that carries none: the session it makes can
+ * sign a note and a reaction and nothing else. A hand-off that carries a set
+ * which does not read as one is refused whole.
+ */
+export function openAppHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Array): { key: Uint8Array; app: HandoffApp | null } {
   if (!sealed || !HEX64.test(sealed.senderPublicKey) || typeof sealed.payload !== "string") {
     throw new Error("That is not a signer hand-off.");
   }
@@ -98,7 +136,7 @@ export function openHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Arr
   } finally {
     recipient.destroy();
   }
-  let parsed: { v?: unknown; purpose?: unknown; key?: unknown };
+  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown };
   try {
     parsed = JSON.parse(plaintext) as typeof parsed;
   } catch {
@@ -115,5 +153,13 @@ export function openHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Arr
     key.fill(0);
     throw new Error("The hand-off carried an unusable key.");
   }
-  return key;
+  if (parsed.app === undefined) return { key, app: null };
+  const a = parsed.app as { site?: unknown; permissions?: unknown } | null;
+  const site = a && typeof a === "object" ? grantSite(a.site) : "";
+  const permissions = a && typeof a === "object" ? readPermissions(a.permissions) : null;
+  if (!site || !permissions) {
+    key.fill(0);
+    throw new Error("The hand-off carried a permission set that cannot be read.");
+  }
+  return { key, app: { site, permissions } };
 }

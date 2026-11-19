@@ -12,10 +12,19 @@
  */
 import type { HeadlessSigner } from "../headless.js";
 import { handoffMessage, readHandoffMessage } from "./policy.js";
+import { describePermissions, type AppPermissions, type PermissionWords } from "./permissions.js";
+
+export { describePermissions, type AppPermissions, type PermissionWords };
 
 export interface FoundSigner {
   /** The site the signer is embedded in, as the browser reported it to the signer. Show this, exactly. */
   readonly site: string;
+  /**
+   * What the site said it wants, if it is an application (§SW9): already
+   * read and tidied. Show it, with `describePermissions`, before Allow. Null
+   * for a site that declared nothing: it is asking for a note and a reaction.
+   */
+  readonly wants: AppPermissions | null;
   /**
    * Hand the signer the session's key, sealed inside the workers. Call it
    * only after the user pressed Allow on a page that showed `site`. Resolves
@@ -75,10 +84,13 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       clearTimeout(giveUp);
       settled = true;
       const { world, recipient } = msg;
+      const wants = msg.wants ?? null;
       resolve({
         site: world,
+        wants,
         async grant(session, name) {
-          const sealed = await session.exportHandoff(recipient);
+          // What is sealed is exactly what this page was given to show: the set, for the site the browser named.
+          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined);
           const answered = new Promise<boolean>((done) => {
             onDone = done;
             setTimeout(() => done(false), 8000);

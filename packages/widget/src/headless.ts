@@ -18,6 +18,7 @@
  * Deploy `cryptoWorker.js` and the shared chunks alongside the headless build,
  * exactly as for `bitlogin.js` — the worker is where the keys live.
  */
+import type { AppPermissions } from "./embedded/permissions.js";
 import { WorkerClient } from "./worker/workerClient.js";
 import type { SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
@@ -54,13 +55,23 @@ export interface HeadlessSigner {
    * if this session itself arrived by a hand-off. The caller must deliver the
    * result only to a frame of this origin.
    */
-  exportHandoff(recipientPublicKey: string): Promise<{ senderPublicKey: string; payload: string }>;
+  exportHandoff(recipientPublicKey: string, app?: { site: string; permissions: unknown }): Promise<{ senderPublicKey: string; payload: string }>;
   /**
    * Receiving side, last step: open the hand-off. This signer then holds a
    * signer-only session, in memory: it can sign and say who it is, and
    * nothing else, and nothing is cached.
    */
-  acceptHandoff(sealed: { senderPublicKey: string; payload: string }): Promise<{ pubkey: string }>;
+  acceptHandoff(sealed: { senderPublicKey: string; payload: string }): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions } }>;
+  /**
+   * For a session an application was approved for (docs/sign-in-window.md
+   * §SW9.5). Each rejects unless the session carries a permission set that
+   * covers it: the worker decides, not the caller.
+   */
+  appEncrypt(peerPublicKey: string, text: string, scheme?: "nip44" | "nip04"): Promise<string>;
+  /** Only against a key in the set's `peers`. */
+  appDecrypt(peerPublicKey: string, text: string, scheme?: "nip44" | "nip04"): Promise<string>;
+  /** The content of a whole signed event of a kind the set may read. */
+  appDecryptEvent(event: unknown): Promise<string>;
   /** Whether the unlocked session arrived by a hand-off and can only sign. */
   isSignerOnly(): Promise<boolean>;
   /**
@@ -75,9 +86,11 @@ export interface HeadlessSigner {
    * Take up what was kept for a site, if it is still in date: this signer
    * then holds a signer-only session. Null when nothing is kept for it.
    */
-  restoreSignerGrant(site: string): Promise<{ pubkey: string; until: number; name?: string; signed: number[] } | null>;
+  restoreSignerGrant(
+    site: string
+  ): Promise<{ pubkey: string; until: number; name?: string; signed: number[]; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
-  touchSignerGrant(site: string, signed: number[]): Promise<void>;
+  touchSignerGrant(site: string, signed: number[], signedSensitive?: number[]): Promise<void>;
   /** Forget a site. */
   forgetSignerGrant(site: string): Promise<void>;
   /** Clear the cached session for this origin. */
@@ -141,14 +154,23 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async beginHandoff() {
       return (await client.handoffBegin()).recipientPublicKey;
     },
-    async exportHandoff(recipientPublicKey) {
+    async exportHandoff(recipientPublicKey, app) {
       await requirePubkey();
-      return client.handoffExport({ recipientPublicKey });
+      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}) });
     },
     async acceptHandoff(sealed) {
       const res = await client.handoffAccept(sealed);
       pubkey = res.everydayPublicKey;
-      return { pubkey };
+      return { pubkey, ...(res.app ? { app: res.app } : {}) };
+    },
+    async appEncrypt(peerPublicKey, text, scheme = "nip44") {
+      return (await client.appEncrypt({ peerPublicKey, text, scheme })).text;
+    },
+    async appDecrypt(peerPublicKey, text, scheme = "nip44") {
+      return (await client.appDecrypt({ peerPublicKey, text, scheme })).text;
+    },
+    async appDecryptEvent(event) {
+      return (await client.appDecryptEvent({ event })).text;
     },
     async isSignerOnly() {
       return Boolean((await client.getSessionStatus()).signerOnly);
@@ -160,10 +182,16 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       const res = await client.signerRestore({ site });
       if (!res.restored || !res.everydayPublicKey || typeof res.until !== "number") return null;
       pubkey = res.everydayPublicKey;
-      return { pubkey, until: res.until, ...(res.name ? { name: res.name } : {}), signed: res.signed ?? [] };
+      return {
+        pubkey,
+        until: res.until,
+        ...(res.name ? { name: res.name } : {}),
+        signed: res.signed ?? [],
+        ...(res.permissions ? { permissions: res.permissions, signedSensitive: res.signedSensitive ?? [] } : {})
+      };
     },
-    async touchSignerGrant(site, signed) {
-      await client.signerTouch({ site, signed });
+    async touchSignerGrant(site, signed, signedSensitive) {
+      await client.signerTouch({ site, signed, ...(signedSensitive ? { signedSensitive } : {}) });
     },
     async forgetSignerGrant(site) {
       await client.signerForget({ site });

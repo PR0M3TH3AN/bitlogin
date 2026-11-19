@@ -1,6 +1,7 @@
 /** Request/response envelope for the main-thread <-> crypto-worker RPC channel. */
 import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
 import type { RebroadcastResult, RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
+import type { AppPermissions } from "../embedded/permissions.js";
 
 export interface WorkerRequest<TAction extends string = string, TPayload = unknown> {
   id: string;
@@ -180,6 +181,8 @@ export interface HandoffBeginResult {
 
 export interface HandoffExportPayload {
   recipientPublicKey: string;
+  /** What an application was approved for, as the window showed it (§SW9). The worker reads it again before sealing. */
+  app?: { site: string; permissions: unknown };
 }
 
 export interface HandoffSealed {
@@ -189,6 +192,21 @@ export interface HandoffSealed {
 
 export interface HandoffAcceptResult {
   everydayPublicKey: string;
+  /** What the hand-off says an application was approved for, as the worker read it. Absent for a plain one. */
+  app?: { site: string; permissions: AppPermissions };
+}
+
+// ---- What an approved application may ask beyond signing (docs/sign-in-window.md §SW9.5) ----
+
+export interface AppCryptPayload {
+  peerPublicKey: string;
+  /** Plaintext to encrypt, or ciphertext to decrypt. */
+  text: string;
+  scheme: "nip44" | "nip04";
+}
+export interface AppDecryptEventPayload {
+  /** A whole signed event. Its signature is checked in the worker. */
+  event: unknown;
 }
 
 // ---- What the embedded signer remembers for a site (docs/sign-in-window.md §SW11) ----
@@ -209,6 +227,8 @@ export interface SignerTouchPayload {
   site: string;
   /** When the last signatures for this site were made, in milliseconds. */
   signed: number[];
+  /** For an application: its sensitive signatures, counted apart. */
+  signedSensitive?: number[];
 }
 
 export interface SignerRestoreResult {
@@ -217,6 +237,8 @@ export interface SignerRestoreResult {
   until?: number;
   name?: string;
   signed?: number[];
+  permissions?: AppPermissions;
+  signedSensitive?: number[];
 }
 
 export interface RestoreSessionResult {
@@ -361,6 +383,9 @@ export type WorkerActionMap = {
   signerRestore: [SignerSitePayload, SignerRestoreResult];
   signerTouch: [SignerTouchPayload, Record<string, never>];
   signerForget: [SignerSitePayload, Record<string, never>];
+  appEncrypt: [AppCryptPayload, { text: string }];
+  appDecrypt: [AppCryptPayload, { text: string }];
+  appDecryptEvent: [AppDecryptEventPayload, { text: string }];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];
   vaultList: [Record<string, never>, VaultListResult];

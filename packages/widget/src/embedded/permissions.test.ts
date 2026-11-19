@@ -27,7 +27,7 @@ const set = (extra: Record<string, unknown> = {}): AppPermissions => {
 
 describe("readPermissions", () => {
   it("reads a well-formed set, tidied", () => {
-    expect(readPermissions({ name: " Example​ ", sign: [7, 1, 1], read: [], peers: [] })).toEqual({ name: "Example", sign: [1, 7], appData: [], proofs: [], read: [], peers: [] });
+    expect(readPermissions({ name: " Example\u200b ", sign: [7, 1, 1], read: [], peers: [] })).toEqual({ name: "Example", sign: [1, 7], appData: [], proofs: [], read: [], peers: [] });
   });
 
   it("refuses a set that names anything on the never list, whole", () => {
@@ -210,7 +210,7 @@ describe("describePermissions", () => {
   });
 
   it("never shows a site's own text beyond its cleaned name and prefixes", () => {
-    const perms = readPermissions({ name: "<b>Bank</b>‮", sign: [1] });
+    const perms = readPermissions({ name: "<b>Bank</b>\u202e", sign: [1] });
     expect(perms?.name).toBe("<b>Bank</b>");
     // Markup is the page's to escape; what matters here is that nothing invisible or multi-line survives.
     expect(describePermissions(perms!, SITE).ordinary).toEqual(["post notes"]);

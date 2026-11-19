@@ -70,6 +70,26 @@ that which belongs here.
 - **Not here, at first:** the sign-in window page and the per-site
   permission list. They followed the same day: see the entry above.
 
+## 2026-11-19 (on `beta` only; not yet on `main`)
+
+- **An application can sign in through the sign-in window and then act in
+  the background.** It declares a permission set; the user sees all of it
+  once, in the window; after Allow it signs those kinds with no prompt for
+  thirty days or until the user signs out of it. New file to vendor:
+  `bitlogin-client.js` (`createBitLoginClient`). See
+  `docs/sign-in-window.md` §SW8 and §SW9.
+- **What an application may and may not have.** Never: wallet and
+  remote-signer traffic, NSWP passes and grants, BitLogin's own data. A
+  web-request proof is signed only for the application's own origin or one
+  it declared. Reading is tied to a signed event of a kind it declared, so
+  approval to read one kind is not approval to read another; raw decrypting
+  against the user's own key is not offered.
+- **Changed for integrators already on the window (worlds):** nothing. A
+  site that declares no permissions gets a note and a reaction, as before.
+- **A beta channel.** Work lands on the `beta` branch and
+  `https://bitlogin-beta.vercel.app/` before production
+  (`CONTRIBUTING.md`, "Release channels").
+
 ## 2026-11-18
 
 **Relay list (later the same day).** A probe of the eight built-in storage

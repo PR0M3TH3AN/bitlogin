@@ -23,6 +23,7 @@
  * Who is asking is what the browser says, never what the site says.
  */
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
+import { APP_LIMITS, limitClass, prepareForApp, type AppPermissions } from "./permissions.js";
 import {
   cleanOrigin,
   createSignGate,
@@ -54,6 +55,20 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   /** When what the user allowed stops, in seconds. */
   let until = 0;
   let gate: SignGate = createSignGate();
+  /** What an application was approved for (§SW9), as BitLogin's worker read it out of the sealed hand-off or the
+   *  grant kept from one. Null for a site that declared nothing: a note and a reaction, as §SW5 has it. */
+  let app: AppPermissions | null = null;
+  /** What the site has said it wants, for the window to show the next time it is opened. Approves nothing. */
+  let wanted: AppPermissions | null = null;
+  /** An application's counts, apart from a world's (§SW9.6). Only the public and the sensitive are kept across
+   *  page loads: they are what a reload could be used to get round. */
+  let gates = { quiet: createSignGate(APP_LIMITS.quiet), public: createSignGate(APP_LIMITS.public), sensitive: createSignGate(APP_LIMITS.sensitive), read: createSignGate(APP_LIMITS.read) };
+  const appGates = (signedPublic: number[] = [], signedSensitive: number[] = []) => ({
+    quiet: createSignGate(APP_LIMITS.quiet),
+    public: createSignGate(APP_LIMITS.public, signedPublic),
+    sensitive: createSignGate(APP_LIMITS.sensitive, signedSensitive),
+    read: createSignGate(APP_LIMITS.read)
+  });
   /** The hand-off in flight: the window that asked, and the word it gave. */
   let asking: { nonce: string; from: MessageEventSource } | null = null;
 
@@ -67,6 +82,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     pubkey = null;
     name = null;
     until = 0;
+    app = null;
     if (held) void (forSite ? held.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => held.destroy());
   };
   /**
@@ -84,7 +100,9 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
         pubkey = kept.pubkey;
         name = kept.name ?? null;
         until = kept.until;
-        gate = createSignGate(SIGN_LIMITS, kept.signed);
+        app = kept.permissions ?? null;
+        if (app) gates = appGates(kept.signed, kept.signedSensitive);
+        else gate = createSignGate(SIGN_LIMITS, kept.signed);
       } catch {
         /* nothing kept, or no storage here: the user is asked, as before */
       }
@@ -94,7 +112,15 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   };
   const state = (id?: string): SignerReply => {
     if (pubkey && Date.now() / 1000 >= until) lock();
-    return { t: "state", ...(id ? { id } : {}), unlocked: !!pubkey, ...(pubkey ? { pubkey, until } : {}), ...(pubkey && name ? { name } : {}) };
+    return {
+      t: "state",
+      ...(id ? { id } : {}),
+      unlocked: !!pubkey,
+      ...(pubkey ? { pubkey, until } : {}),
+      ...(pubkey && name ? { name } : {}),
+      // An application is told what it was approved for, so it can tell that from what it now wants.
+      ...(pubkey && app ? { permissions: app } : {})
+    };
   };
 
   const fromSite = async (e: MessageEvent) => {
@@ -111,18 +137,46 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       lock();
       return say(state(ask.id));
     }
-    // "sign". Every way this can fail says the same thing: refused.
+    if (ask.t === "want") {
+      // Remembered for the window to show. It approves nothing: only Allow, in the window, does.
+      wanted = ask.permissions;
+      return say(state(ask.id));
+    }
+    // Everything else is asked of an unlocked signer. Every way it can fail says the same thing: refused.
     const refuse = () => say({ t: "refused", id: ask.id });
     if (pubkey && Date.now() / 1000 >= until) lock();
     if (!headless || !pubkey) return refuse();
-    const prepared = prepareForSite(ask.event, site, Date.now() / 1000);
-    if (!prepared || !gate.take(Date.now())) return refuse();
+
+    if (ask.t === "encrypt" || ask.t === "decrypt" || ask.t === "read") {
+      // Only an application the user approved may ask, and BitLogin's worker holds it to what they approved.
+      if (!app || (ask.t !== "encrypt" && !gates.read.take(Date.now()))) return refuse();
+      try {
+        const text =
+          ask.t === "read"
+            ? await headless.appDecryptEvent(ask.event)
+            : ask.t === "encrypt"
+              ? await headless.appEncrypt(ask.peer, ask.text, ask.scheme)
+              : await headless.appDecrypt(ask.peer, ask.text, ask.scheme);
+        return say({ t: "text", id: ask.id, text });
+      } catch {
+        return refuse();
+      }
+    }
+
+    // "sign".
+    const now = Date.now();
+    const prepared = app ? prepareForApp(app, ask.event, site, now / 1000) : prepareForSite(ask.event, site, now / 1000);
+    if (!prepared) return refuse();
+    const counted = app ? limitClass(prepared.kind) : null;
+    if (!(counted ? gates[counted] : gate).take(now)) return refuse();
     try {
       const signed = await headless.signEvent(prepared);
       if (signed.pubkey !== pubkey) return refuse();
       say({ t: "signed", id: ask.id, event: signed });
-      // Counted where loading the page again can't lose the count.
-      void headless.touchSignerGrant(site, gate.times()).catch(() => {});
+      // Counted where loading the page again can't lose the count. What an application signs on timers is not
+      // written down each time: that count starts again with the page, and is generous either way.
+      if (!counted) void headless.touchSignerGrant(site, gate.times()).catch(() => {});
+      else if (counted !== "quiet") void headless.touchSignerGrant(site, gates.public.times(), gates.sensitive.times()).catch(() => {});
     } catch {
       refuse();
     }
@@ -139,7 +193,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }
@@ -152,6 +206,10 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     try {
       const signer = await load();
       const got = await signer.acceptHandoff(msg.sealed);
+      // A hand-off sealed for an application names the site it was approved for. For another site it is refused.
+      if (got.app && got.app.site !== site) throw new Error("for another site");
+      app = got.app?.permissions ?? null;
+      gates = appGates();
       pubkey = got.pubkey;
       name = msg.name ?? null;
       until = Math.floor(Date.now() / 1000) + SIGN_LIMITS.grantSec;

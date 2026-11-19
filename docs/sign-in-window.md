@@ -11,8 +11,7 @@ finding and handing over** (§SW3: `embedded/window.ts`, built as
 `bitlogin-window.js`); and both pages on BitLogin's own site
 (`/signer/`, `/connect/`), with the headers of §SW6; and the signer
 **remembering a site** (§SW11: `worker/signerGrant.ts`). NOT implemented, design only:
-what an application needs beyond a note and a reaction (§SW9, designed and
-being built on `beta`), adding a
+adding a
 passkey to an existing account (§SW7), the optional lock (§SW12, §SW13),
 profiles in the window (§SW14), and fewer presses for a new site (§SW15).
 The order of work is in `docs/TODO.md`.
@@ -192,11 +191,42 @@ that uses it.
 On the window's page, a press on Allow in the first second is ignored: a
 key meant for the site, pressed as the window came up, must not land on it.
 
-# SW9. Applications (design; being built on `beta`)
+**An application** (§SW9) uses BitLogin's own client, which does the frame,
+the window and the checking:
+
+```js
+import { createBitLoginClient } from "./vendor/bitlogin/bitlogin-client.js";
+
+const bitlogin = createBitLoginClient({
+  at: "https://bitlogin.network",
+  permissions: { name: "My app", sign: [1, 7, 27235] }
+});
+await bitlogin.ready();                        // already allowed? then signedIn is true
+button.onclick = () => bitlogin.signIn();      // from a press: it opens the window
+const signed = await bitlogin.signEvent({ kind: 1, content: "hello", tags: [] });
+```
+
+It also has `nip44` and `nip04` (`encrypt`, `decrypt`), `decryptEvent`,
+`signOut`, `state` and `onChange`. The client file imports two shared
+chunks, so an application vendors BitLogin's whole build folder, as it does
+today. If an application later wants more than the user approved, `state()`
+says `needsMore` and it is not signed in until they are asked again.
+
+# SW9. Applications (built on `beta`; not on `main`)
 
 A note and a reaction are enough for a visitor to a world. They are not
 enough for an application. This section is what an application may ask for,
 how the user sees it, and how the signer holds the application to it.
+
+**What is built** (2026-11-19, on `beta`): the permission set and its rules
+(`embedded/permissions.ts`); the set carried inside the sealed hand-off and
+kept with the grant (`worker/handoff.ts`, `worker/signerGrant.ts`); the
+worker holding a handed-over session to it, with encrypting and reading
+(`worker/cryptoWorker.ts`); the signer and the window (`embedded/signer.ts`,
+`embedded/window.ts`, `/connect/`); and a client for an application to use
+(`embedded/client.ts`, built as `bitlogin-client.js`). A browser test runs
+the whole of it from an application on another origin. **Not built:** a
+wallet connection (§SW9.9), and no application has been moved onto it.
 
 **The requirement (owner, 2026-11-19).** Once a user has approved an
 application, it signs and sends in the background, with no further prompt,

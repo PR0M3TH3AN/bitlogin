@@ -4,7 +4,7 @@
 // BitLogin's workers, as a key that can only sign.
 //
 // This page never holds the key, and speaks only to pages of its own origin.
-import { findEmbeddedSigner } from "../vendor/bitlogin/bitlogin-window.js";
+import { describePermissions, findEmbeddedSigner } from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -26,13 +26,43 @@ const leave = () => {
   window.close();
   // A window the browser won't close for us says what to do.
   $("ask").hidden = true;
+  $("ask-app").hidden = true;
   $("signin").hidden = true;
   status("You can close this window.");
+};
+
+/** A list, written as text: nothing a site sent is ever put on this page as markup. */
+const fill = (id, lines) => {
+  const list = $(id);
+  list.replaceChildren(
+    ...lines.map((line) => {
+      const item = document.createElement("li");
+      item.textContent = line;
+      return item;
+    })
+  );
+};
+
+/** An application asked for more than a note and a reaction (§SW9): show all of it, in words, before Allow. */
+const askApp = () => {
+  const words = describePermissions(found.wants, found.site);
+  $("app-site").textContent = found.site;
+  $("app-name").textContent = found.wants.name || "";
+  $("app-name-line").hidden = !found.wants.name;
+  $("app-who").textContent = who.name || shortKey(who.npub);
+  $("app-who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
+  fill("app-ordinary", words.ordinary);
+  fill("app-sensitive", words.sensitive);
+  $("app-sensitive-block").hidden = words.sensitive.length === 0;
+  status("An application is asking to act as you. Check the address, and read what it asks.");
+  $("ask-app").hidden = false;
+  askedAt = performance.now();
 };
 
 const ask = () => {
   if (!found || !who || finished) return;
   $("signin").hidden = true;
+  if (found.wants) return askApp();
   $("site").textContent = found.site;
   $("who").textContent = who.name || shortKey(who.npub);
   $("who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
@@ -56,10 +86,10 @@ const signIn = () => {
   $("widget-slot").append(widget);
 };
 
-$("allow").addEventListener("click", async () => {
+const allow = async (button) => {
   if (!found || !who || performance.now() - askedAt < TOO_SOON_MS) return;
-  $("allow").disabled = true;
-  status("Handing over a key that can only sign.");
+  button.disabled = true;
+  status(found.wants ? "Handing over a key that can do only what you just read." : "Handing over a key that can only sign.");
   let session = null;
   try {
     session = await createHeadlessSigner();
@@ -67,16 +97,21 @@ $("allow").addEventListener("click", async () => {
     if (!restored || restored.pubkey !== who.pubkey) throw new Error("no session");
     const ok = await found.grant(session, who.name);
     $("ask").hidden = true;
+    $("ask-app").hidden = true;
     if (!ok) return status("That didn't work, and nothing was handed over. Close this window and try again from the site that opened it.");
-    status("Done. That site can sign notes as you until you sign out of it.");
+    status(found.wants ? "Done. That application can act as you, as you allowed, until you sign out of it." : "Done. That site can sign notes as you until you sign out of it.");
     setTimeout(leave, 700);
   } catch {
     $("ask").hidden = true;
+    $("ask-app").hidden = true;
     status("That didn't work, and nothing was handed over. If you signed in with a browser extension or a phone, this isn't offered for it yet.");
   } finally {
     session?.destroy();
   }
-});
+};
+$("allow").addEventListener("click", () => allow($("allow")));
+$("allow-app").addEventListener("click", () => allow($("allow-app")));
+$("deny-app").addEventListener("click", leave);
 $("deny").addEventListener("click", leave);
 $("deny-2").addEventListener("click", leave);
 

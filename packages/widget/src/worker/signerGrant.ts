@@ -15,6 +15,7 @@
  * off by the site it is embedded in. The asking site cannot read it.
  */
 import type { KeyValueStore } from "@bitlogin/core/storage";
+import { APP_LIMITS, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 
 const GRANT_PREFIX = "bitlogin:signer-grant:v1:";
 const GRANT_DEVICE_KEY = "bitlogin:signer-grant-device-key:v1";
@@ -36,6 +37,10 @@ export interface SignerGrant {
   name?: string;
   /** When the last signatures for this site were made, in milliseconds: so reloading a page is not a way round the count. */
   signed: number[];
+  /** What an application was approved for (§SW9). Absent for a site that declared nothing: a note and a reaction. */
+  permissions?: AppPermissions;
+  /** For an application: when its last sensitive signatures were made, counted apart (§SW9.6). */
+  signedSensitive?: number[];
 }
 
 interface DeviceKeyStore {
@@ -88,7 +93,12 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       key: toHex(grant.everydayPrivateKey),
       until,
       ...(grant.name ? { name: grant.name.slice(0, 48) } : {}),
-      signed: grant.signed.filter((t) => Number.isFinite(t)).slice(-GRANT_LIMITS.signedKept)
+      // An application's public signatures are counted up to its own hourly limit, so more of them are kept.
+      signed: grant.signed.filter((t) => Number.isFinite(t)).slice(-(grant.permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept)),
+      ...(grant.permissions ? { permissions: grant.permissions } : {}),
+      ...(grant.permissions && grant.signedSensitive
+        ? { signedSensitive: grant.signedSensitive.filter((t) => Number.isFinite(t)).slice(-APP_LIMITS.sensitive.hourly) }
+        : {})
     });
     const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plain));
     const sealed: Sealed = { v: 1, iv: toBase64(iv), ciphertext: toBase64(new Uint8Array(ciphertext)) };
@@ -110,7 +120,15 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; signed?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown };
+    // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
+    // again, and sees what is asked. It is never restored as a narrower or a wider one.
+    const permissions = p.permissions === undefined ? undefined : readPermissions(p.permissions);
+    if (permissions === null) {
+      await store.delete(GRANT_PREFIX + site);
+      return null;
+    }
+    const times = (v: unknown, keep: number): number[] => (Array.isArray(v) ? v.filter((t): t is number => typeof t === "number" && Number.isFinite(t)).slice(-keep) : []);
     // A record is for the site named inside it, whatever name it was filed under.
     if (p.site !== site || typeof p.key !== "string" || !HEX64.test(p.key) || typeof p.until !== "number") return null;
     if (!(p.until > nowSeconds) || p.until > nowSeconds + GRANT_LIMITS.keepSec) {
@@ -122,7 +140,8 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       everydayPrivateKey: Uint8Array.from(p.key.match(/.{2}/gu) ?? [], (pair) => Number.parseInt(pair, 16)),
       until: p.until,
       ...(typeof p.name === "string" && p.name ? { name: p.name.slice(0, 48) } : {}),
-      signed: Array.isArray(p.signed) ? p.signed.filter((t): t is number => typeof t === "number" && Number.isFinite(t)).slice(-GRANT_LIMITS.signedKept) : []
+      signed: times(p.signed, permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept),
+      ...(permissions ? { permissions, signedSensitive: times(p.signedSensitive, APP_LIMITS.sensitive.hourly) } : {})
     };
   } catch {
     // Unreadable is "nothing kept", never an error: the user is simply asked again.
