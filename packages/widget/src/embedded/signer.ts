@@ -139,8 +139,10 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     if (e.origin === me && e.source !== window) void fromWindow(e);
   };
   window.addEventListener("message", onMessage);
-  // Said to whoever embeds this: it is here. It says nothing else, and the site's address isn't known yet in every browser.
-  window.parent.postMessage(signerMessage({ t: "ready" }), "*");
+  // Said to the page that embeds this, where the browser says which page that is: it is here. Nothing is ever sent
+  // to an address this doesn't know. Where the browser doesn't say (no ancestorOrigins), nothing is said: the site
+  // asks "state" once the frame has loaded, and the answer goes to the address that question came from.
+  if (site) window.parent.postMessage(signerMessage({ t: "ready" }), site);
   return {
     embedded: true,
     stop() {

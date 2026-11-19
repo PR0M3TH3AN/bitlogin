@@ -120,9 +120,9 @@ describe("the embedded signer and the window, as written", () => {
   });
 
   it("the signer answers the site only at the address the browser gave, and the window only at its own origin", () => {
-    // One wildcard in all of it: "ready", which says nothing.
-    expect(signer.split('"*"').length - 1).toBe(1);
-    expect(signer).toContain('window.parent.postMessage(signerMessage({ t: "ready" }), "*")');
+    // Nothing is ever addressed to "any origin": not even "ready", which says nothing.
+    expect(signer).not.toContain('"*"');
+    expect(signer).toContain('if (site) window.parent.postMessage(signerMessage({ t: "ready" }), site)');
     expect(win).not.toContain('"*"');
     expect(win.split("postMessage(").length - 1).toBe(win.split(", me)").length - 1);
   });

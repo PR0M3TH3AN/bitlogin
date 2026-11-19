@@ -127,6 +127,10 @@ Unlocking is not agreeing to everything. `embedded/policy.ts` is the list.
   nothing else.
 - **It ends** when the site's page closes, when the site is told to lock
   (the user's own doing, from the site), or after four hours.
+- **Nothing is addressed to "any origin".** Every message the signer sends
+  goes to the site's address as the browser gave it, or to this origin. A
+  site learns the signer is there by asking `state` once the frame has
+  loaded.
 - **The asking site's address is the browser's word:** `ancestorOrigins`
   where there is one, and otherwise the origin of the first message from
   the embedding page. Never anything a message says.
