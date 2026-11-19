@@ -11,7 +11,8 @@ finding and handing over** (§SW3: `embedded/window.ts`, built as
 `bitlogin-window.js`); and both pages on BitLogin's own site
 (`/signer/`, `/connect/`), with the headers of §SW6; and the signer
 **remembering a site** (§SW11: `worker/signerGrant.ts`). NOT implemented, design only:
-what an application needs beyond a note and a reaction (§SW9), adding a
+what an application needs beyond a note and a reaction (§SW9, designed and
+being built on `beta`), adding a
 passkey to an existing account (§SW7), the optional lock (§SW12, §SW13),
 profiles in the window (§SW14), and fewer presses for a new site (§SW15).
 The order of work is in `docs/TODO.md`.
@@ -191,23 +192,211 @@ that uses it.
 On the window's page, a press on Allow in the first second is ignored: a
 key meant for the site, pressed as the window came up, must not land on it.
 
-# SW9. Applications (design only)
+# SW9. Applications (design; being built on `beta`)
 
 A note and a reaction are enough for a visitor to a world. They are not
-enough for an application. The owner's own apps ask their signer today for
-web-request proofs, private messages, lists, video events, deletions, zap
-requests, application data, and encrypting and decrypting. Three things
-are needed before an application can sign in this way:
+enough for an application. This section is what an application may ask for,
+how the user sees it, and how the signer holds the application to it.
 
-1. **A permission the application declares and the user sees** in the
-   window: which kinds, whether it may read private messages, whether it
-   may spend. The signer holds it to that.
-2. **A session between "can only sign" and "everything".** A handed-over
-   session refuses to decrypt. An application that shows private messages
-   needs one that may, for that application, because the user said so.
-3. **Which address is the sign-in address.** BitLogin's own site is the
-   default. It must not be the only one possible: the site is static, and
-   anyone can serve it themselves.
+**The requirement (owner, 2026-11-19).** Once a user has approved an
+application, it signs and sends in the background, with no further prompt,
+as applications do with the embedded widget today.
+
+## SW9.1 What the applications ask for
+
+Read from their code on 2026-11-19 (`bitvid`, `bitunlock`, `bitportal`,
+`satisfied`, `AdZap`, `tessera`, `bitroad`). What the design has to carry:
+
+- **A proof for a web request** (kind 27235): six of the seven, to their own
+  origin or to `api.bitunlock.network`. Signed on timers, with nobody
+  pressing anything: every one to four seconds while an order or a deposit
+  is watched.
+- **A proof for a file host** (kind 24242): four of them.
+- **Their own data** in addressable events: kind 30078 under a prefix of
+  their own (`adzap:`, `bitroad:`, `bitportal/`), or kinds of their own
+  (30310 to 30316, 33600 to 33604). bitvid's video posts are kind 30078
+  with no prefix at all.
+- **Encrypting to the user's own key**, and reading it back: nearly all.
+  AdZap reads the user's Cashu tokens this way.
+- **Encrypting to one fixed service key** and reading its answers: the
+  BitUnlock service, from three of them.
+- **Messages with anyone:** bitvid's direct messages; bitroad's orders,
+  which a seller reads from buyers they have never seen.
+- **Kinds §SW5 calls careful:** profile (0), deletion (5), relay lists
+  (10002, 10050), a mute list (10000). Nearly all of it from a press.
+- **Bursts.** Satisfied signs every entry again at sign-in, a hundred or
+  more in seconds, and eighty proofs a minute while an order runs. bitvid
+  signs about twenty a minute in ordinary use.
+- **A wallet connection** (bitunlock, Satisfied): asked of the widget
+  today. Not in this section: §SW9.9.
+
+## SW9.2 A declared permission set
+
+An application says what it wants. The user sees it once, in the window.
+The signer signs that and nothing else, for as long as the site is
+remembered (§SW11).
+
+```json
+{
+  "name": "Satisfied",
+  "sign": [0, 5, 7, 24242, 30310, 30311],
+  "appData": ["satisfied:"],
+  "proofs": ["https://api.bitunlock.network"],
+  "read": [30310, 30314],
+  "peers": ["66be61cf…787d"]
+}
+```
+
+- `name`: what the application calls itself. Shown second, after the
+  address, and never instead of it.
+- `sign`: the kinds it may have signed.
+- `appData`: prefixes of the `d` tag it may write kind 30078 under. `"*"`
+  is any prefix, for an application whose kind-30078 events have none.
+- `proofs`: the other origins it may prove the user's identity to (kinds
+  27235 and 24242). Its own origin is always allowed and need not be named.
+- `read`: the kinds whose content it may have decrypted (§SW9.5).
+- `peers`: fixed public keys it may encrypt to and decrypt from, outside
+  any event (§SW9.5).
+
+A set is at most 64 kinds, 8 prefixes, 8 origins and 8 keys. A set that is
+malformed in any part is refused whole: there is no partial approval of
+something the user was not shown.
+
+**How it reaches the window.** The site tells the embedded signer what it
+wants. The signer passes that to the window with the site's address, which
+is still the browser's word and never the site's. The window shows both.
+On Allow, the approved set travels inside the sealed hand-off (§SW4), from
+one of BitLogin's workers to the other, and is kept with the grant
+(§SW11). Nothing between the two workers can widen it.
+
+**All or nothing, for now.** The window offers Allow and Don't allow. Ticking
+some permissions and not others is not offered: an application that got
+half of what it asked for fails in ways its user cannot see.
+
+## SW9.3 Three tiers of kind
+
+| Tier | Kinds | An application |
+|---|---|---|
+| Never | Remote-signer and wallet traffic (24133, 13194, 23194, 23195); passes, grants and room signals (27300 to 27303); kind 30078 under `bitlogin:` | Cannot ask. A set naming one is refused whole |
+| Sensitive | Profile (0), follows (3), deletion (5), mute and relay lists (10000, 10002, 10050), relay sign-in (22242), kind 30078 under `"*"`, and reading messages (§SW9.5) | May ask. The window lists these apart, under a plain warning |
+| Ordinary | Everything else | May ask |
+
+- **Never is a floor under the user.** No press makes these signable from a
+  site. Kinds 27302 and 27303 give a world a terminal on the user's own
+  computer; one careless Allow must not be able to give that away.
+- **This keeps BitPortal's own sign-in on the embedded widget.** It signs
+  passes and grants. Moving it needs kinds reserved to named origins, which
+  is an open decision (§SW9.10).
+- **A world is unchanged.** A site that declares nothing gets what §SW5
+  gives: a note and a reaction, under the old limits.
+
+## SW9.4 What the signer does to an event
+
+- **Kind** must be in the approved set, and not Never.
+- **Kind 30078:** its `d` tag must begin with an approved prefix, and never
+  with `bitlogin:`.
+- **Kinds 27235 and 24242:** every address the event names (`u`, and
+  `server` where there is one) must be of the asking site's own origin or
+  an approved one. A proof with no address is refused. This is what stops
+  a site from collecting a proof that works at someone else's server.
+- **The time** is the site's if it is within ten minutes of the signer's
+  clock, and the signer's own otherwise. Applications replace their own
+  events and need the later one to win.
+- **The mark.** Every event is tagged with the site that asked,
+  `["bitlogin:site", "<origin>"]`, except a seal (kind 13), which must have
+  no tags. A world's notes keep the tag NSWP gave them.
+- **Size:** 100,000 characters of content, 2,500 tags.
+
+## SW9.5 Encrypting and reading
+
+A handed-over session refuses both today. For an approved application:
+
+- **Encrypting** to the user's own key is always allowed: it gives nothing
+  away. To another key it is allowed for a key in `peers`, and for the
+  recipient named in an event the application may sign.
+- **Reading is tied to an event.** The application hands the signer a whole
+  signed event. The signer checks the signature, that the kind is in
+  `read`, and for kind 30078 the prefix; then decrypts the content against
+  the right key (the author's, or for the user's own event the key it was
+  addressed to). An application approved to read its own drafts cannot read
+  the user's Cashu tokens, because those are another kind.
+- **`peers`** covers what is not in an event: an answer from the BitUnlock
+  service arrives as a sealed envelope, not a Nostr event. Raw decrypting is
+  allowed only against a key the user was shown.
+- **Messages.** Reading kinds 4, 13 or 1059 is reading the user's private
+  messages, and is Sensitive. The window says so in those words.
+- **Raw decrypting against any key is not offered,** to anyone. It is
+  indistinguishable from reading everything.
+
+This changes what an application calls: `decryptEvent(event)` where it
+called `nip44.decrypt(pubkey, ciphertext)`. Each of the owner's applications
+has the event in hand where it decrypts.
+
+## SW9.6 Limits
+
+Counted across page loads (§SW11), per site, by what is being signed:
+
+| | A minute | An hour |
+|---|---|---|
+| Proofs (27235, 24242, 22242) and the application's own data | 300 | 6,000 |
+| Anything public and Ordinary | 60 | 1,200 |
+| Sensitive | 30 | 300 |
+| Reading | 600 | 12,000 |
+
+An application cannot raise them. They are sized to the bursts in §SW9.1,
+with room, and are the owner's to tune.
+
+## SW9.7 What the window shows
+
+The address first, exactly as the browser gave it. Then the name the
+application calls itself. Then, in plain words, what it asked for, with the
+Sensitive ones apart:
+
+> **satisfied.example** calls itself "Satisfied" and asks to, without asking
+> again:
+> - prove who you are to satisfied.example and api.bitunlock.network
+> - save and read its own data
+> - post reactions
+>
+> **And these, which can change how others see you:**
+> - change your profile
+> - delete your posts
+
+A kind BitLogin has no words for is shown as its number, and says that
+BitLogin does not know what it is.
+
+## SW9.8 A session between "can only sign" and "everything"
+
+The hand-off (§SW4) now carries the approved set, sealed with the key. The
+receiving worker holds it, and refuses in the worker, whatever the signer's
+page asks, anything outside it. A session without a set is what it was: it
+can sign a note and a reaction and nothing else.
+
+## SW9.9 Not here
+
+- **A wallet connection.** Two applications ask the widget for one today.
+  Through the window it is a question of its own ("let this site spend from
+  this wallet"), and is not designed.
+- **Asking each time.** §SW5 wanted Sensitive kinds asked for every time.
+  That needs a surface inside the site, which is the lock's panel (§SW12).
+  Until it exists, Sensitive kinds are approved once like the rest, and the
+  warning in the window is what stands in for it.
+
+## SW9.10 Decisions that are the owner's
+
+1. **Kinds reserved to named sites.** Should BitLogin ship a short list of
+   origins that may ask for passes and grants (BitPortal's)? Without it
+   BitPortal's own sign-in cannot move to the window.
+2. **Approving Sensitive kinds once.** Accept it until the panel exists, or
+   refuse those kinds until then? Refusing keeps bitvid, Satisfied and
+   AdZap on the embedded widget.
+3. **The mark's name**, `bitlogin:site`, and the protocol's
+   (`bitlogin-signer`, version 2).
+4. **The limits** in §SW9.6.
+5. **Known applications.** Should the window say "BitLogin knows this
+   application" for a list shipped with the sign-in address? It would make
+   a look-alike of bitvid easier to spot, and makes BitLogin a gatekeeper of
+   who looks trustworthy.
 
 # SW10. (Not used)
 
