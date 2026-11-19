@@ -195,8 +195,11 @@ that moved.
   - [ ] **Two follow-ups to the take-back check** (`take-back.md` §TB10):
     a relay client in a worker that holds no key, and asking a handful of
     relays where it asks up to twelve.
-  - [ ] **Try a take-back on public relays.** Some of the vault relays
-    refuse keys they do not know. Tested on mock relays only.
+  - [x] **A take-back tried on public relays** (2026-11-19, one run): it
+    worked, and ten of thirteen built-in relays held the record. The three
+    that did not are the three that never connect.
+  - [ ] **Check after some days whether relays still hold a take-back
+    record.** One run says nothing about how long they keep it.
   - [ ] **Keep a user's relay list alive** (item 10): the take-back check
     follows their NIP-65 list, and nothing yet repairs a list that has
     gone stale or looks for live relays (NIP-66).

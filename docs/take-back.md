@@ -275,7 +275,18 @@ newest record seen. Neither is secret.
   signer had just asked, which keeps signing until the next day's check,
   as the page says. The day and three-day clocks are tested as arithmetic,
   not by waiting.
-- **Not tried:** public relays. Several of BitLogin's vault relays refuse
-  events from keys they do not know (`docs/TODO.md`, "Relay-loss
-  response"), and may refuse this record the same way. The page reports how
-  many accepted.
+- **Tried on public relays** (2026-11-19, one run, a throwaway account,
+  the built site served from the maintainer's machine with BitLogin's
+  built-in relay list):
+  - A site was allowed, then taken back at `/sites/`. Publishing took
+    about ten seconds. The site's page was loaded again and its signer was
+    locked about two seconds later.
+  - Asked a minute afterwards, **ten of the thirteen built-in relays held
+    the record.** The other three (relay.mostr.pub, nostr-pub.wellorder.net,
+    relay.damus.io) did not accept a connection, as on 2026-11-18. None of
+    the ten refused a record from a key it had never seen.
+  - Not learned from one run: how long relays keep the record. On
+    2026-11-18 one of them held half of what it had accepted minutes
+    later. A record that every relay drops stops being found, and a signer
+    that had seen it then locks within three days (TB9, answer 3), which is
+    the safe way to fail and still a nuisance.
