@@ -4,8 +4,11 @@
 .connect-card { background: var(--ink-soft); border: 1px solid var(--line-strong); border-radius: 14px; padding: 1.3rem 1.3rem 1.4rem; }
 .connect-card h1 { font-size: 1.4rem; line-height: 1.2; margin: 0 0 .8rem; }
 .connect-card ul { margin: .7rem 0; padding-left: 1.15rem; display: grid; gap: .35rem; }
-.connect-site { margin: 0 0 .5rem; padding: .7rem .9rem; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--code-bg);
-  font: 1.02rem ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+/* The address of the site that is asking: the one thing on this page the user must be able to read. It used the
+   code block's background, which stays dark in the light theme while the text around it turns dark too, so in a
+   light-themed browser the address was a dark bar with nothing legible in it. These two follow the theme together. */
+.connect-site { margin: 0 0 .5rem; padding: .7rem .9rem; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--ink-softer); color: var(--fg);
+  font: 600 1.02rem ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 .connect-key { font: .88em ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--muted); }
 .connect-small { font-size: .9rem; color: var(--muted); }
 .connect .cta-row { margin-top: 1.1rem; }
