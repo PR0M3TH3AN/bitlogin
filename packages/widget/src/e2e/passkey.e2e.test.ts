@@ -468,6 +468,24 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
         expect(new URL(popup.url()).origin).toBe(origin);
         expect(await popup.locator("#site").textContent()).toBe(site);
+        // The address can be read, in a light-themed browser and a dark one. It once could not: dark text on a
+        // dark bar, in the light theme, on the one line the user is told to check.
+        for (const colorScheme of ["light", "dark"] as const) {
+          await popup.emulateMedia({ colorScheme });
+          const contrast = await popup.locator("#site").evaluate((el) => {
+            const luminance = (css: string): number => {
+              const [r, g, b] = (css.match(/[\d.]+/gu) ?? []).slice(0, 3).map((v) => {
+                const c = Number(v) / 255;
+                return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+              });
+              return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+            };
+            const style = getComputedStyle(el);
+            const [hi, lo] = [luminance(style.color), luminance(style.backgroundColor)].sort((a, b) => b - a);
+            return (hi! + 0.05) / (lo! + 0.05);
+          });
+          expect(contrast, colorScheme).toBeGreaterThan(7);
+        }
         expect(await page.evaluate(() => (window as any).tryToRead())).toEqual({ frame: "refused: SecurityError", popup: "refused: SecurityError" });
         // A press that lands at once was meant for the site, and is ignored.
         await popup.locator("#allow").click();
