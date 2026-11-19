@@ -35,10 +35,48 @@ repository's flat demo (`docs/plans/signin-demo`).
   explored (§SW15).
 - Several profiles on a device, natively.
 
-**Next, in this order.** None is started. Each is the owner's to release:
-merging to `main` deploys the site.
+**Where the work happens (owner's decision, 2026-11-19).** On the `beta`
+branch and the beta site, `https://bitlogin-beta.vercel.app/`, a second
+sign-in address with the same pages and headers. `main` is promoted from
+`beta` once a piece is solid, and only then does `bitlogin.network` change.
+How: `CONTRIBUTING.md`, "Release channels".
 
-- [ ] **1. The optional lock (§SW12).** Off by default. Opened by a
+**What an approved app must be able to do (owner, 2026-11-19).** Once a user
+has approved an app, it signs and sends in the background, with no prompt,
+as apps do with the embedded widget today. The design allows this; as built
+it covers only a note and a reaction. Item 1 is what extends it.
+
+**Next, in this order.** None is started. The order was changed on
+2026-11-19 from the one in pull request #34; the reasons are under each item
+that moved.
+
+- [ ] **1. What an application declares (§SW9).** Moved from fourth to
+  first. Until it exists no real app can use the window, so every app stays
+  on the embedded widget, which is the path this work exists to retire; the
+  lock would be polishing a flow nobody is on. From a read of their code on
+  2026-11-19: bitunlock asks its signer for web-request proofs, private
+  messages and a wallet connection; bitvid for video events, lists, reposts,
+  deletions, zap requests, application data, and encrypting and decrypting.
+  BitPortal's own `/account/` sign-in waits on this too (its `AGENTS.md`).
+  The design has to settle:
+  - A permission set the app declares and the user sees once, in the window.
+    The signer then signs those kinds in the background and nothing else.
+  - Application data (kind 30078) for an app's own settings, with the
+    addresses BitLogin keeps capsules at never writable by any app.
+  - Encrypting and decrypting for an approved app. A handed-over session
+    refuses both today, on purpose (§SW4).
+  - Limits that fit an app. Six signatures a minute throttles one that signs
+    in bursts; a limit per permission, not one number for every site.
+  - Which kinds still ask every time. A deletion or a profile change that
+    prompts each time is a visible change from how the apps work now.
+  - How broad a silent permission may be before "approved" means "has the
+    identity". This is where the model holds or fails.
+- [ ] **2. Find out what browsers keep for an embedded signer.** Moved up
+  from the owner's list, because it decides how everything above feels:
+  Safari, Brave, a phone, and the Quest browser. Where an embedded page gets
+  no lasting storage, "approved for thirty days" becomes "asked on every
+  visit". In a headset that is worse than an annoyance (see "In a headset").
+- [ ] **3. The optional lock (§SW12).** Off by default. Opened by a
   BitLogin PIN or by the device's own unlock through a passkey used only as
   a wrapping key. Covers what the signer remembers for each site.
   - Starts in `spec.md` §21: it is key handling at rest.
@@ -46,6 +84,9 @@ merging to `main` deploys the site.
     count of wrong tries removes the record. The PIN is never a credential.
   - The device's unlock makes no account and no capsule, and leaves the
     derivation chain alone (see "Standing rule" below).
+  - The device's unlock is the more important of the two, not only the
+    stronger. A site can open a look-alike window and a typed password or
+    PIN does not resist that; a passkey prompt is bound to the real address.
   - The embedded signer's page gains a small panel for this one thing: its
     policy (§SW6), the policy tests, and the site-to-signer messages change
     with it. The NSWP kit must show the frame and allow it the passkey
@@ -56,38 +97,71 @@ merging to `main` deploys the site.
     how many wrong tries (eight suggested).
   - Browser test: lock, unlock by each way, wrong tries, a reload, and that
     a site can read none of it.
-- [ ] **2. The same lock on the sign-in address's own session (§SW13).**
+- [ ] **4. The same lock on the sign-in address's own session (§SW13).**
   Then a new site is: the window, unlock, Allow, with no password.
-- [ ] **3. Several profiles.** `docs/account-switching.md` first (a design,
+- [ ] **5. Several profiles.** `docs/account-switching.md` first (a design,
   not built), then the picker in the window and a profile per remembered
-  site (§SW14).
-- [ ] **4. What an application declares (§SW9).** A note and a reaction are
-  not enough for an app. From a read of their code on 2026-11-19: bitunlock
-  asks its signer for web-request proofs, private messages and a wallet
-  connection; bitvid for video events, lists, reposts, deletions, zap
-  requests, application data, and encrypting and decrypting. Needs a
-  permission the app declares and the user sees, and a session between "can
-  only sign" and "everything". bitvid, bitunlock and BitPortal move onto
-  the window only after this.
-- [ ] **5. Explore fewer presses for a new site (§SW15).** The browser's
+  site (§SW14). **Decide before building:** whether each profile is a whole
+  account with its own password and phrase, as that design says, or whether
+  several profiles come from one recovery phrase. Since v0.7 a new account's
+  key is derived from its phrase (`spec.md` §11.6), so a second profile
+  could be a second derivation label. One phrase to back up for all of them
+  answers the failure that started the relay-loss work; the cost is that one
+  leaked phrase exposes every profile, and that profiles made that way are
+  provably the same person to anyone holding the phrase.
+- [ ] **6. Explore fewer presses for a new site (§SW15).** The browser's
   storage-access permission, and its federated sign-in. Neither is tried.
   The one deliberate act stays; the window is what might go.
-- [ ] **6. One place to see and take back the sites allowed.** Not
+- [ ] **7. One place to see and take back the sites allowed.** Not
   possible as built: a browser does not let the sign-in address see what
   was kept for it inside other sites (§SW11). Needs a design, perhaps a
   record on relays every signer checks.
-- [ ] **7. Names of BitLogin's own.** The messages and the tag are NSWP's
+- [ ] **8. Names of BitLogin's own.** The messages and the tag are NSWP's
   (`nswp-signer`, `nswp-handoff`, `nswp:world`), kept so that kit worked
-  unchanged. Decide BitLogin's with the version item 4 needs.
+  unchanged. Decide BitLogin's with the version item 1 needs.
+- [ ] **9. A check that the live sign-in address is a reviewed build.** One
+  address now holds every user's sign-in, where the vendored widget was
+  designed so that one bad deploy could not reach every site at once
+  (`.agents/memory/architecture.md`). Beta-then-promote narrows that; it
+  does not close it. Wanted: after each production deploy, compare the live
+  files with `npm run release:artifacts` for the same commit, and say so
+  somewhere a user could look.
+
+**In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
+`signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound
+the items above; none is BitLogin's to decide alone.
+
+- During a headset session no window can open and nothing but the world can
+  draw. So the sign-in window, the Allow press and the lock's PIN panel
+  cannot appear there. A visitor approves a world on the flat browser first.
+- That makes the remembered approval (§SW11) the whole of signing in VR: it
+  is what lets a world sign in the background once the visitor is inside.
+  Item 2 has to include the Quest browser for this reason.
+- Of the lock's two ways in, only the device's unlock could work during a
+  session, and whether its prompt can appear there is untested (the NSWP
+  plan's test C). If it cannot, the NSWP plan links a headset once, from the
+  visitor's own BitPortal room, by a code approved on a phone; that needs a
+  protocol change there, and from BitLogin a way to approve from another
+  device. The older request in this file, "Pair a device without a QR or a
+  long paste", is the same need.
+- BitPortal names `https://bitlogin.network/` as the signer in every
+  arrival (`INSTANCE.signer`). To try the beta address from BitPortal that
+  value has to point at it, in a BitPortal build made for the purpose; it
+  is the owner's to change.
+- BitPortal never frames its own sign-in page and never draws BitLogin in a
+  canvas or a headset session. Nothing here should ask it to.
 
 **Owner action items:**
 
 - [ ] Try the live flow with your own account, including a reload:
   `?at=live` on the NSWP flat demo. Tried so far only with throwaway
   accounts in the browser test.
-- [ ] Try it in Safari, Brave and on a phone. Some browsers give an
-  embedded page no lasting storage, and then a site is asked for again on
-  every load.
+- [ ] Point `beta.bitlogin.network` at the beta site, if a `vercel.app`
+  address is not what you want testers to see. The domain's DNS is not on
+  Vercel, so it needs a record added where the domain is managed, and then
+  `vercel domains add beta.bitlogin.network bitlogin-beta`. Sessions and
+  passkeys belong to an address, so changing it later signs beta testers out
+  once.
 - [ ] Confirm `bitlogin.network` as the sign-in address for good before
   item 1 ships. A device-unlock passkey is bound to the address it was made
   at. Changing the address later costs each user one ordinary sign-in, not
@@ -99,8 +173,10 @@ merging to `main` deploys the site.
   broader than `npm run security:semgrep`. Run both before pushing. Two
   things it caught on 2026-11-19: a message posted to any origin, and
   randomness asked for inside a `try`.
-- Pushing a branch makes a preview deployment and merging makes a
-  production one. `vercel curl <path> --deployment <url> -- -sI` reads a
+- Pushing a branch other than `beta` makes a preview deployment and merging
+  to `main` makes a production one. `beta` deploys only when someone runs
+  `npm run deploy:beta`. Vercel's free plan allows 100 deployments a day
+  across every project, and that limit was reached on 2026-11-18. `vercel curl <path> --deployment <url> -- -sI` reads a
   protected preview's headers.
 - The browser tests need the demo built first (`npm run build:demo`).
 - Nothing here signs anyone in from automation: the browser tests make

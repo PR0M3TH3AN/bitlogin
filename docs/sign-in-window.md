@@ -2,7 +2,8 @@
 
 **Document version:** 0.4
 **Date:** 2026-11-19
-**Status:** Implemented, not deployed: the **signer hand-off** (§SW4:
+**Status:** Implemented, and live at `https://bitlogin.network` since
+2026-11-19 (pull requests #31 and #33): the **signer hand-off** (§SW4:
 `worker/handoff.ts`, three worker actions, four methods on the headless
 signer); the **embedded signer** and its rules (§SW5: `embedded/signer.ts`,
 `embedded/policy.ts`, built as `bitlogin-signer.js`); the **window's

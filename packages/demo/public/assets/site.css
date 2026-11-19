@@ -450,3 +450,14 @@ footer {
 footer .footer-links {
   margin-top: 8px;
 }
+
+/* Shown only on a build made with BITLOGIN_CHANNEL set (see build.mjs). */
+body[data-channel]::before {
+  content: "BETA SITE \2014  for testing. Use a throwaway account, not your real one.";
+  display: block;
+  padding: 8px 16px;
+  background: #92400e;
+  color: #fffbeb;
+  font: 600 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  text-align: center;
+}
