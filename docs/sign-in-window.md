@@ -774,8 +774,9 @@ holds no key and lets nothing sign.
 
 "Remove from this list" takes a line off the page and stops nothing.
 
-**What a real "remove" would need.** Two ways, neither built, each the
-owner's to choose:
+**What a real "remove" would need.** The owner asked for the first of
+these to be designed (2026-11-19): it is `docs/take-back.md`, a design and
+not built. Two ways, each the owner's to choose:
 
 1. **A record on relays that every signer checks.** The sign-in address
    publishes "this site is taken back"; the embedded signer reads it when

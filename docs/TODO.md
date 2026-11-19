@@ -187,10 +187,12 @@ that moved.
   - [x] **The list of sites allowed (§SW18):** `/sites/` at the sign-in
     address. On `beta`. It cannot switch a site off or show how often one
     signed: a browser does not let it.
-  - [ ] **OWNER'S DECISION: a real "remove".** Either the embedded signer is
-    allowed to read a take-back record from relays (it lifts §SW6's rule
-    that the page holding the key contacts nothing), or memory is made
-    shorter. §SW18 has both.
+  - [ ] **A real "remove": designed, not built** (`docs/take-back.md`).
+    The user publishes an encrypted record of sites taken back; every
+    embedded signer reads it about once a day and forgets its site. It
+    needs the signer's page to be allowed to contact the vault relays,
+    which changes §SW6. **Five owner decisions in §TB9** before building;
+    then the order in §TB8.
   - [x] **The lock (§SW12, `spec.md` §21.5):** a PIN, the device's own
     unlock offered first where it was added, five tries, "Lock now", off by
     default. On `beta`. While it is on, no site is remembered.
