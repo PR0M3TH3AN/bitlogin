@@ -889,4 +889,128 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     },
     240_000
   );
+
+  /**
+   * A browser's password manager saves from, and fills into, real form fields:
+   * a login name marked `username` beside a field of type "password" marked
+   * `new-password` or `current-password`, in a form that is submitted. This
+   * checks that every screen which makes or takes a password is such a form,
+   * in each engine. It cannot check the browser's own prompt: that is drawn
+   * outside the page, and no test harness sees it.
+   */
+  for (const engine of ["chromium", "firefox", "webkit"] as const) {
+    const installed = (() => {
+      try {
+        const path = playwright?.[engine].executablePath();
+        return !!path && existsSync(path);
+      } catch {
+        return false;
+      }
+    })();
+    it.skipIf(!installed)(
+      `every password screen is a form a password manager can save from and fill (${engine})`,
+      async () => {
+        const browser = await playwright![engine].launch();
+        try {
+          const page = await (await browser.newContext()).newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (err) => errors.push(String(err)));
+          await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+          const widget = page.locator("bitlogin-auth");
+          const loginName = `saver-${engine}`;
+
+          /** What a password manager reads off a form: the marked fields, in order. */
+          const fieldsOf = (form: string): Promise<{ autocomplete: string; type: string; value: string; readOnly: boolean; visible: boolean }[]> =>
+            widget.locator(`form[data-form="${form}"]`).evaluate((el) =>
+              Array.from(el.querySelectorAll<HTMLInputElement>("input[autocomplete]")).map((input) => ({
+                // The attribute as written: Firefox's `input.autocomplete` property is empty for these values.
+                autocomplete: input.getAttribute("autocomplete") ?? "",
+                type: input.type,
+                value: input.value,
+                readOnly: input.readOnly,
+                visible: input.getClientRects().length > 0
+              }))
+            );
+
+          // Sign-up: the generated password is in a real field, beside the login name.
+          await widget.locator('[data-action="goto-create"]').click();
+          await widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(loginName);
+          await widget.locator('form[data-form="create-name"] button[type="submit"]').click();
+          const shown: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          expect(shown.length).toBeGreaterThan(20);
+          expect(await fieldsOf("create-credential")).toEqual([
+            { autocomplete: "username", type: "text", value: loginName, readOnly: true, visible: true },
+            { autocomplete: "new-password", type: "password", value: shown, readOnly: false, visible: true }
+          ]);
+          // It cannot be made to differ from the password the account gets.
+          const generated = widget.locator("#generatedPassword");
+          await generated.fill("something else entirely");
+          expect(await generated.inputValue()).toBe(shown);
+          await generated.press("End");
+          await generated.pressSequentially("xyz");
+          expect(await generated.inputValue()).toBe(shown);
+          // A different password is a different field value too.
+          await widget.locator('[data-action="regenerate-credential"]').click();
+          const password: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          expect(password).not.toBe(shown);
+          expect(await generated.inputValue()).toBe(password);
+
+          await widget.locator("#saved-check").check();
+          await widget.locator('form[data-form="create-credential"] button[type="submit"]').click();
+          const words = await completeRecoveryCeremony(widget);
+          await widget.locator(".pubkey").waitFor({ timeout: 90_000 });
+
+          // Sign-in: filled the way a password manager fills, then submitted.
+          await widget.locator('[data-action="logout"]').click();
+          await widget.locator('[data-action="goto-login"]').click();
+          expect((await fieldsOf("login")).map(({ autocomplete, type, readOnly, visible }) => ({ autocomplete, type, readOnly, visible }))).toEqual([
+            { autocomplete: "username", type: "text", readOnly: false, visible: true },
+            { autocomplete: "current-password", type: "password", readOnly: false, visible: true }
+          ]);
+          await widget.locator('form[data-form="login"]').evaluate(
+            (el, [name, secret]) => {
+              const set = (selector: string, value: string) => {
+                const input = el.querySelector<HTMLInputElement>(selector)!;
+                input.value = value;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+              };
+              set('input[autocomplete="username"]', name!);
+              set('input[autocomplete="current-password"]', secret!);
+            },
+            [loginName, password]
+          );
+          await widget.locator('form[data-form="login"] button[type="submit"]').click();
+          await widget.locator(".pubkey").waitFor({ timeout: 90_000 });
+
+          // Rotation: the login name, the old password and the new one, as a change-password form.
+          await widget.locator('[data-action="goto-change-password"]').click();
+          const rotated: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          expect(await fieldsOf("change-password")).toEqual([
+            { autocomplete: "username", type: "text", value: loginName, readOnly: true, visible: true },
+            { autocomplete: "current-password", type: "password", value: "", readOnly: false, visible: true },
+            { autocomplete: "new-password", type: "password", value: rotated, readOnly: false, visible: true }
+          ]);
+          await widget.locator('[data-action="goto-dashboard"]').click();
+
+          // Recovery: a new login name, typed, and the new password, as a sign-up form.
+          await widget.locator('[data-action="logout"]').click();
+          await widget.locator('[data-action="goto-login"]').click();
+          await widget.locator('[data-action="goto-recover"]').click();
+          await widget.locator('form[data-form="recover-phrase"] input[name="phrase"]').fill(words.join(" "));
+          await widget.locator('form[data-form="recover-phrase"] button[type="submit"]').click();
+          await widget.locator('form[data-form="recover-new-credentials"]').waitFor({ timeout: 90_000 });
+          const recovered: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          expect(await fieldsOf("recover-new-credentials")).toEqual([
+            { autocomplete: "username", type: "text", value: "", readOnly: false, visible: true },
+            { autocomplete: "new-password", type: "password", value: recovered, readOnly: false, visible: true }
+          ]);
+          expect(errors).toEqual([]);
+        } finally {
+          await browser.close();
+        }
+      },
+      300_000
+    );
+  }
 });

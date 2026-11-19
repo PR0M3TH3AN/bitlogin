@@ -145,6 +145,17 @@ that moved.
   2026-11-19). The browser should offer to save the login name and password,
   and fill them in later, both at BitLogin's own address and in an
   application that embeds the widget.
+  - [x] Sign-up, recovery and rotation put the login name and the generated
+    password in real, `autocomplete`-marked fields of the form that is
+    submitted. Sign-in already did. Checked in Chromium, Firefox and WebKit
+    (`passkey.e2e.test.ts`). On beta 2026-11-19.
+  - [ ] **Owner: look at the prompt itself** in Chrome, Firefox and Safari,
+    on a computer and a phone. No test harness sees a browser's own save
+    prompt or fill menu. Two things to watch for: whether Safari offers to
+    save when the form is submitted and no page loads after it, and whether
+    Safari and phone browsers fill fields inside the widget's shadow root.
+    If either fails, the fix is a save step that loads a page, or the
+    fields moved out of the shadow root.
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound

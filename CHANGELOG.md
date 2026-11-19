@@ -8,6 +8,25 @@ would plausibly want. Newest first.
 
 ## 2026-11-19
 
+**The browser can save a new password (`docs/TODO.md` item 11).** The
+generated password was shown as text only, so a browser or password manager
+had nothing to save from at sign-up, after recovery, or after a rotation,
+except in Chromium, which was asked outright.
+
+- **Sign-up, recovery and rotation are real forms now:** the login name
+  marked `username`, and the generated password in a field of type
+  `password` marked `new-password`. Rotation also keeps the old password
+  marked `current-password`, the shape a browser reads as a changed
+  password.
+- **The field cannot differ from the account's password.** It is put back
+  if it is typed in or filled by a password manager's own suggestion.
+- **Nothing for an integrator to change.** The saved login belongs to the
+  address the form is on: the application's, where the widget is embedded;
+  BitLogin's, in the sign-in window.
+- **Not verified:** the browsers' own prompts. The forms are checked in
+  three engines; whether each browser then offers to save and fill has to
+  be looked at by a person.
+
 **The embedded signer remembers a site (`docs/sign-in-window.md` §SW11).**
 It held the handed-over key in memory, so every load of the asking site's
 page began locked and the window had to be opened again.
