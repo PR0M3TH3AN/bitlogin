@@ -212,6 +212,12 @@ that moved.
     the NSWP kit to show the frame.
   - [ ] **Try the lock on real devices:** a fingerprint or face reader,
     Safari, a phone.
+- [ ] **14. One Allow for a family of sites** (asked for by the owner
+  through the BitPortal session, 2026-11-19). Design: `docs/site-family.md`.
+  One tick at Allow covers every site under one registrable domain, such as
+  every world at `bitblocks.network`, for notes, reactions and room passes
+  only, with counts shared across the family. Not started. Four decisions
+  are the owner's (§SF9).
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound
