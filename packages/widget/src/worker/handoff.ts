@@ -90,7 +90,7 @@ export function sealHandoff(
   senderPrivateKey: Uint8Array,
   app?: { site: unknown; permissions: unknown },
   /** The site the hand-off is for, as the window was told by the signer, and the person's own profile. */
-  also: { site?: unknown; profile?: unknown; /** The user ticked "remember" in the window. */ remember?: unknown } = {}
+  also: { site?: unknown; profile?: unknown; /** The user ticked "remember" in the window. */ remember?: unknown; /** The lock is on: nothing is kept for any site. */ visitOnly?: boolean } = {}
 ): SealedHandoff {
   if (!HEX64.test(recipientPublicKey)) throw new Error("The hand-off has no usable recipient key.");
   if (everydayPrivateKey.length !== 32) throw new Error("No identity is unlocked in this session.");
@@ -109,7 +109,7 @@ export function sealHandoff(
   const profile = readProfile(also.profile);
   // Remembered across page loads (§SW11): a site BitLogin knows, or one the user ticked "remember" for. Decided
   // here, in the worker that holds the key, from the site's address and never from what a site says of itself.
-  const remember = !!forSite && (knownAppName(forSite) !== null || also.remember === true);
+  const remember = !!forSite && also.visitOnly !== true && (knownAppName(forSite) !== null || also.remember === true);
   // A signer wipes the key it was given when it is destroyed. It is given a copy: the caller's is the caller's to wipe.
   const sender = new NostrSigner(senderPrivateKey.slice());
   try {

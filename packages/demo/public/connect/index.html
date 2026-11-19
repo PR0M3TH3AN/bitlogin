@@ -19,6 +19,18 @@
 <main class="connect-main">
   <p id="status" class="connect-status" role="status">Looking for the site that asked.</p>
 
+  <section id="unlock" class="connect-card" hidden>
+    <h1>Unlock BitLogin</h1>
+    <p>This browser is locked. Open it to answer the site that is asking.</p>
+    <button id="unlock-device" class="btn primary" type="button" hidden>Unlock with this device</button>
+    <form id="unlock-form">
+      <label for="unlock-pin">Your BitLogin PIN</label>
+      <input id="unlock-pin" type="password" autocomplete="off" required />
+      <button id="unlock-go" class="btn secondary" type="submit">Unlock</button>
+    </form>
+    <p id="unlock-note" class="connect-small">The PIN opens only what this browser kept. It is not your password, and it is never sent anywhere.</p>
+  </section>
+
   <section id="ask" class="connect-card" hidden>
     <h1>Let this site sign notes as you?</h1>
     <p id="site" class="connect-site"></p>

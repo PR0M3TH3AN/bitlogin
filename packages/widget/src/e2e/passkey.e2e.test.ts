@@ -640,6 +640,34 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(await account.evaluate(() => window.bitlogin?.activeSession()?.publicKey)).toBe(me);
         expect(errors).toEqual([]);
 
+        // With the lock on (§SW12), the window asks for it before anything is handed over, and nothing is kept
+        // for the site whatever is ticked: a key at rest in a site's storage is one the lock would not cover.
+        await account.bringToFront();
+        await widget.locator('[data-action="goto-lock-settings"]').click();
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill("246810");
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill("246810");
+        await widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        await widget.locator('[data-action="lock-off"]').waitFor({ timeout: 60_000 });
+        const [lockedPopup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await lockedPopup.locator("#unlock").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await lockedPopup.locator("#ask").isVisible()).toBe(false);
+        expect(await lockedPopup.locator("#unlock-device").isVisible()).toBe(false);
+        await lockedPopup.locator("#unlock-pin").fill("000000");
+        await lockedPopup.locator("#unlock-go").click();
+        await lockedPopup.locator("#status", { hasText: "4 tries left" }).waitFor({ timeout: 60_000 });
+        expect(await lockedPopup.locator("#ask").isVisible()).toBe(false);
+        await lockedPopup.locator("#unlock-pin").fill("246810");
+        await lockedPopup.locator("#unlock-go").click();
+        await lockedPopup.locator("#allow").waitFor({ state: "visible", timeout: 60_000 });
+        await lockedPopup.locator("#remember").check();
+        await lockedPopup.waitForTimeout(1000);
+        await lockedPopup.locator("#allow").click();
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me, remembered: false });
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+
         // Someone not signed in at the sign-in address is asked to sign in there, with the ordinary widget, and
         // is offered no Allow.
         const fresh = await browser.newContext();
@@ -992,6 +1020,129 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       }
     },
     240_000
+  );
+
+  it(
+    "the optional lock: a PIN, the device's own unlock, Lock now, and signed out after too many wrong tries (§SW12)",
+    async () => {
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const errors: string[] = [];
+        page.on("pageerror", (err) => errors.push(String(err)));
+        await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = page.locator("bitlogin-auth");
+        const active = () => page.evaluate(() => window.bitlogin?.activeSession()?.publicKey ?? null);
+        const setPin = async (pin: string) => {
+          await widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill(pin);
+          await widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill(pin);
+          await widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        };
+        const typePin = async (pin: string) => {
+          await widget.locator('form[data-form="lock-open"] input[name="lockPin"]').fill(pin);
+          await widget.locator('form[data-form="lock-open"] button[type="submit"]').click();
+        };
+
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, "locker");
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 90_000 });
+        const me = await active();
+        expect(me).toMatch(/^[0-9a-f]{64}$/u);
+
+        // Off unless turned on: no Lock now, and a reload asks nothing.
+        expect(await widget.locator('[data-action="lock-now"]').count()).toBe(0);
+        await widget.locator('[data-action="goto-lock-settings"]').click();
+        // A PIN too short, or typed two ways, turns nothing on.
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill("246810");
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill("246811");
+        await widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        await widget.locator(".notice.error").waitFor({ timeout: 10_000 });
+        expect(await widget.locator('[data-action="lock-off"]').count()).toBe(0);
+        await setPin("246810");
+        await widget.locator('[data-action="lock-off"]').waitFor({ timeout: 60_000 });
+
+        // A page load: locked. Nobody is signed in as far as the page can tell, and nothing signs.
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator('form[data-form="lock-open"]').waitFor({ timeout: 30_000 });
+        expect(await active()).toBeNull();
+        expect(await widget.locator('[data-action="lock-device-open"]').count()).toBe(0);
+        expect(await page.evaluate(() => (window as any).nostr.signEvent({ kind: 1, created_at: 1, tags: [], content: "locked" }).then(() => "signed", () => "refused"))).toBe("refused");
+        await typePin("000000");
+        await widget.locator(".notice.error", { hasText: "4 tries left" }).waitFor({ timeout: 60_000 });
+        expect(await active()).toBeNull();
+        await typePin("246810");
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        expect(await active()).toBe(me);
+
+        // The device's own unlock, added, is offered first; and Lock now locks without a page load.
+        await widget.locator('[data-action="goto-lock-settings"]').click();
+        await widget.locator('[data-action="lock-device-add"]').click();
+        await widget.locator('[data-action="lock-device-remove"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="goto-dashboard"]').click();
+        await widget.locator('[data-action="lock-now"]').click();
+        await widget.locator('[data-action="lock-device-open"]').waitFor({ timeout: 30_000 });
+        expect(await active()).toBeNull();
+        await widget.locator('[data-action="lock-device-open"]').click();
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        expect(await active()).toBe(me);
+
+        // What is at rest is sealed twice: the cached session is not the ordinary record.
+        const kept = await page.evaluate(
+          () =>
+            new Promise<string>((resolve) => {
+              const open = indexedDB.open("bitlogin");
+              open.onerror = () => resolve("no database");
+              open.onsuccess = () => {
+                const db = open.result;
+                const names = Array.from(db.objectStoreNames);
+                const out: string[] = [];
+                let left = names.length;
+                if (!left) resolve("empty");
+                for (const name of names) {
+                  const all = db.transaction(name).objectStore(name).getAll();
+                  all.onsuccess = () => {
+                    out.push(JSON.stringify(all.result));
+                    if (--left === 0) resolve(out.join("\n"));
+                  };
+                  all.onerror = () => {
+                    if (--left === 0) resolve(out.join("\n"));
+                  };
+                }
+              };
+            })
+        );
+        if (kept !== "no database" && kept !== "empty") {
+          expect(kept).toContain('\\"v\\":3');
+          expect(kept).not.toContain("246810");
+        }
+
+        // Too many wrong tries: the lock and what was kept are removed, and it is an ordinary sign-in again.
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator('form[data-form="lock-open"]').waitFor({ timeout: 30_000 });
+        for (let left = 4; left >= 1; left--) {
+          await typePin("111111");
+          await widget.locator(".notice.error", { hasText: `${left} ${left === 1 ? "try" : "tries"} left` }).waitFor({ timeout: 60_000 });
+        }
+        await typePin("111111");
+        await widget.locator(".notice.error", { hasText: "Too many wrong tries" }).waitFor({ timeout: 60_000 });
+        expect(await widget.locator('form[data-form="lock-open"]').count()).toBe(0);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator('[data-action="goto-login"]').waitFor({ timeout: 30_000 });
+        expect(await widget.locator('form[data-form="lock-open"]').count()).toBe(0);
+        expect(await active()).toBeNull();
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    },
+    300_000
   );
 
   /**

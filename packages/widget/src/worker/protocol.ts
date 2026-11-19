@@ -258,8 +258,45 @@ export interface SignerRestoreResult {
   signedSensitive?: number[];
 }
 
+// ---- The optional lock (docs/sign-in-window.md §SW12) ----
+
+export interface LockStatusResult {
+  /** Whether the lock is turned on in this browser. */
+  on: boolean;
+  /** On, and not unlocked: a session is cached, sealed, and nothing can sign until it is opened. */
+  locked: boolean;
+  /** Whether the device's own unlock was added. */
+  device: boolean;
+  /** The passkey that is the device's unlock, to ask the browser for exactly that one. */
+  credentialId?: string;
+  triesLeft: number;
+}
+export interface LockPinPayload {
+  pin: string;
+}
+export interface LockDevicePayload {
+  /** base64url. */
+  credentialId: string;
+  /** The passkey's PRF output, base64url. */
+  prfOutput: string;
+}
+export interface LockOpenPayload {
+  pin?: string;
+  /** The passkey's PRF output, base64url. Used where it is given; the PIN otherwise. */
+  prfOutput?: string;
+}
+export interface LockOpenResult extends RestoreSessionResult {
+  ok: boolean;
+  /** Wrong tries left before the lock and the cached session are removed. */
+  left: number;
+  /** They were removed: sign in again the ordinary way. */
+  removed: boolean;
+}
+
 export interface RestoreSessionResult {
   restored: boolean;
+  /** A session is cached but sealed under the lock: ask for the PIN or the device, then `lockOpen`. */
+  locked?: boolean;
   everydayPublicKey?: string;
   accountId?: string;
   everydayKeyDerived?: boolean;
@@ -404,6 +441,13 @@ export type WorkerActionMap = {
   appDecrypt: [AppCryptPayload, { text: string }];
   appDecryptEvent: [AppDecryptEventPayload, { text: string }];
   loadProfile: [Record<string, never>, { profile?: Profile }];
+  lockStatus: [Record<string, never>, LockStatusResult];
+  lockEnable: [LockPinPayload, LockStatusResult];
+  lockSetDevice: [LockDevicePayload, LockStatusResult];
+  lockRemoveDevice: [Record<string, never>, LockStatusResult];
+  lockDisable: [Record<string, never>, LockStatusResult];
+  lockNow: [Record<string, never>, LockStatusResult];
+  lockOpen: [LockOpenPayload, LockOpenResult];
   roomPass: [RoomPassPayload, NostrEvent];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];

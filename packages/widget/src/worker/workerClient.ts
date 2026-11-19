@@ -29,6 +29,9 @@ import type {
   WorkerNotification,
   HandoffExportPayload,
   HandoffSealed,
+  LockDevicePayload,
+  LockOpenPayload,
+  LockPinPayload,
   RoomPassPayload,
   SignerKeepPayload,
   SignerSitePayload,
@@ -224,6 +227,27 @@ export class WorkerClient {
   }
   loadProfile() {
     return this.call("loadProfile", {});
+  }
+  lockStatus() {
+    return this.call("lockStatus", {});
+  }
+  lockEnable(payload: LockPinPayload) {
+    return this.call("lockEnable", payload);
+  }
+  lockSetDevice(payload: LockDevicePayload) {
+    return this.call("lockSetDevice", payload);
+  }
+  lockRemoveDevice() {
+    return this.call("lockRemoveDevice", {});
+  }
+  lockDisable() {
+    return this.call("lockDisable", {});
+  }
+  lockNow() {
+    return this.call("lockNow", {});
+  }
+  lockOpen(payload: LockOpenPayload) {
+    return this.call("lockOpen", payload);
   }
   roomPass(payload: RoomPassPayload) {
     return this.call("roomPass", payload);

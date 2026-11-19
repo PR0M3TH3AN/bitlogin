@@ -21,7 +21,7 @@
 import type { AppPermissions } from "./embedded/permissions.js";
 import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
-import type { SignEventPayload } from "./worker/protocol.js";
+import type { LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 
 export interface HeadlessSignerOptions {
@@ -64,6 +64,14 @@ export interface HeadlessSigner {
     /** The user ticked "remember" in the window. A site BitLogin knows is remembered whatever this says. */
     remember?: boolean
   ): Promise<{ senderPublicKey: string; payload: string }>;
+  /** The optional lock (docs/sign-in-window.md §SW12): whether it is on, and whether it is locked now. */
+  lockStatus(): Promise<LockStatusResult>;
+  /**
+   * Open the lock, with the PIN or with the device's PRF output (base64url).
+   * On success this signer holds the session. A wrong try is counted; one
+   * too many removes the lock and what was cached.
+   */
+  lockOpen(with_: { pin?: string; prfOutput?: string }): Promise<{ ok: boolean; left: number; removed: boolean }>;
   /**
    * At the sign-in address, before a hand-off: fetch this account's own
    * signed profile (kind 0) and check it. What is found is sealed into the
@@ -180,6 +188,14 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async exportHandoff(recipientPublicKey, app, site, remember) {
       await requirePubkey();
       return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}), ...(site ? { site } : {}), ...(remember ? { remember: true } : {}) });
+    },
+    async lockStatus() {
+      return client.lockStatus();
+    },
+    async lockOpen(with_) {
+      const res = await client.lockOpen(with_);
+      pubkey = res.ok && res.everydayPublicKey ? res.everydayPublicKey : null;
+      return { ok: res.ok, left: res.left, removed: res.removed };
     },
     async loadProfile() {
       await requirePubkey();

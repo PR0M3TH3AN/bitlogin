@@ -4,7 +4,7 @@
 // BitLogin's workers, as a key that can only sign.
 //
 // This page never holds the key, and speaks only to pages of its own origin.
-import { describePermissions, findEmbeddedSigner, knownAppName, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
+import { askLockDevice, describePermissions, findEmbeddedSigner, knownAppName, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -35,14 +35,14 @@ const relays = {
  */
 let preparing = null;
 let profileLoaded = Promise.resolve();
+/** The one worker this page talks to. Where the lock is on, it is the one that was unlocked. */
+let worker = null;
+const theWorker = async () => (worker ??= await createHeadlessSigner(relays));
 const prepare = () =>
   (preparing ??= (async () => {
-    const session = await createHeadlessSigner(relays);
+    const session = await theWorker();
     const restored = await session.restore();
-    if (!restored || restored.pubkey !== who.pubkey) {
-      session.destroy();
-      throw new Error("no session");
-    }
+    if (!restored || restored.pubkey !== who.pubkey) throw new Error("no session");
     // Only a world is told who someone is. An application is held to what it asked, and this is not in it.
     if (!found.wants) profileLoaded = session.loadProfile().catch(() => null);
     return session;
@@ -127,6 +127,43 @@ const ask = () => {
   askedAt = performance.now();
 };
 
+/**
+ * The optional lock is on, and locked (§SW12): nothing can be handed over until it is opened, with this device's
+ * own unlock where that was set up, or the PIN. A wrong try is counted; one too many signs this browser out.
+ */
+const unlock = (lock) => {
+  status("A site is asking to sign notes as you. This browser is locked.");
+  $("unlock").hidden = false;
+  const done = async (result) => {
+    if (result.ok) {
+      $("unlock").hidden = true;
+      return ask();
+    }
+    if (result.removed) {
+      $("unlock").hidden = true;
+      who = null;
+      signIn();
+      return status("Too many wrong tries. The lock and what this browser kept were removed. Sign in again the ordinary way.");
+    }
+    $("unlock-go").disabled = false;
+    $("unlock-pin").value = "";
+    status(`That didn't open it. ${result.left} ${result.left === 1 ? "try" : "tries"} left before this browser is signed out.`);
+  };
+  $("unlock-device").hidden = !lock.credentialId;
+  $("unlock-device").onclick = async () => {
+    const prfOutput = await askLockDevice(lock.credentialId);
+    // Cancelled, or a device that can't: not a wrong try.
+    if (!prfOutput) return status("The device didn't unlock it. Use your PIN.");
+    await done(await (await theWorker()).lockOpen({ prfOutput }));
+  };
+  $("unlock-form").onsubmit = async (e) => {
+    e.preventDefault();
+    $("unlock-go").disabled = true;
+    status("Unlocking.");
+    await done(await (await theWorker()).lockOpen({ pin: $("unlock-pin").value }));
+  };
+};
+
 const signIn = () => {
   status("A site is asking to sign notes as you.");
   $("signin").hidden = false;
@@ -182,7 +219,9 @@ if (!window.opener) {
     status("No BitLogin signer was found in the page that opened this window, so there is nothing to allow. The site may not support this, or your browser kept the two apart.");
   } else {
     who = await readCachedSession();
-    if (who) ask();
-    else signIn();
+    const lock = who ? await (await theWorker()).lockStatus().catch(() => null) : null;
+    if (!who) signIn();
+    else if (lock?.locked) unlock(lock);
+    else ask();
   }
 }

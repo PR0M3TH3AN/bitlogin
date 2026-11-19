@@ -30,6 +30,8 @@ import {
   extractPrfOutput,
   passkeySupported
 } from "./passkey.js";
+import { askLockDevice, createLockDevice } from "./lockDevice.js";
+import type { LockOpenResult, LockStatusResult } from "./worker/protocol.js";
 
 type Screen =
   | "welcome"
@@ -56,7 +58,9 @@ type Screen =
   | "vault-consent"
   | "vault-import"
   | "vault-manage"
-  | "vault-offer";
+  | "vault-offer"
+  | "unlock"
+  | "lock-settings";
 
 interface ConfirmSlot {
   index: number;
@@ -252,6 +256,8 @@ export class BitLoginAuthElement extends HTMLElement {
     this.root.addEventListener("submit", (e) => this.onSubmit(e));
     this.root.addEventListener("change", (e) => void this.onFileChange(e));
     this.root.addEventListener("input", (e) => this.keepGeneratedPassword(e));
+    // With the lock on, a session left unused locks itself in the worker. This is how the screen finds out.
+    this.lockWatch = setInterval(() => void this.noticeLocked(), 30_000);
     this.render();
 
     // Routed through this element, not bound to the worker directly, so the
@@ -270,6 +276,8 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   disconnectedCallback(): void {
+    if (this.lockWatch !== null) clearInterval(this.lockWatch);
+    this.lockWatch = null;
     if (this.successDismissTimer !== null) clearTimeout(this.successDismissTimer);
     // Captured before clearActiveSession() below wipes the signal.
     const hadActiveSession = Boolean(this.session || this.altSigner);
@@ -1017,6 +1025,26 @@ export class BitLoginAuthElement extends HTMLElement {
         return this.handleRevealNsec();
       case "logout":
         return this.logout();
+      case "lock-now":
+        return this.lockNowPressed();
+      case "goto-lock-settings":
+        this.lockNote = "";
+        this.goto("lock-settings");
+        return;
+      case "lock-device-open":
+        return this.unlockWithDevice();
+      case "lock-device-add":
+        return this.lockAddDevice();
+      case "lock-device-remove":
+        this.lock = await this.worker.lockRemoveDevice();
+        this.lockNote = "This device's own unlock no longer opens the lock. The PIN does.";
+        this.render();
+        return;
+      case "lock-off":
+        this.lock = await this.worker.lockDisable();
+        this.lockNote = "The lock is off.";
+        this.render();
+        return;
       case "rollback-retry": {
         const kind = this.pendingRollback?.kind;
         this.pendingRollback = null;
@@ -1050,6 +1078,10 @@ export class BitLoginAuthElement extends HTMLElement {
           return this.handleSaveKeySubmit();
         case "login":
           return await this.handleLoginSubmit();
+        case "lock-open":
+          return await this.handleUnlockSubmit();
+        case "lock-enable":
+          return await this.handleLockEnableSubmit();
         case "recover-phrase":
           return await this.handleRecoverPhraseSubmit();
         case "recover-new-credentials":
@@ -1538,9 +1570,141 @@ export class BitLoginAuthElement extends HTMLElement {
    * time this resolves, goto() just re-renders over it -- a brief flash, not a
    * correctness issue.
    */
+  // ---- The optional lock (docs/sign-in-window.md §SW12) ----
+
+  private lock: LockStatusResult | null = null;
+  private lockWatch: ReturnType<typeof setInterval> | null = null;
+  private lockNote = "";
+
+  /** The session is gone from memory and sealed at rest: say so to the host, and ask to unlock. */
+  private showLocked(): void {
+    const had = Boolean(this.session);
+    this.session = null;
+    clearActiveSession(this);
+    this.releaseSigner();
+    if (had) this.dispatchEvent(new CustomEvent("bitlogin-logout"));
+    this.lockNote = "";
+    this.goto("unlock");
+  }
+
+  private async noticeLocked(): Promise<void> {
+    if (!this.session || this.altSigner || !this.lock?.on) return;
+    try {
+      const status = await this.worker.lockStatus();
+      this.lock = status;
+      if (status.locked) this.showLocked();
+    } catch {
+      // The worker is busy or gone: the next look will tell.
+    }
+  }
+
+  private async lockNowPressed(): Promise<void> {
+    this.lock = await this.worker.lockNow();
+    this.showLocked();
+  }
+
+  /** What an unlock came back with: in, wrong with tries left, or removed. */
+  private async afterUnlock(result: LockOpenResult): Promise<void> {
+    this.busy = false;
+    if (result.ok && result.everydayPublicKey) {
+      this.lock = await this.worker.lockStatus();
+      this.takeRestored(result);
+      return;
+    }
+    if (result.removed) {
+      this.lock = null;
+      this.goto("welcome");
+      this.errorMessage = "Too many wrong tries. The lock and what this browser kept were removed. Sign in again the ordinary way.";
+      this.render();
+      return;
+    }
+    this.lock = await this.worker.lockStatus();
+    this.errorMessage = `That didn't open it. ${result.left} ${result.left === 1 ? "try" : "tries"} left before this browser is signed out.`;
+    this.render();
+  }
+
+  private async unlockWithDevice(): Promise<void> {
+    if (!this.lock?.credentialId) return;
+    this.errorMessage = undefined;
+    const prfOutput = await askLockDevice(this.lock.credentialId);
+    if (!prfOutput) {
+      // Cancelled, or a device that can't: not a wrong try. The PIN is right there.
+      this.errorMessage = "The device didn't unlock it. Use your PIN.";
+      this.render();
+      return;
+    }
+    this.setBusy(true);
+    await this.afterUnlock(await this.worker.lockOpen({ prfOutput }));
+  }
+
+  private async handleUnlockSubmit(): Promise<void> {
+    const pin = this.field("lockPin");
+    this.errorMessage = undefined;
+    this.setBusy(true);
+    await this.afterUnlock(await this.worker.lockOpen({ pin }));
+  }
+
+  private async handleLockEnableSubmit(): Promise<void> {
+    const pin = this.field("newLockPin");
+    if (pin !== this.field("newLockPinAgain")) {
+      this.errorMessage = "The two PINs are not the same.";
+      this.render();
+      return;
+    }
+    if ([...pin.normalize("NFKC")].length < 6) {
+      this.errorMessage = "A PIN is at least six characters.";
+      this.render();
+      return;
+    }
+    this.errorMessage = undefined;
+    this.setBusy(true);
+    this.lock = await this.worker.lockEnable({ pin });
+    this.busy = false;
+    this.lockNote = "The lock is on. This browser asks for it each time a page is opened, and after fifteen minutes unused.";
+    this.render();
+  }
+
+  private async lockAddDevice(): Promise<void> {
+    this.errorMessage = undefined;
+    const made = await createLockDevice();
+    if (!made) {
+      this.errorMessage = "This device or browser couldn't set that up. The PIN still works.";
+      this.render();
+      return;
+    }
+    this.lock = await this.worker.lockSetDevice(made);
+    this.lockNote = "This device's own unlock opens the lock now. The PIN still does too.";
+    this.render();
+  }
+
+  private renderLockButtons(): string {
+    if (!this.lock) return "";
+    return this.lock.on
+      ? `<button class="secondary" type="button" data-action="lock-now">Lock now</button>
+         <button class="secondary" type="button" data-action="goto-lock-settings">Lock settings</button>`
+      : `<button class="secondary" type="button" data-action="goto-lock-settings">Set up a lock</button>`;
+  }
+
+  /** A session taken up from what this browser kept: after a page load, or after an unlock. */
+  private takeRestored(result: { everydayPublicKey?: string; accountId?: string; everydayKeyDerived?: boolean }): void {
+    if (!result.everydayPublicKey) return;
+    this.session = {
+      publicKey: result.everydayPublicKey,
+      npub: encodeNpub(result.everydayPublicKey),
+      accountId: result.accountId,
+      method: "bitlogin"
+    };
+    this.phraseRebuildsIdentity = result.everydayKeyDerived ?? false;
+    this.noteSignerClaim(this.claimSigner());
+    this.dispatchLogin();
+    this.goto("dashboard");
+  }
+
   private async tryRestoreSession(): Promise<void> {
     try {
       const result = await this.worker.restoreSession();
+      this.lock = await this.worker.lockStatus().catch(() => null);
+      if (result.locked) return this.goto("unlock");
       if (!result.restored || !result.everydayPublicKey) return;
       this.session = {
         publicKey: result.everydayPublicKey,
@@ -2373,7 +2537,67 @@ export class BitLoginAuthElement extends HTMLElement {
           }
           <div class="divider"></div>
           ${accountActions}
+          ${method === "bitlogin" ? this.renderLockButtons() : ""}
           <button class="secondary" type="button" data-action="logout">Log out</button>
+        `;
+      }
+
+      case "unlock":
+        return `
+          <h2>Unlock BitLogin</h2>
+          <p class="sub">This browser is locked. Open it to carry on as the account that is signed in here.</p>
+          ${this.renderError()}
+          ${
+            this.lock?.device
+              ? `<button class="primary" type="button" data-action="lock-device-open" ${this.busy ? "disabled" : ""}>Unlock with this device</button>
+                 <div class="divider"></div>`
+              : ""
+          }
+          <form data-form="lock-open" autocomplete="off">
+            <label for="lockPin">${this.lock?.device ? "Or your BitLogin PIN" : "Your BitLogin PIN"}</label>
+            <input type="password" name="lockPin" id="lockPin" autocomplete="off" required />
+            <button class="${this.lock?.device ? "secondary" : "primary"}" type="submit" ${this.busy ? "disabled" : ""}>
+              ${this.busy ? '<span class="spinner"></span>Unlocking…' : "Unlock"}
+            </button>
+          </form>
+          <p class="small">The PIN opens only what this browser kept. It is not your password, and it is never sent anywhere.</p>
+          <button class="link" type="button" data-action="logout">Forgot it? Sign out of this browser, and sign in again</button>
+        `;
+
+      case "lock-settings": {
+        const on = this.lock?.on === true;
+        return `
+          <h2>${on ? "Lock settings" : "Set up a lock"}</h2>
+          ${this.lockNote ? `<div class="notice info">${escapeHtml(this.lockNote)}</div>` : ""}
+          ${this.renderError()}
+          <p class="sub">A lock keeps what this browser remembers sealed until you open it, with a PIN or with this device's own unlock. It is off unless you turn it on.</p>
+          <div class="notice info">
+            It stops someone who sits down at this browser. It does not stop malware on this device, or someone who copies this browser's data: a short PIN is quickly guessed.
+            It is not your password or your recovery phrase, and opens nothing on any other device. Forgetting it costs one ordinary sign-in.
+            While it is on, sites you allow are allowed for one visit at a time.
+          </div>
+          <form data-form="lock-enable" autocomplete="off">
+            <label for="newLockPin">${on ? "A new PIN" : "Choose a PIN"} (six characters or more)</label>
+            <input type="password" name="newLockPin" id="newLockPin" autocomplete="off" required minlength="6" maxlength="64" />
+            <label for="newLockPinAgain">The same PIN again</label>
+            <input type="password" name="newLockPinAgain" id="newLockPinAgain" autocomplete="off" required minlength="6" maxlength="64" />
+            <button class="primary" type="submit" ${this.busy ? "disabled" : ""}>
+              ${this.busy ? '<span class="spinner"></span>Sealing…' : on ? "Change the PIN" : "Turn the lock on"}
+            </button>
+          </form>
+          ${
+            on
+              ? `<div class="divider"></div>
+                 ${
+                   this.lock?.device
+                     ? `<button class="secondary" type="button" data-action="lock-device-remove">Stop using this device's unlock</button>`
+                     : `<button class="secondary" type="button" data-action="lock-device-add">Also open it with this device's unlock</button>
+                        <p class="small">A fingerprint, a face, or the device's own PIN, asked for by your browser. It is tried first; your BitLogin PIN stays as the other way in.</p>`
+                 }
+                 <button class="secondary" type="button" data-action="lock-off">Turn the lock off</button>`
+              : ""
+          }
+          <button class="link" type="button" data-action="goto-dashboard">Back</button>
         `;
       }
 

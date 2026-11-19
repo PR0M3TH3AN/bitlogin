@@ -37,3 +37,6 @@
 .sites-list .connect-site { margin-bottom: .4rem; }
 .sites-list p { margin: .25rem 0; }
 .sites-ended { opacity: .7; }
+
+/* An element marked hidden is hidden, whatever else its class says about how it is laid out. */
+.connect [hidden] { display: none !important; }

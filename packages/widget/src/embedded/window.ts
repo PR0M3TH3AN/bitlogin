@@ -17,6 +17,7 @@ import { describePermissions, knownAppName, mayHold, type AppPermissions, type P
 export { describePermissions, knownAppName, type AppPermissions, type PermissionWords };
 export { describeAllowed, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
 export { SIGN_LIMITS } from "./policy.js";
+export { askLockDevice } from "../lockDevice.js";
 
 export interface FoundSigner {
   /** The site the signer is embedded in, as the browser reported it to the signer. Show this, exactly. */

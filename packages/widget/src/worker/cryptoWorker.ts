@@ -49,7 +49,8 @@ import {
   type NwcCredential
 } from "@bitlogin/core/vault";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
-import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
+import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSessionState } from "./sessionCache.js";
+import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeerFor } from "../embedded/permissions.js";
 import { signClass } from "../embedded/policy.js";
@@ -81,6 +82,11 @@ import type {
   HandoffExportPayload,
   AppCryptPayload,
   AppDecryptEventPayload,
+  LockDevicePayload,
+  LockOpenPayload,
+  LockPinPayload,
+  LockStatusResult,
+  RestoreSessionResult,
   RoomPassPayload,
   SignerKeepPayload,
   SignerSitePayload,
@@ -162,6 +168,34 @@ function applyRelaySets(sets: RelaySets): void {
   if (!hostDiscoveryRelays) discoveryRelayUrls = sets.discoveryRelays;
 }
 const requestQueue = new SerialQueue();
+
+// ---- The optional lock (lock.ts, spec §21.5) ----
+
+/** The lock key, while the user has unlocked. Null when the lock is off, and when it is on and locked. */
+let lockKey: Uint8Array | null = null;
+/** When this worker was last asked to do something, in milliseconds: an unlocked session unused for long enough locks itself. */
+let lastUsed = Date.now();
+/** Asking these is not using the session, and none of them is refused for being idle. */
+const NOT_USE = new Set(["configure", "lockStatus", "lockOpen", "restoreSession", "getSessionStatus", "logout"]);
+
+/** Lock: the keys go from memory. What is cached stays, sealed, for the next unlock. */
+function lockNow(): void {
+  clearSession();
+  if (lockKey) wipe(lockKey);
+  lockKey = null;
+}
+
+async function lockStatus(): Promise<LockStatusResult> {
+  const record = await readLock(store);
+  if (!record) return { on: false, locked: false, device: false, triesLeft: 0 };
+  return {
+    on: true,
+    locked: !lockKey && (await cachedSessionState(store)) === "locked",
+    device: !!record.device,
+    ...(record.device ? { credentialId: record.device.credentialId } : {}),
+    triesLeft: Math.max(0, LOCK_LIMITS.tries - record.tries)
+  };
+}
 
 function requireUnlocked(): { signer: NostrSigner; everydayPrivateKey: Uint8Array } {
   if (!session.signer || !session.everydayPrivateKey) {
@@ -253,6 +287,10 @@ async function persistSession(): Promise<void> {
   ) {
     return;
   }
+  // A sign-in made while the lock was on and locked is the way past a forgotten PIN: it turns the lock off.
+  // Nothing is lost by that, and nothing is gained by anyone who could not sign in.
+  const lock = await readLock(store);
+  if (lock && !lockKey) await removeLock(store);
   await saveCachedSession(store, {
     everydayPrivateKey: session.everydayPrivateKey,
     accountId: session.accountId,
@@ -262,8 +300,37 @@ async function persistSession(): Promise<void> {
     ...(session.connectionVaultRoot ? { connectionVaultRoot: session.connectionVaultRoot } : {}),
     ...(session.vaultKnown ? { vaultEnabled: session.connectionVaultRoot !== null } : {}),
     everydayKeyDerived: session.everydayKeyDerived
-  });
+  }, lock && lockKey ? lockKey : null);
   await persistPublicSession();
+}
+
+/** Take up the cached session, with the lock key where the lock is on. */
+async function restoreFromCache(): Promise<RestoreSessionResult> {
+  const cached = await loadCachedSession(store, lockKey);
+  if (!cached) return { restored: false };
+  clearSession();
+  session.signer = new NostrSigner(cached.everydayPrivateKey);
+  session.everydayPrivateKey = cached.everydayPrivateKey;
+  session.accountId = cached.accountId;
+  session.recoveryPublicKey = cached.recoveryPublicKey;
+  session.activeCredentialEvent = cached.activeCredentialEvent;
+  session.activeRecoveryEvent = cached.activeRecoveryEvent;
+  session.everydayKeyDerived = cached.everydayKeyDerived ?? false;
+  session.connectionVaultRoot = cached.connectionVaultRoot ?? null;
+  // vaultKnown only when the cache recorded a definitive answer; an old
+  // cache entry leaves it false so requireVault says "sign in again"
+  // rather than falsely claiming the account has no vault.
+  session.vaultKnown = cached.vaultEnabled !== undefined;
+  // Self-heal: a session cached before the public-record feature has an
+  // encrypted entry but no cleartext one. Writing it here means the very
+  // next lightweight read sees the identity, no re-login required.
+  await persistPublicSession();
+  return {
+    restored: true,
+    everydayPublicKey: session.signer.getPublicKey(),
+    accountId: cached.accountId,
+    everydayKeyDerived: session.everydayKeyDerived
+  };
 }
 
 // Writes the cleartext public-only identity (publicSession.ts) beside the
@@ -410,7 +477,96 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
   if (session.signerOnly && !SIGNER_ONLY_ACTIONS.has(action)) {
     throw new Error("This session can only sign. Sign in at your own BitLogin page for anything else.");
   }
+  // With the lock on, a session nobody has used for a while locks itself before anything more is done with it.
+  if (lockKey && action !== "configure" && Date.now() - lastUsed > LOCK_LIMITS.idleSec * 1000) lockNow();
+  if (!NOT_USE.has(action)) lastUsed = Date.now();
   switch (action) {
+    // ---- The optional lock (lock.ts) ----
+
+    case "lockStatus":
+      return lockStatus();
+
+    // Turn it on, or change the PIN. Only with a full session unlocked: the key that is sealed is the one in hand.
+    case "lockEnable": {
+      requireUnlocked();
+      if ((await readLock(store)) && !lockKey) throw new Error("Unlock first.");
+      const fresh = await setLockPin(store, (payload as LockPinPayload).pin, lockKey ?? undefined);
+      if (lockKey) wipe(lockKey);
+      lockKey = fresh;
+      await persistSession();
+      return lockStatus();
+    }
+
+    case "lockSetDevice": {
+      requireUnlocked();
+      if (!lockKey) throw new Error("Turn the lock on first.");
+      const p = payload as LockDevicePayload;
+      const prf = base64urlToBytes(String(p.prfOutput));
+      try {
+        await setLockDevice(store, lockKey, String(p.credentialId), prf);
+      } finally {
+        wipe(prf);
+      }
+      return lockStatus();
+    }
+
+    case "lockRemoveDevice": {
+      requireUnlocked();
+      if (!lockKey) throw new Error("Turn the lock on first.");
+      await removeLockDevice(store);
+      return lockStatus();
+    }
+
+    case "lockDisable": {
+      requireUnlocked();
+      if ((await readLock(store)) && !lockKey) throw new Error("Unlock first.");
+      await removeLock(store);
+      if (lockKey) wipe(lockKey);
+      lockKey = null;
+      await persistSession();
+      return lockStatus();
+    }
+
+    case "lockNow": {
+      if (!lockKey) throw new Error("The lock is not on.");
+      lockNow();
+      return lockStatus();
+    }
+
+    // Open it, with the PIN or with the device. A wrong try is counted; one too many removes the lock and the
+    // cached session with it, and the user signs in again the ordinary way.
+    case "lockOpen": {
+      const p = payload as LockOpenPayload;
+      let result: OpenResult;
+      if (typeof p.prfOutput === "string") {
+        const prf = base64urlToBytes(p.prfOutput);
+        try {
+          result = await openLockWithDevice(store, prf);
+        } finally {
+          wipe(prf);
+        }
+      } else {
+        result = await openLockWithPin(store, p.pin);
+      }
+      if (result.ok) {
+        if (lockKey) wipe(lockKey);
+        lockKey = result.lockKey;
+        lastUsed = Date.now();
+        const restored = await restoreFromCache();
+        if (restored.restored) return { ok: true, left: LOCK_LIMITS.tries, removed: false, ...restored };
+        // The lock opened and there was nothing behind it that could be read: there is no lock to keep.
+        await removeLock(store);
+        lockNow();
+        result = { ok: false, left: 0, removed: true };
+      }
+      if (result.removed) {
+        lockNow();
+        await clearCachedSession(store);
+        await clearPublicSession(store);
+      }
+      return { ok: false, left: result.left, removed: result.removed, restored: false };
+    }
+
     // ---- Signer hand-off (docs/sign-in-window.md) ----
 
     // The receiving side, first: a throwaway key for the hand-off to be sealed to.
@@ -431,7 +587,10 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         return sealHandoff(everydayPrivateKey, p.recipientPublicKey, sender, p.app, {
           ...(p.site !== undefined ? { site: p.site } : {}),
           ...(session.profile ? { profile: session.profile } : {}),
-          ...(p.remember === true ? { remember: true } : {})
+          ...(p.remember === true ? { remember: true } : {}),
+          // With the lock on, nothing is kept for any site: a key at rest in a site's storage would be a key
+          // the lock does not cover. Every site is allowed for the visit, and asks at the sign-in address again.
+          ...(lockKey ? { visitOnly: true } : {})
         });
       } finally {
         wipe(sender);
@@ -1034,35 +1193,14 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     // corrupt cache is not an error: it just means the widget falls through to its
     // normal welcome screen, exactly like it always has.
     case "restoreSession": {
-      const cached = await loadCachedSession(store);
-      if (!cached) return { restored: false };
-      clearSession();
-      session.signer = new NostrSigner(cached.everydayPrivateKey);
-      session.everydayPrivateKey = cached.everydayPrivateKey;
-      session.accountId = cached.accountId;
-      session.recoveryPublicKey = cached.recoveryPublicKey;
-      session.activeCredentialEvent = cached.activeCredentialEvent;
-      session.activeRecoveryEvent = cached.activeRecoveryEvent;
-      session.everydayKeyDerived = cached.everydayKeyDerived ?? false;
-      session.connectionVaultRoot = cached.connectionVaultRoot ?? null;
-      // vaultKnown only when the cache recorded a definitive answer; an old
-      // cache entry leaves it false so requireVault says "sign in again"
-      // rather than falsely claiming the account has no vault.
-      session.vaultKnown = cached.vaultEnabled !== undefined;
-      // Self-heal: a session cached before the public-record feature has an
-      // encrypted entry but no cleartext one. Writing it here means the very
-      // next lightweight read sees the identity, no re-login required.
-      await persistPublicSession();
-      return {
-        restored: true,
-        everydayPublicKey: session.signer.getPublicKey(),
-        accountId: cached.accountId,
-        everydayKeyDerived: session.everydayKeyDerived
-      };
+      // Sealed under the lock, and not unlocked: not "no session". The caller asks for the PIN or the device.
+      if (!lockKey && (await cachedSessionState(store)) === "locked") return { restored: false, locked: true };
+      return restoreFromCache();
     }
 
     case "logout": {
-      clearSession();
+      lockNow();
+      await removeLock(store);
       await clearCachedSession(store);
       await clearPublicSession(store);
       return {};
@@ -1233,6 +1371,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass",
+  "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

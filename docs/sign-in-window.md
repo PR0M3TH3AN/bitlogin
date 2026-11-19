@@ -504,7 +504,42 @@ cannot read it, and what is kept for one site is not there for another.
   clear it when the last tab of the site closes), nothing is kept, and the
   user is asked again, as before.
 
-# SW12. An optional lock: a PIN, or the device's own unlock (design only)
+# SW12. An optional lock: a PIN, or the device's own unlock (partly built on `beta`)
+
+**What is built** (2026-11-19, `spec.md` §21.5), at the sign-in address
+and in the widget wherever it runs:
+
+- Off by default. Turned on from the account screen with a PIN; the
+  device's own unlock can be added, and is then offered first, with the PIN
+  as the other way in.
+- "Lock now". It also locks on every page load, and after fifteen minutes
+  unused.
+- Five wrong tries remove the lock and what this browser kept.
+- The sign-in window asks for it before Allow.
+- **While it is on, no site is remembered:** every site is allowed for one
+  visit, whatever is ticked and whether BitLogin knows it or not. So no key
+  is at rest outside the lock.
+
+**What is not built, and differs from the design below:**
+
+- **The panel inside a site.** The design opens the lock in a panel the
+  embedded signer draws. That needs the signer's page to have an interface,
+  and every asking site to show its frame and allow it the passkey prompt.
+  Not built. What stands in for it is the rule above: with the lock on,
+  nothing is kept for sites, so there is nothing in a site to open. The
+  cost is a visit to the window for each site each time, and nothing at all
+  in a headset.
+- **Sites remembered before the lock was turned on stay remembered** until
+  their date or until signed out there. The sign-in address cannot reach
+  them (§SW18).
+- **It locks on every page load,** not only when the browser is started
+  again: the key that opens it lives in the page's worker and goes with it.
+  At the sign-in address that is a visit now and then. In an application
+  that embeds the widget and loads many pages it is an unlock per page.
+- Not tried: a real fingerprint or face reader, Safari, a phone. The
+  device's unlock was tested with a simulated authenticator in Chromium.
+
+The design, as first written:
 
 Decided by the owner on 2026-11-19: there should be a lock a user can turn
 on, and a PIN should be one of the ways to open it. Some people want a PIN

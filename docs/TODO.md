@@ -187,7 +187,15 @@ that moved.
     allowed to read a take-back record from relays (it lifts §SW6's rule
     that the page holding the key contacts nothing), or memory is made
     shorter. §SW18 has both.
-  - [ ] **Device unlock before the PIN (§SW12).**
+  - [x] **The lock (§SW12, `spec.md` §21.5):** a PIN, the device's own
+    unlock offered first where it was added, five tries, "Lock now", off by
+    default. On `beta`. While it is on, no site is remembered.
+  - [ ] **OWNER'S DECISION: the lock inside a site.** The panel in the
+    embedded signer (§SW12) is not built; with the lock on, sites are
+    allowed per visit instead. Building the panel changes §SW6 and needs
+    the NSWP kit to show the frame.
+  - [ ] **Try the lock on real devices:** a fingerprint or face reader,
+    Safari, a phone.
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound

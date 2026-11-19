@@ -1440,6 +1440,43 @@ Logout shall:
 5. Preserve only encrypted cache data and the generation high-water mark.
 6. Invalidate in-memory session state.
 
+## 21.5 Optional lock
+
+Off unless the user turns it on (`docs/sign-in-window.md` §SW12). Turned on,
+the cached session (§21.1) is sealed a second time, under a random 32-byte
+**lock key**, and a client shall restore nothing from it until that key is
+recovered.
+
+1. **Two layers, both needed.** The record sealed under the device cache
+   key (§21.2), as before; and that record sealed again with AES-256-GCM
+   under the lock key. The lock key alone opens nothing off this browser
+   profile.
+2. **The lock key at rest** exists only wrapped: always under a key
+   stretched from the user's PIN with Argon2id (§11, the account KDF) and a
+   16-byte salt of the record's own; and optionally under a key derived by
+   HKDF from a WebAuthn PRF output, the device's own unlock.
+3. **The PIN** is 6 to 64 characters, NFKC-normalized. It is never sent
+   anywhere and is not a credential: it derives no capsule key and opens
+   nothing on another device.
+4. **The device's unlock** is a passkey used only as a wrapping key, with a
+   PRF salt distinct from the passkey-account salt (`passkey-login.md`). It
+   derives no account, and nothing of it is published.
+5. **Wrong tries are counted** in the lock record, before each try is made.
+   After five, the lock record and the cached session are removed, and the
+   user signs in the ordinary way.
+6. **It locks** when the page that unlocked it is closed or loaded again,
+   after fifteen minutes unused, and when the user says so. Locked, the
+   keys are wiped from memory (§11.10) and the sealed cache is left.
+7. **An ordinary sign-in made while locked turns the lock off.** That is
+   the way past a forgotten PIN, and gives nothing to anyone who could not
+   sign in.
+8. **While it is on, nothing is kept for an asking site** (§SW11): every
+   site is allowed for one visit, so no key is at rest outside the lock.
+9. **What it is for:** someone who sits down at the browser. It does not
+   stop malware on the device, or a copied browser profile: a short PIN is
+   guessed quickly offline, and a count kept in software can be put back.
+   An interface that offers the lock shall say so where it is turned on.
+
 ---
 
 # 22. Static Client Security

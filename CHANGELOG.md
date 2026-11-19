@@ -8,6 +8,22 @@ would plausibly want. Newest first.
 
 ## 2026-11-19
 
+**An optional lock (`docs/spec.md` §21.5, `docs/sign-in-window.md` §SW12).**
+Off unless the user turns it on, from the account screen.
+
+- **A PIN, and optionally the device's own unlock.** With it on, what the
+  browser keeps is sealed a second time, and the widget shows an unlock
+  screen on each page load and after fifteen minutes unused. Five wrong
+  tries sign the browser out.
+- **"Lock now"** on the account screen.
+- **For a host page:** locking fires `bitlogin-logout` and unlocking fires
+  `bitlogin-login`, as signing out and in do. Nothing changes for a user
+  who never turns it on.
+- **While it is on, no asking site is remembered:** each is allowed for
+  one visit.
+- **New on the headless signer:** `lockStatus()`, `lockOpen()`. `restore()`
+  resolves null while locked.
+
 **A world is held tighter, and an unknown site is not remembered unless
 asked (`docs/sign-in-window.md` §SW11, §SW18).** For sites that sign in
 through the window.
