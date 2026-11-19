@@ -252,8 +252,9 @@ remembered (§SW11).
 - `sign`: the kinds it may have signed.
 - `appData`: prefixes of the `d` tag it may write kind 30078 under. `"*"`
   is any prefix, for an application whose kind-30078 events have none.
-- `proofs`: the other origins it may prove the user's identity to (kinds
-  27235 and 24242). Its own origin is always allowed and need not be named.
+- `proofs`: the other origins it may prove the user's identity to with a
+  web-request proof (kind 27235). Its own origin is always allowed and need
+  not be named.
 - `read`: the kinds whose content it may have decrypted (§SW9.5).
 - `peers`: fixed public keys it may encrypt to and decrypt from, outside
   any event (§SW9.5).
@@ -295,10 +296,14 @@ half of what it asked for fails in ways its user cannot see.
 - **Kind** must be in the approved set, and not Never.
 - **Kind 30078:** its `d` tag must begin with an approved prefix, and never
   with `bitlogin:`.
-- **Kinds 27235 and 24242:** every address the event names (`u`, and
-  `server` where there is one) must be of the asking site's own origin or
-  an approved one. A proof with no address is refused. This is what stops
-  a site from collecting a proof that works at someone else's server.
+- **Kind 27235:** every address the event names (`u`) must be of the asking
+  site's own origin or an approved one. A proof with no address is refused.
+  This is what stops a site from collecting a proof that works at someone
+  else's server.
+- **Kind 24242 is not bound to an address.** File hosts are the user's own
+  choice, often several, and the proof commonly names none. It is approved
+  as what it is, and the window lists it with the Sensitive ones: it can
+  upload and delete the user's files wherever they are.
 - **The time** is the site's if it is within ten minutes of the signer's
   clock, and the signer's own otherwise. Applications replace their own
   events and need the later one to win.
