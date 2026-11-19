@@ -166,6 +166,29 @@ export type RepairReplicasResult = RebroadcastResult;
 export interface SessionStatusResult {
   unlocked: boolean;
   everydayPublicKey?: string;
+  /** True when the session arrived by a signer hand-off: it can sign and
+   *  nothing else, and is never cached (docs/sign-in-window.md). */
+  signerOnly?: boolean;
+}
+
+// ---- Signer hand-off (docs/sign-in-window.md) ----
+
+export interface HandoffBeginResult {
+  /** A throwaway public key, made in the receiving worker, for the hand-off to be sealed to. */
+  recipientPublicKey: string;
+}
+
+export interface HandoffExportPayload {
+  recipientPublicKey: string;
+}
+
+export interface HandoffSealed {
+  senderPublicKey: string;
+  payload: string;
+}
+
+export interface HandoffAcceptResult {
+  everydayPublicKey: string;
 }
 
 export interface RestoreSessionResult {
@@ -303,6 +326,9 @@ export type WorkerActionMap = {
   checkReplicaHealth: [Record<string, never>, ReplicaHealthResult];
   getSessionStatus: [Record<string, never>, SessionStatusResult];
   restoreSession: [Record<string, never>, RestoreSessionResult];
+  handoffBegin: [Record<string, never>, HandoffBeginResult];
+  handoffExport: [HandoffExportPayload, HandoffSealed];
+  handoffAccept: [HandoffSealed, HandoffAcceptResult];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];
   vaultList: [Record<string, never>, VaultListResult];

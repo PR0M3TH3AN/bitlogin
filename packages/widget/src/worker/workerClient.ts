@@ -26,7 +26,9 @@ import type {
   VaultOfferCheckPayload,
   Nip46ConnectPayload,
   Nip46NostrconnectStartPayload,
-  WorkerNotification
+  WorkerNotification,
+  HandoffExportPayload,
+  HandoffSealed
 } from "./protocol.js";
 
 /**
@@ -204,6 +206,15 @@ export class WorkerClient {
   }
   restoreSession() {
     return this.call("restoreSession", {});
+  }
+  handoffBegin() {
+    return this.call("handoffBegin", {});
+  }
+  handoffExport(payload: HandoffExportPayload) {
+    return this.call("handoffExport", payload);
+  }
+  handoffAccept(payload: HandoffSealed) {
+    return this.call("handoffAccept", payload);
   }
   vaultStatus() {
     return this.call("vaultStatus", {});

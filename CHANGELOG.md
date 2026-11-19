@@ -6,6 +6,28 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-19
+
+**A signer hand-off, for a sign-in window (`docs/sign-in-window.md`).** A
+site that embeds the widget can read the password as it is typed. The way
+out is for the password to be typed at one address the user trusts, and for
+other sites to ask a hidden signer of that address. This is the piece of
+that which belongs here.
+
+- **The headless signer can hand its key to another of itself on the same
+  origin:** `beginHandoff()` and `acceptHandoff()` on the receiving side,
+  `exportHandoff()` on the sending side, `isSignerOnly()`. The everyday key
+  moves worker to worker, sealed between two throwaway keys; the pages
+  carry a public key and ciphertext.
+- **What arrives is a session that can only sign.** `getPublicKey` and
+  `signEvent` work. Decrypting, encrypting, exporting the key, the vault and
+  every account action are refused, and nothing is cached. `getSessionStatus`
+  says `signerOnly`.
+- **Nothing existing changes.** No wire format, no stored format, no header.
+  A site that never calls these is unaffected.
+- **Not here:** the sign-in window page and the per-site permission list.
+  They are a deployment's own pages.
+
 ## 2026-11-18
 
 **Relay list (later the same day).** A probe of the eight built-in storage
