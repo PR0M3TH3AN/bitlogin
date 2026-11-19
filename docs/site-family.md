@@ -172,10 +172,10 @@ Less than a site's own grant, where the two differ:
 
 # SF9. Decisions that are the owner's
 
-1. **Any domain, or only families BitLogin lists?** Proposed: any domain,
-   because the owner does not want to keep a list up to date, with the
-   bounds in SF7. The narrower choice is a shipped list of families
-   (`bitblocks.network` first), changed only by a release.
+1. **Any domain, or only families BitLogin lists?** **Decided by the owner
+   on 2026-11-19: any domain,** with the bounds in SF3 and SF7. No list of
+   families has to be kept up to date. (The narrower choice was a shipped
+   list of families, changed only by a release.)
 2. **Offer it at the first site of a family, or only from the second?**
    Proposed: from the second (SF4).
 3. **Is `bitblocks.network` a known family,** remembered thirty days

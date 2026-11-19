@@ -216,8 +216,9 @@ that moved.
   through the BitPortal session, 2026-11-19). Design: `docs/site-family.md`.
   One tick at Allow covers every site under one registrable domain, such as
   every world at `bitblocks.network`, for notes, reactions and room passes
-  only, with counts shared across the family. Not started. Four decisions
-  are the owner's (§SF9).
+  only, with counts shared across the family. Not started. The owner
+  decided it is offered for any domain (§SF9.1); three decisions remain
+  (§SF9.2–4).
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound
