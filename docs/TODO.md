@@ -133,6 +133,19 @@ that moved.
   files with `npm run release:artifacts` for the same commit, and say so
   somewhere a user could look.
 
+- [ ] **10. BitLogin as the relay broadcaster** (asked for by the owner,
+  2026-11-19). Design: `docs/relay-broadcast.md`. An application hands over a
+  signed note and BitLogin sends it to the author's write relays, the read
+  relays of whoever it tags, and the best relays this device has seen when
+  the author's own list is thin. Not started. Five decisions are the owner's
+  (§RB10). Found while writing it: every account BitLogin creates is given a
+  public relay list of all thirteen vault relays, several of which do not
+  work (§RB1, §RB8).
+- [ ] **11. The browser's own password prompt** (asked for by the owner,
+  2026-11-19). The browser should offer to save the login name and password,
+  and fill them in later, both at BitLogin's own address and in an
+  application that embeds the widget.
+
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound
 the items above; none is BitLogin's to decide alone.
