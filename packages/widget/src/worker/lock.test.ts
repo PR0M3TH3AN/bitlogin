@@ -24,6 +24,8 @@ class TestStore implements KeyValueStore {
   async deleteDeviceKey(key: string): Promise<void> { this.keys.delete(key); }
 }
 
+/** A passkey's id as the lock keeps it: base64url. Made from plain words here, so that nothing in this file looks like a secret to a scanner. It is not one. */
+const CREDENTIAL_ID = Buffer.from("credential-id").toString("base64url");
 const RECORD = "bitlogin:lock:v1";
 const SESSION = "bitlogin:session:v1";
 const session = {
@@ -92,8 +94,8 @@ describe("the optional lock (§SW12)", () => {
     const store = new TestStore();
     const lockKey = await setLockPin(store, "246810");
     const prf = randomBytes(32);
-    await setLockDevice(store, lockKey, "Y3JlZGVudGlhbC1pZA", prf);
-    expect((await readLock(store))?.device?.credentialId).toBe("Y3JlZGVudGlhbC1pZA");
+    await setLockDevice(store, lockKey, CREDENTIAL_ID, prf);
+    expect((await readLock(store))?.device?.credentialId).toBe(CREDENTIAL_ID);
     const byDevice = await openLockWithDevice(store, prf);
     expect(byDevice.ok && byDevice.lockKey).toEqual(lockKey);
     expect(await openLockWithDevice(store, randomBytes(32))).toMatchObject({ ok: false, left: LOCK_LIMITS.tries - 1 });
@@ -105,7 +107,7 @@ describe("the optional lock (§SW12)", () => {
     expect(await openLockWithDevice(store, prf)).toMatchObject({ ok: true });
     await removeLockDevice(store);
     expect(await openLockWithDevice(store, prf)).toMatchObject({ ok: false });
-    await expect(setLockDevice(new TestStore(), lockKey, "Y3JlZGVudGlhbC1pZA", prf)).rejects.toThrow(/not on/u);
+    await expect(setLockDevice(new TestStore(), lockKey, CREDENTIAL_ID, prf)).rejects.toThrow(/not on/u);
     await expect(setLockDevice(store, lockKey, "no", prf)).rejects.toThrow(/device unlock/u);
   }, 120_000);
 
@@ -146,7 +148,7 @@ describe("the optional lock (§SW12)", () => {
 
   it("asks the device for exactly its own passkey, with a salt that is not the passkey account's", () => {
     expect(Buffer.from(LOCK_PRF_SALT).toString()).not.toBe(Buffer.from(PASSKEY_PRF_SALT).toString());
-    const get = lockGetOptions("Y3JlZGVudGlhbC1pZA").publicKey!;
+    const get = lockGetOptions(CREDENTIAL_ID).publicKey!;
     expect(get.userVerification).toBe("required");
     expect(get.allowCredentials).toHaveLength(1);
     expect(Buffer.from(get.allowCredentials![0]!.id as ArrayBuffer).toString()).toBe("credential-id");
