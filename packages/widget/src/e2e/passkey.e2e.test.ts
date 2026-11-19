@@ -293,6 +293,106 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
+    "hands a real session to a second worker, which can then sign and do nothing else (sign-in-window.md §SW4)",
+    async () => {
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const page = context.pages()[0]!;
+        const errors: string[] = [];
+        page.on("pageerror", (err) => errors.push(String(err)));
+        await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = page.locator("bitlogin-auth");
+        // A throwaway account, made the ordinary way, against the mock relays.
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const session = await page.evaluate(() => window.bitlogin?.activeSession());
+        expect(session?.publicKey).toMatch(/^[0-9a-f]{64}$/u);
+
+        // Two headless signers on this origin stand for the two sides: the
+        // sign-in window (it restores the real session) and the embedded
+        // signer (it starts with nothing). Each has a crypto worker of its own.
+        // Given to the page as text: a test runner rewrites a dynamic import in a function it serializes.
+        const result = (await page.evaluate(`(async () => {
+          const url = "/vendor/bitlogin/bitlogin-headless.js";
+          const mod = await import(url);
+          const sender = await mod.createHeadlessSigner();
+          const receiver = await mod.createHeadlessSigner();
+          const restored = await sender.restore();
+          const before = { receiverUnlocked: await receiver.isUnlocked(), senderSignerOnly: await sender.isSignerOnly() };
+          const refuses = async (work) => {
+            try {
+              await work();
+              return "ALLOWED";
+            } catch (err) {
+              return String(err.message).slice(0, 60);
+            }
+          };
+          const acceptWithoutBegin = await refuses(() => receiver.acceptHandoff({ senderPublicKey: "ab".repeat(32), payload: "x" }));
+          const recipient = await receiver.beginHandoff();
+          const sealed = await sender.exportHandoff(recipient);
+          const accepted = await receiver.acceptHandoff(sealed);
+          const signed = await receiver.signEvent({ kind: 1, content: "signed after a hand-off", tags: [], created_at: 1_794_000_000 });
+          const out = {
+            restored: restored?.pubkey ?? null,
+            before,
+            acceptWithoutBegin,
+            sealedLooksLikeAKey: /^[0-9a-f]{64}$/.test(sealed.payload),
+            accepted: accepted.pubkey,
+            signerOnly: await receiver.isSignerOnly(),
+            signed: { pubkey: signed.pubkey, kind: signed.kind, sig: typeof signed.sig === "string" && signed.sig.length === 128 },
+            // What a session that can only sign is refused.
+            decrypt: await refuses(() => receiver.nip44Decrypt("ab".repeat(32), "x")),
+            encrypt: await refuses(() => receiver.nip44Encrypt("ab".repeat(32), "x")),
+            handOnAgain: await refuses(async () => receiver.exportHandoff(await sender.beginHandoff())),
+            // A hand-off is used once: the same sealed key opens nothing a second time.
+            again: await refuses(() => receiver.acceptHandoff(sealed)),
+            // The sending side is untouched: still a full session, still able to hand over.
+            senderStillFull: !(await sender.isSignerOnly()) && (await sender.isUnlocked())
+          };
+          // And nothing was written: a third signer restoring from this origin's cache gets the ORIGINAL
+          // full session (the one sign-in cached), never a second, signer-only one.
+          const third = await mod.createHeadlessSigner();
+          const thirdRestored = await third.restore();
+          out.cacheUnchanged = thirdRestored?.pubkey === restored?.pubkey && !(await third.isSignerOnly());
+          sender.destroy();
+          receiver.destroy();
+          third.destroy();
+          return out;
+        })()`)) as Record<string, any>;
+        expect(result.restored).toBe(session!.publicKey);
+        expect(result.before).toEqual({ receiverUnlocked: false, senderSignerOnly: false });
+        expect(result.acceptWithoutBegin).toContain("No hand-off was begun");
+        expect(result.sealedLooksLikeAKey).toBe(false);
+        expect(result.accepted).toBe(session!.publicKey);
+        expect(result.signerOnly).toBe(true);
+        expect(result.signed).toEqual({ pubkey: session!.publicKey, kind: 1, sig: true });
+        expect(result.decrypt).toContain("can only sign");
+        expect(result.encrypt).toContain("can only sign");
+        expect(result.handOnAgain).toContain("can only sign");
+        expect(result.again).toContain("No hand-off was begun");
+        expect(result.senderStillFull).toBe(true);
+        expect(result.cacheUnchanged).toBe(true);
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    },
+    180_000
+  );
+
+  it(
     "a different passkey derives a DIFFERENT account (PRF is per-credential)",
     async () => {
       const browser = await playwright!.chromium.launch();
