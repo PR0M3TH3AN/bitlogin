@@ -15,13 +15,20 @@
  * off by the site it is embedded in. The asking site cannot read it.
  */
 import type { KeyValueStore } from "@bitlogin/core/storage";
+import { APP_LIMITS, knownAppName, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { readProfile, type Profile } from "../embedded/profile.js";
+import { cleanRelays } from "../embedded/takeBack.js";
 
 const GRANT_PREFIX = "bitlogin:signer-grant:v1:";
 const GRANT_DEVICE_KEY = "bitlogin:signer-grant-device-key:v1";
 
 export const GRANT_LIMITS = {
-  /** The longest a site is remembered, in seconds: thirty days from Allow. */
+  /** The longest a site BitLogin knows is remembered, in seconds: thirty days from Allow. */
   keepSec: 30 * 24 * 3600,
+  /** The longest for a site it does not know: seven days. */
+  unknownKeepSec: 7 * 24 * 3600,
+  /** How many recent room passes are remembered, to count them across page loads. */
+  passKept: 10,
   /** How many recent signatures are remembered, to count them across page loads. */
   signedKept: 60
 } as const;
@@ -34,9 +41,31 @@ export interface SignerGrant {
   until: number;
   /** The name the sign-in address knew them by when they allowed it, or none. */
   name?: string;
+  /** Their own signed profile, as it was when they allowed the site (§SW16). */
+  profile?: Profile;
   /** When the last signatures for this site were made, in milliseconds: so reloading a page is not a way round the count. */
   signed: number[];
+  /** What an application was approved for (§SW9). Absent for a site that declared nothing: a note and a reaction. */
+  permissions?: AppPermissions;
+  /** For an application: when its last sensitive signatures were made, counted apart (§SW9.6). */
+  signedSensitive?: number[];
+  /** When the last room passes for this site were made, counted apart from notes (§SW16). */
+  signedPass?: number[];
+  /** When it was allowed, in seconds (docs/take-back.md). Absent in a grant kept before this was recorded. */
+  at?: number;
+  /** The user's own write relays, where a signer looks for their take-back record. */
+  relays?: string[];
+  /** When their relays were last asked, and answered, whether this site was taken back. In seconds. */
+  checkedAt?: number;
+  /** The date of the newest take-back record seen: an older one served later is not believed. */
+  seenAt?: number;
 }
+
+/** When a grant was made: what it says, or, for one kept before that was recorded, the start of its life. */
+export const grantedAt = (grant: SignerGrant): number => grant.at ?? grant.until - keepSecFor(grant.site);
+
+/** How long a site may be kept from now, in seconds: by its address, never by anything it says of itself. */
+export const keepSecFor = (site: string): number => (knownAppName(site) !== null ? GRANT_LIMITS.keepSec : GRANT_LIMITS.unknownKeepSec);
 
 interface DeviceKeyStore {
   getOrCreateDeviceKey(key: string): Promise<CryptoKey>;
@@ -76,7 +105,7 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
   const site = grantSite(grant.site);
   if (!site || grant.everydayPrivateKey.length !== 32 || typeof store.getOrCreateDeviceKey !== "function") return false;
   // Never longer than the limit, whatever was asked.
-  const until = Math.min(Math.floor(grant.until), Math.floor(nowSeconds) + GRANT_LIMITS.keepSec);
+  const until = Math.min(Math.floor(grant.until), Math.floor(nowSeconds) + keepSecFor(site));
   if (!(until > nowSeconds)) return false;
   // Outside the try on purpose: with no source of randomness this throws, and nothing is kept. There is no
   // "carry on with something weaker" (crypto/random.ts, and the rule that guards it).
@@ -88,7 +117,18 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       key: toHex(grant.everydayPrivateKey),
       until,
       ...(grant.name ? { name: grant.name.slice(0, 48) } : {}),
-      signed: grant.signed.filter((t) => Number.isFinite(t)).slice(-GRANT_LIMITS.signedKept)
+      ...(readProfile(grant.profile) ? { profile: readProfile(grant.profile) } : {}),
+      // An application's public signatures are counted up to its own hourly limit, so more of them are kept.
+      signed: grant.signed.filter((t) => Number.isFinite(t)).slice(-(grant.permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept)),
+      ...(grant.permissions ? { permissions: grant.permissions } : {}),
+      ...(typeof grant.at === "number" ? { at: Math.floor(grant.at) } : {}),
+      ...(cleanRelays(grant.relays).length ? { relays: cleanRelays(grant.relays) } : {}),
+      ...(typeof grant.checkedAt === "number" ? { checkedAt: Math.floor(grant.checkedAt) } : {}),
+      ...(typeof grant.seenAt === "number" ? { seenAt: Math.floor(grant.seenAt) } : {}),
+      ...(grant.signedPass?.length ? { signedPass: grant.signedPass.filter((t) => Number.isFinite(t)).slice(-GRANT_LIMITS.passKept) } : {}),
+      ...(grant.permissions && grant.signedSensitive
+        ? { signedSensitive: grant.signedSensitive.filter((t) => Number.isFinite(t)).slice(-APP_LIMITS.sensitive.hourly) }
+        : {})
     });
     const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plain));
     const sealed: Sealed = { v: 1, iv: toBase64(iv), ciphertext: toBase64(new Uint8Array(ciphertext)) };
@@ -110,7 +150,17 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; signed?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown };
+    const when = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
+    const profile = readProfile(p.profile);
+    // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
+    // again, and sees what is asked. It is never restored as a narrower or a wider one.
+    const permissions = p.permissions === undefined ? undefined : readPermissions(p.permissions);
+    if (permissions === null || (permissions && !mayHold(site, permissions))) {
+      await store.delete(GRANT_PREFIX + site);
+      return null;
+    }
+    const times = (v: unknown, keep: number): number[] => (Array.isArray(v) ? v.filter((t): t is number => typeof t === "number" && Number.isFinite(t)).slice(-keep) : []);
     // A record is for the site named inside it, whatever name it was filed under.
     if (p.site !== site || typeof p.key !== "string" || !HEX64.test(p.key) || typeof p.until !== "number") return null;
     if (!(p.until > nowSeconds) || p.until > nowSeconds + GRANT_LIMITS.keepSec) {
@@ -122,7 +172,14 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       everydayPrivateKey: Uint8Array.from(p.key.match(/.{2}/gu) ?? [], (pair) => Number.parseInt(pair, 16)),
       until: p.until,
       ...(typeof p.name === "string" && p.name ? { name: p.name.slice(0, 48) } : {}),
-      signed: Array.isArray(p.signed) ? p.signed.filter((t): t is number => typeof t === "number" && Number.isFinite(t)).slice(-GRANT_LIMITS.signedKept) : []
+      ...(profile ? { profile } : {}),
+      signed: times(p.signed, permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept),
+      ...(times(p.signedPass, GRANT_LIMITS.passKept).length ? { signedPass: times(p.signedPass, GRANT_LIMITS.passKept) } : {}),
+      ...(when(p.at) ? { at: when(p.at)! } : {}),
+      ...(cleanRelays(p.relays).length ? { relays: cleanRelays(p.relays) } : {}),
+      ...(when(p.checkedAt) ? { checkedAt: when(p.checkedAt)! } : {}),
+      ...(when(p.seenAt) ? { seenAt: when(p.seenAt)! } : {}),
+      ...(permissions ? { permissions, signedSensitive: times(p.signedSensitive, APP_LIMITS.sensitive.hourly) } : {})
     };
   } catch {
     // Unreadable is "nothing kept", never an error: the user is simply asked again.

@@ -1,0 +1,7 @@
+{
+  "note": "Vercel project for the beta site (not secrets). Deploy with `npm run deploy:beta`.",
+  "orgId": "team_qGxY9CogxTxoSQFaQ31VEDKp",
+  "projectId": "prj_7oSJNJypzPFVh9pxA34rXEweuR5R",
+  "projectName": "bitlogin-beta",
+  "url": "https://bitlogin-beta.vercel.app/"
+}

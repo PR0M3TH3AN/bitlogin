@@ -40,6 +40,10 @@ identity and recovery model.
 - [`portable-entitlements.md`](./portable-entitlements.md) — discovery,
   verification, recovery, and presentation of purchases, licenses,
   memberships, and access rights
+- [`relay-broadcast.md`](./relay-broadcast.md) — BitLogin as the component
+  that chooses relays and sends notes to them, for any application (NIP-65
+  for where a note belongs, its own measurements for which relays work,
+  NIP-66 only as a source of candidates). Design only.
 - [`relay-and-messaging-portability.md`](./relay-and-messaging-portability.md) —
   relay-role management, DM inbox and outbox synchronization, sent-message
   recovery, and conversation reconstruction

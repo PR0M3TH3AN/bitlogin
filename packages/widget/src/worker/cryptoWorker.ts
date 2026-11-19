@@ -22,6 +22,7 @@ import {
   type RecoveredIdentity
 } from "@bitlogin/core/account";
 import {
+  countAcknowledgements,
   RelayPool,
   BUILTIN_VAULT_RELAYS,
   BUILTIN_DISCOVERY_RELAYS,
@@ -33,6 +34,7 @@ import {
   encodeNpub,
   Nip46Client,
   parseBunkerUri,
+  verifyNostrEvent,
   buildNostrconnectUri,
   listenForNostrconnect,
   type NostrEvent
@@ -48,9 +50,30 @@ import {
   type NwcCredential
 } from "@bitlogin/core/vault";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
-import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
-import { openHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type SealedHandoff } from "./handoff.js";
-import { deleteSignerGrant, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSessionState } from "./sessionCache.js";
+import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
+import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
+import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeerFor } from "../embedded/permissions.js";
+import { signClass } from "../embedded/policy.js";
+import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
+import { deleteSignerGrant, grantedAt, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import {
+  checkDue,
+  checkLearned,
+  cleanRelays,
+  isTakenBack,
+  mergeTakenBack,
+  newestTakeBackEvent,
+  NOTHING_TAKEN_BACK,
+  readTakenBack,
+  RELAY_LIST_KIND,
+  TAKE_BACK_D,
+  TAKE_BACK_KIND,
+  takeBack,
+  writeRelaysFrom,
+  writeTakenBack,
+  type TakenBack
+} from "../embedded/takeBack.js";
 import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { SerialQueue } from "./serialQueue.js";
 import type { VaultConnectionSummary } from "./protocol.js";
@@ -75,7 +98,17 @@ import type {
   Nip46ConnectPayload,
   Nip46NostrconnectStartPayload,
   HandoffExportPayload,
+  AppCryptPayload,
+  AppDecryptEventPayload,
+  LoadProfilePayload,
+  LockDevicePayload,
+  LockOpenPayload,
+  LockPinPayload,
+  LockStatusResult,
+  RestoreSessionResult,
+  RoomPassPayload,
   SignerKeepPayload,
+  TakeBackPayload,
   SignerSitePayload,
   SignerTouchPayload
 } from "./protocol.js";
@@ -103,6 +136,24 @@ interface SessionState {
    *  the everyday key and nothing else, held in memory, never cached. Such a
    *  session can sign and can say who it is. It can do nothing else. */
   signerOnly: boolean;
+  /** For a signer-only session: what an application was approved for (§SW9), from inside the sealed hand-off or
+   *  the grant kept from one. Null for a site that declared nothing. Everything such a session is asked is held
+   *  to this here, in the worker, whatever the page that asks says. */
+  app: HandoffApp | null;
+  /** For a signer-only session: the site it serves, from inside the sealed hand-off or the grant kept from one.
+   *  Null where an older hand-off named none: then no room pass is made (§SW16). */
+  site: string | null;
+  /** The person's own signed profile (kind 0), fetched and checked here. In a full session it is what
+   *  `loadProfile` found; in a signer-only one it is what the hand-off or the grant carried. */
+  profile: Profile | null;
+  /** For a signer-only session: whether it may be kept for its site across page loads (§SW11). True for one
+   *  taken up from a kept grant. False for a site allowed for one visit: nothing of it is ever written down. */
+  remember: boolean;
+  /** For a signer-only session: when its site was allowed, in seconds (docs/take-back.md). Null where unknown. */
+  grantAt: number | null;
+  /** The user's own write relays (NIP-65). In a full session, what `loadProfile` found; in a signer-only one,
+   *  what the hand-off or the grant carried. Where a signer looks for their take-back record. */
+  relays: string[];
 }
 
 const session: SessionState = {
@@ -117,7 +168,13 @@ const session: SessionState = {
   connectionVaultRoot: null,
   vaultKnown: false,
   vault: null,
-  signerOnly: false
+  signerOnly: false,
+  app: null,
+  site: null,
+  profile: null,
+  remember: false,
+  grantAt: null,
+  relays: []
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
@@ -139,11 +196,67 @@ function applyRelaySets(sets: RelaySets): void {
 }
 const requestQueue = new SerialQueue();
 
+// ---- The optional lock (lock.ts, spec §21.5) ----
+
+/** The lock key, while the user has unlocked. Null when the lock is off, and when it is on and locked. */
+let lockKey: Uint8Array | null = null;
+/** When this worker was last asked to do something, in milliseconds: an unlocked session unused for long enough locks itself. */
+let lastUsed = Date.now();
+/** Asking these is not using the session, and none of them is refused for being idle. */
+const NOT_USE = new Set(["configure", "lockStatus", "lockOpen", "restoreSession", "getSessionStatus", "logout"]);
+
+// ---- Taking a site back (docs/take-back.md) ----
+
+/** This browser's own copy of the last take-back record it wrote, by account. Not a secret: a list of addresses. */
+const LOCAL_TAKEN_BACK = "bitlogin:taken-back:v1:";
+
+async function loadLocalTakenBack(pubkey: string): Promise<TakenBack> {
+  try {
+    const raw = await store.get(LOCAL_TAKEN_BACK + pubkey);
+    return (raw ? readTakenBack(JSON.parse(raw)) : null) ?? NOTHING_TAKEN_BACK;
+  } catch {
+    return NOTHING_TAKEN_BACK;
+  }
+}
+
+/** A take-back record's content, opened with the key that sealed it to itself. Null for anything else. */
+function openTakenBack(signer: NostrSigner, content: string): TakenBack | null {
+  try {
+    return readTakenBack(JSON.parse(signer.nip44Decrypt(signer.getPublicKey(), content)));
+  } catch {
+    return null;
+  }
+}
+
+/** Lock: the keys go from memory. What is cached stays, sealed, for the next unlock. */
+function lockNow(): void {
+  clearSession();
+  if (lockKey) wipe(lockKey);
+  lockKey = null;
+}
+
+async function lockStatus(): Promise<LockStatusResult> {
+  const record = await readLock(store);
+  if (!record) return { on: false, locked: false, device: false, triesLeft: 0 };
+  return {
+    on: true,
+    locked: !lockKey && (await cachedSessionState(store)) === "locked",
+    device: !!record.device,
+    ...(record.device ? { credentialId: record.device.credentialId } : {}),
+    triesLeft: Math.max(0, LOCK_LIMITS.tries - record.tries)
+  };
+}
+
 function requireUnlocked(): { signer: NostrSigner; everydayPrivateKey: Uint8Array } {
   if (!session.signer || !session.everydayPrivateKey) {
     throw new Error("No identity is unlocked in this session.");
   }
   return { signer: session.signer, everydayPrivateKey: session.everydayPrivateKey };
+}
+
+function requireApp(): HandoffApp {
+  if (!session.signerOnly || !session.app) throw new Error("refused");
+  return session.app;
 }
 
 function clearSession(): void {
@@ -162,6 +275,12 @@ function clearSession(): void {
   session.connectionVaultRoot = null;
   session.vaultKnown = false;
   session.signerOnly = false;
+  session.app = null;
+  session.site = null;
+  session.profile = null;
+  session.remember = false;
+  session.grantAt = null;
+  session.relays = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
@@ -220,6 +339,10 @@ async function persistSession(): Promise<void> {
   ) {
     return;
   }
+  // A sign-in made while the lock was on and locked is the way past a forgotten PIN: it turns the lock off.
+  // Nothing is lost by that, and nothing is gained by anyone who could not sign in.
+  const lock = await readLock(store);
+  if (lock && !lockKey) await removeLock(store);
   await saveCachedSession(store, {
     everydayPrivateKey: session.everydayPrivateKey,
     accountId: session.accountId,
@@ -229,8 +352,37 @@ async function persistSession(): Promise<void> {
     ...(session.connectionVaultRoot ? { connectionVaultRoot: session.connectionVaultRoot } : {}),
     ...(session.vaultKnown ? { vaultEnabled: session.connectionVaultRoot !== null } : {}),
     everydayKeyDerived: session.everydayKeyDerived
-  });
+  }, lock && lockKey ? lockKey : null);
   await persistPublicSession();
+}
+
+/** Take up the cached session, with the lock key where the lock is on. */
+async function restoreFromCache(): Promise<RestoreSessionResult> {
+  const cached = await loadCachedSession(store, lockKey);
+  if (!cached) return { restored: false };
+  clearSession();
+  session.signer = new NostrSigner(cached.everydayPrivateKey);
+  session.everydayPrivateKey = cached.everydayPrivateKey;
+  session.accountId = cached.accountId;
+  session.recoveryPublicKey = cached.recoveryPublicKey;
+  session.activeCredentialEvent = cached.activeCredentialEvent;
+  session.activeRecoveryEvent = cached.activeRecoveryEvent;
+  session.everydayKeyDerived = cached.everydayKeyDerived ?? false;
+  session.connectionVaultRoot = cached.connectionVaultRoot ?? null;
+  // vaultKnown only when the cache recorded a definitive answer; an old
+  // cache entry leaves it false so requireVault says "sign in again"
+  // rather than falsely claiming the account has no vault.
+  session.vaultKnown = cached.vaultEnabled !== undefined;
+  // Self-heal: a session cached before the public-record feature has an
+  // encrypted entry but no cleartext one. Writing it here means the very
+  // next lightweight read sees the identity, no re-login required.
+  await persistPublicSession();
+  return {
+    restored: true,
+    everydayPublicKey: session.signer.getPublicKey(),
+    accountId: cached.accountId,
+    everydayKeyDerived: session.everydayKeyDerived
+  };
 }
 
 // Writes the cleartext public-only identity (publicSession.ts) beside the
@@ -377,7 +529,96 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
   if (session.signerOnly && !SIGNER_ONLY_ACTIONS.has(action)) {
     throw new Error("This session can only sign. Sign in at your own BitLogin page for anything else.");
   }
+  // With the lock on, a session nobody has used for a while locks itself before anything more is done with it.
+  if (lockKey && action !== "configure" && Date.now() - lastUsed > LOCK_LIMITS.idleSec * 1000) lockNow();
+  if (!NOT_USE.has(action)) lastUsed = Date.now();
   switch (action) {
+    // ---- The optional lock (lock.ts) ----
+
+    case "lockStatus":
+      return lockStatus();
+
+    // Turn it on, or change the PIN. Only with a full session unlocked: the key that is sealed is the one in hand.
+    case "lockEnable": {
+      requireUnlocked();
+      if ((await readLock(store)) && !lockKey) throw new Error("Unlock first.");
+      const fresh = await setLockPin(store, (payload as LockPinPayload).pin, lockKey ?? undefined);
+      if (lockKey) wipe(lockKey);
+      lockKey = fresh;
+      await persistSession();
+      return lockStatus();
+    }
+
+    case "lockSetDevice": {
+      requireUnlocked();
+      if (!lockKey) throw new Error("Turn the lock on first.");
+      const p = payload as LockDevicePayload;
+      const prf = base64urlToBytes(String(p.prfOutput));
+      try {
+        await setLockDevice(store, lockKey, String(p.credentialId), prf);
+      } finally {
+        wipe(prf);
+      }
+      return lockStatus();
+    }
+
+    case "lockRemoveDevice": {
+      requireUnlocked();
+      if (!lockKey) throw new Error("Turn the lock on first.");
+      await removeLockDevice(store);
+      return lockStatus();
+    }
+
+    case "lockDisable": {
+      requireUnlocked();
+      if ((await readLock(store)) && !lockKey) throw new Error("Unlock first.");
+      await removeLock(store);
+      if (lockKey) wipe(lockKey);
+      lockKey = null;
+      await persistSession();
+      return lockStatus();
+    }
+
+    case "lockNow": {
+      if (!lockKey) throw new Error("The lock is not on.");
+      lockNow();
+      return lockStatus();
+    }
+
+    // Open it, with the PIN or with the device. A wrong try is counted; one too many removes the lock and the
+    // cached session with it, and the user signs in again the ordinary way.
+    case "lockOpen": {
+      const p = payload as LockOpenPayload;
+      let result: OpenResult;
+      if (typeof p.prfOutput === "string") {
+        const prf = base64urlToBytes(p.prfOutput);
+        try {
+          result = await openLockWithDevice(store, prf);
+        } finally {
+          wipe(prf);
+        }
+      } else {
+        result = await openLockWithPin(store, p.pin);
+      }
+      if (result.ok) {
+        if (lockKey) wipe(lockKey);
+        lockKey = result.lockKey;
+        lastUsed = Date.now();
+        const restored = await restoreFromCache();
+        if (restored.restored) return { ok: true, left: LOCK_LIMITS.tries, removed: false, ...restored };
+        // The lock opened and there was nothing behind it that could be read: there is no lock to keep.
+        await removeLock(store);
+        lockNow();
+        result = { ok: false, left: 0, removed: true };
+      }
+      if (result.removed) {
+        lockNow();
+        await clearCachedSession(store);
+        await clearPublicSession(store);
+      }
+      return { ok: false, left: result.left, removed: result.removed, restored: false };
+    }
+
     // ---- Signer hand-off (docs/sign-in-window.md) ----
 
     // The receiving side, first: a throwaway key for the hand-off to be sealed to.
@@ -392,8 +633,21 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "handoffExport": {
       const { everydayPrivateKey } = requireUnlocked();
       const sender = generatePrivateKey();
+      const p = payload as HandoffExportPayload;
       try {
-        return sealHandoff(everydayPrivateKey, (payload as HandoffExportPayload).recipientPublicKey, sender);
+        // The profile is this worker's own finding (loadProfile), never a page's word.
+        return sealHandoff(everydayPrivateKey, p.recipientPublicKey, sender, p.app, {
+          ...(p.site !== undefined ? { site: p.site } : {}),
+          ...(session.profile ? { profile: session.profile } : {}),
+          ...(p.remember === true ? { remember: true } : {}),
+          // With the lock on, nothing is kept for any site: a key at rest in a site's storage would be a key
+          // the lock does not cover. Every site is allowed for the visit, and asks at the sign-in address again.
+          ...(lockKey ? { visitOnly: true } : {}),
+          // When it was allowed, by this worker's clock, and where the user writes: what a signer needs to
+          // find out later whether the site was taken back (docs/take-back.md).
+          at: Date.now() / 1000,
+          relays: session.relays
+        });
       } finally {
         wipe(sender);
       }
@@ -411,7 +665,27 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!session.signerOnly) throw new Error("Only a signer-only session can be remembered for a site.");
       const p = payload as SignerKeepPayload;
       const now = Date.now() / 1000;
-      return { kept: await saveSignerGrant(store, { site: p.site, everydayPrivateKey, until: p.until, ...(p.name ? { name: p.name } : {}), signed: [] }, now) };
+      // Allowed for this visit only: nothing is kept, whatever the page asks.
+      if (!session.remember) return { kept: false };
+      // An application's grant is for the site its hand-off was sealed for, and no other.
+      if ((session.app && session.app.site !== p.site) || (session.site && session.site !== p.site)) throw new Error("This hand-off was for another site.");
+      return {
+        kept: await saveSignerGrant(
+          store,
+          {
+            site: p.site,
+            everydayPrivateKey,
+            until: p.until,
+            ...(p.name ? { name: p.name } : {}),
+            ...(session.profile ? { profile: session.profile } : {}),
+            at: session.grantAt ?? Math.floor(now),
+            ...(session.relays.length ? { relays: session.relays } : {}),
+            signed: [],
+            ...(session.app ? { permissions: session.app.permissions, signedSensitive: [] } : {})
+          },
+          now
+        )
+      };
     }
 
     // The site's page was loaded again: what was kept for that site, if it is still in date, becomes a
@@ -424,7 +698,23 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.signer = new NostrSigner(grant.everydayPrivateKey);
       session.everydayPrivateKey = grant.everydayPrivateKey;
       session.signerOnly = true;
-      return { restored: true, everydayPublicKey: session.signer.getPublicKey(), until: grant.until, ...(grant.name ? { name: grant.name } : {}), signed: grant.signed };
+      session.app = grant.permissions ? { site: grant.site, permissions: grant.permissions } : null;
+      session.site = grant.site;
+      session.profile = grant.profile ?? null;
+      session.remember = true;
+      session.grantAt = grantedAt(grant);
+      session.relays = grant.relays ?? [];
+      return {
+        restored: true,
+        everydayPublicKey: session.signer.getPublicKey(),
+        until: grant.until,
+        ...(grant.name ? { name: grant.name } : {}),
+        ...(grant.profile ? { profile: grant.profile } : {}),
+        signed: grant.signed,
+        ...(grant.signedPass ? { signedPass: grant.signedPass } : {}),
+        check: checkDue(Date.now() / 1000, grantedAt(grant), grant.checkedAt ?? 0),
+        ...(grant.permissions ? { permissions: grant.permissions, signedSensitive: grant.signedSensitive ?? [] } : {})
+      };
     }
 
     // Count a signature against the site, where reloading the page can't lose the count.
@@ -436,7 +726,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const kept = await loadSignerGrant(store, p.site, now);
       // Only a grant that is there, and is this session's, is rewritten.
       if (kept && getPublicKeyHex(kept.everydayPrivateKey) === getPublicKeyHex(everydayPrivateKey)) {
-        await saveSignerGrant(store, { ...kept, signed: Array.isArray(p.signed) ? p.signed : [] }, now);
+        await saveSignerGrant(
+          store,
+          { ...kept, signed: Array.isArray(p.signed) ? p.signed : [], ...(Array.isArray(p.signedPass) ? { signedPass: p.signedPass } : {}), ...(kept.permissions ? { signedSensitive: Array.isArray(p.signedSensitive) ? p.signedSensitive : [] } : {}) },
+          now
+        );
       }
       return {};
     }
@@ -450,17 +744,224 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!pendingHandoff) throw new Error("No hand-off was begun here.");
       const mine = pendingHandoff;
       pendingHandoff = null;
-      let key: Uint8Array;
+      let opened: ReturnType<typeof openAppHandoff>;
       try {
-        key = openHandoff(payload as SealedHandoff, mine);
+        opened = openAppHandoff(payload as SealedHandoff, mine);
       } finally {
         wipe(mine);
       }
       clearSession();
-      session.signer = new NostrSigner(key);
-      session.everydayPrivateKey = key;
+      session.signer = new NostrSigner(opened.key);
+      session.everydayPrivateKey = opened.key;
       session.signerOnly = true;
-      return { everydayPublicKey: session.signer.getPublicKey() };
+      session.app = opened.app;
+      session.site = opened.site;
+      session.profile = opened.profile;
+      session.remember = opened.remember;
+      session.grantAt = opened.at;
+      session.relays = opened.relays;
+      return {
+        everydayPublicKey: session.signer.getPublicKey(),
+        ...(opened.app ? { app: opened.app } : {}),
+        ...(opened.site ? { site: opened.site } : {}),
+        ...(opened.profile ? { profile: opened.profile } : {}),
+        ...(opened.remember ? { remember: true } : {})
+      };
+    }
+
+    // ---- Who someone is, to a world they allowed (§SW16).
+
+    // A full session, at the sign-in address: the person's own profile, asked of relays and believed only as
+    // far as its signature goes. It is sealed into the next hand-off. A session that arrived by a hand-off
+    // never asks a relay anything: this action is not on its list.
+    case "loadProfile": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      const wantProfile = (payload as LoadProfilePayload).profile !== false;
+      const relayUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
+      if (relayUrls.length === 0) return {};
+      const pool = new RelayPool(relayUrls);
+      try {
+        // Their profile (only for a site that is to be told who they are), and their relay list (NIP-65), which
+        // every hand-off carries: it is where a signer later looks for their take-back record.
+        const [profiles, lists] = await Promise.all([
+          wantProfile ? pool.queryQuorum({ kinds: [0], authors: [me], limit: 2 }, 4000) : Promise.resolve(null),
+          pool.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)
+        ]);
+        // Still the same session: a sign-out while relays were answering must not leave any of it behind.
+        if (session.signer !== signer) return {};
+        session.profile = profiles ? newestProfile(profiles.outcomes.flatMap((outcome) => outcome.events), me) : null;
+        session.relays = writeRelaysFrom(lists.outcomes.flatMap((outcome) => outcome.events), me);
+      } finally {
+        pool.closeAll();
+      }
+      return { ...(session.profile ? { profile: session.profile } : {}), relays: session.relays };
+    }
+
+    // ---- Taking a site back (docs/take-back.md) ----
+
+    // At the sign-in address, with a full session: publish the record that says a site, or every site, is taken
+    // back as of now. It carries everything an earlier record said, from the relays and from this browser's own
+    // copy, so a record built here can never give a site back.
+    case "takeBack": {
+      const { signer } = requireUnlocked();
+      const p = payload as TakeBackPayload;
+      const me = signer.getPublicKey();
+      const now = Date.now() / 1000;
+      const what = p.all === true ? ({ all: true } as const) : { site: String(p.site ?? "") };
+      const finder = new RelayPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
+      let mine: string[];
+      try {
+        mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+      } finally {
+        finder.closeAll();
+      }
+      // Their own write relays, and BitLogin's, which every signer knows without being told.
+      const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
+      const pool = new RelayPool(relayUrls);
+      try {
+        const found = await pool.queryQuorum({ kinds: [TAKE_BACK_KIND], authors: [me], "#d": [TAKE_BACK_D], limit: 2 }, 5000);
+        // With no relay answering, an earlier record made on another device could not be carried forward.
+        if (found.respondedCount === 0) return { ok: false, accepted: 0, of: relayUrls.length };
+        const newest = newestTakeBackEvent(found.outcomes.flatMap((o) => o.events), me, now);
+        const onRelays = newest ? openTakenBack(signer, newest.content) : null;
+        const local = await loadLocalTakenBack(me);
+        const next = takeBack(mergeTakenBack(onRelays ?? NOTHING_TAKEN_BACK, local, now), what, now);
+        const event = signer.signEvent({
+          kind: TAKE_BACK_KIND,
+          // Later than the one it replaces, whatever the two clocks say.
+          created_at: Math.max(Math.floor(now), (newest?.created_at ?? 0) + 1),
+          tags: [["d", TAKE_BACK_D]],
+          content: signer.nip44Encrypt(me, writeTakenBack(next))
+        });
+        const accepted = countAcknowledgements(await pool.publishAll(event, 6000));
+        const ok = accepted >= Math.min(2, relayUrls.length);
+        // Kept here only once it is out: this browser's copy is what the next record is built on.
+        if (ok) await store.set(LOCAL_TAKEN_BACK + me, writeTakenBack(next)).catch(() => {});
+        return { ok, accepted, of: relayUrls.length };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    // In the embedded signer, for a kept grant: ask the user's relays whether this site was taken back. Asked at
+    // most once a day. It can end the grant or leave it be, and nothing else.
+    case "signerCheck": {
+      const { signer } = requireUnlocked();
+      if (!session.signerOnly || !session.site) return { state: "ok" };
+      const site = session.site;
+      const now = Date.now() / 1000;
+      const grant = await loadSignerGrant(store, site, now);
+      // Allowed for one visit: held in memory, ends with the page, and is not checked.
+      if (!grant) return { state: "ok" };
+      const me = signer.getPublicKey();
+      const at = grantedAt(grant);
+      const due = checkDue(now, at, grant.checkedAt ?? 0);
+      if (due === "fresh") return { state: "ok" };
+      const relayUrls = [...new Set([...cleanRelays(grant.relays), ...vaultRelayUrls])].slice(0, 12);
+      const pool = new RelayPool(relayUrls);
+      let records: Awaited<ReturnType<RelayPool["queryQuorum"]>>;
+      let lists: Awaited<ReturnType<RelayPool["queryQuorum"]>>;
+      try {
+        [records, lists] = await Promise.all([
+          pool.queryQuorum({ kinds: [TAKE_BACK_KIND], authors: [me], "#d": [TAKE_BACK_D], limit: 2 }, 5000),
+          pool.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 5000)
+        ]);
+      } finally {
+        pool.closeAll();
+      }
+      // The page was closed, or the site signed out of, while relays were answering.
+      if (session.signer !== signer) return { state: "ok" };
+      // The newest valid record across every relay that answered: never the first to arrive.
+      const newest = newestTakeBackEvent(records.outcomes.flatMap((o) => o.events), me, now);
+      const record = newest ? openTakenBack(signer, newest.content) : null;
+      // Whatever else is true of this round, a record that ends the grant ends it.
+      if (record && isTakenBack(record, site, at)) {
+        await deleteSignerGrant(store, site);
+        clearSession();
+        return { state: "ended" };
+      }
+      // Otherwise the round counts as a check only if it could have found one (takeBack.ts, checkLearned).
+      const learned = checkLearned({
+        asked: relayUrls.length,
+        answered: records.respondedCount,
+        seenAt: grant.seenAt ?? 0,
+        newestAt: newest ? newest.created_at : null,
+        readable: record !== null
+      });
+      // Nothing was learned. A grant too long unchecked is locked until something is.
+      if (!learned) return { state: due === "overdue" ? "stale" : "ok" };
+      // They may have changed where they write since: the next check follows their list as it is now.
+      const theirs = writeRelaysFrom(lists.outcomes.flatMap((o) => o.events), me);
+      await saveSignerGrant(
+        store,
+        {
+          ...grant,
+          checkedAt: Math.floor(now),
+          seenAt: Math.max(grant.seenAt ?? 0, record && newest ? newest.created_at : 0),
+          ...(theirs.length ? { relays: theirs } : {})
+        },
+        now
+      );
+      if (theirs.length) session.relays = theirs;
+      return { state: "ok" };
+    }
+
+    // A room pass (NSWP kind 27300) for the site this session serves, and for no other. The site, the time, how
+    // long it lasts and the profile are all this worker's own: what is asked for is a session public key. Not
+    // for an application: an application is held to the set the user read, and a pass is not in one.
+    case "roomPass": {
+      const { signer } = requireUnlocked();
+      if (!session.signerOnly || session.app || !session.site) throw new Error("refused");
+      const pass = buildRoomPass({
+        session: (payload as RoomPassPayload).session,
+        site: session.site,
+        identity: signer.getPublicKey(),
+        nowSeconds: Date.now() / 1000,
+        profile: session.profile
+      });
+      if (!pass) throw new Error("refused");
+      return signer.signEvent(pass);
+    }
+
+    // ---- What an approved application may ask beyond signing (§SW9.5). Refused without a permission set.
+
+    case "appEncrypt": {
+      const { signer } = requireUnlocked();
+      const app = requireApp();
+      const p = payload as AppCryptPayload;
+      const me = signer.getPublicKey();
+      // To the user's own key, to a key they were shown, or (where they approved sending messages) to whoever
+      // a message is for.
+      const sendsMessages = app.permissions.sign.some((kind) => MESSAGE_KINDS.includes(kind));
+      if (!mayEncryptTo(app.permissions, me, p.peerPublicKey) && !(sendsMessages && /^[0-9a-f]{64}$/u.test(String(p.peerPublicKey)))) {
+        throw new Error("refused");
+      }
+      if (typeof p.text !== "string" || p.text.length > 100_000) throw new Error("refused");
+      return { text: p.scheme === "nip04" ? signer.nip04Encrypt(p.peerPublicKey, p.text) : signer.nip44Encrypt(p.peerPublicKey, p.text) };
+    }
+
+    case "appDecrypt": {
+      const { signer } = requireUnlocked();
+      const app = requireApp();
+      const p = payload as AppCryptPayload;
+      // Only against a key the user was shown. Never the user's own: that would read everything they ever
+      // encrypted to themselves, whatever kind it was kept in.
+      if (!mayDecryptFrom(app.permissions, p.peerPublicKey) || typeof p.text !== "string") throw new Error("refused");
+      return { text: p.scheme === "nip04" ? signer.nip04Decrypt(p.peerPublicKey, p.text) : signer.nip44Decrypt(p.peerPublicKey, p.text) };
+    }
+
+    case "appDecryptEvent": {
+      const { signer } = requireUnlocked();
+      const app = requireApp();
+      const event: unknown = (payload as AppDecryptEventPayload).event;
+      // Reading is tied to an event that really is what it says: signed, of a kind the user approved reading.
+      if (!verifyNostrEvent(event)) throw new Error("refused");
+      const peer = readPeerFor(app.permissions, signer.getPublicKey(), event);
+      if (!peer) throw new Error("refused");
+      // Kind 4 is the older scheme, and says so in its content.
+      const text = event.kind === 4 || /\?iv=[A-Za-z0-9+/=]+$/u.test(event.content) ? signer.nip04Decrypt(peer, event.content) : signer.nip44Decrypt(peer, event.content);
+      return { text };
     }
 
     case "nip46Connect": {
@@ -781,6 +1282,19 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "signEvent": {
       const { signer } = requireUnlocked();
       const p = payload as SignEventPayload;
+      if (session.signerOnly) {
+        // The floor under the embedded signer's page (§SW5, §SW9.8): a session that arrived by a hand-off
+        // signs only what its site may have signed, decided again here whatever that page prepared. For an
+        // application that is its permission set, applied in full. For a site that declared nothing it is the
+        // kind alone, a note or a reaction: this worker is never told which site a plain hand-off was for, so
+        // the rest of that site's rules stay with the page.
+        if (session.app) {
+          const allowed = prepareForApp(session.app.permissions, p, session.app.site, Date.now() / 1000);
+          if (!allowed) throw new Error("refused");
+          return signer.signEvent(allowed);
+        }
+        if (signClass(p.kind) !== "ordinary") throw new Error("refused");
+      }
       return signer.signEvent({ kind: p.kind, tags: p.tags, content: p.content, created_at: p.created_at });
     }
 
@@ -859,35 +1373,14 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     // corrupt cache is not an error: it just means the widget falls through to its
     // normal welcome screen, exactly like it always has.
     case "restoreSession": {
-      const cached = await loadCachedSession(store);
-      if (!cached) return { restored: false };
-      clearSession();
-      session.signer = new NostrSigner(cached.everydayPrivateKey);
-      session.everydayPrivateKey = cached.everydayPrivateKey;
-      session.accountId = cached.accountId;
-      session.recoveryPublicKey = cached.recoveryPublicKey;
-      session.activeCredentialEvent = cached.activeCredentialEvent;
-      session.activeRecoveryEvent = cached.activeRecoveryEvent;
-      session.everydayKeyDerived = cached.everydayKeyDerived ?? false;
-      session.connectionVaultRoot = cached.connectionVaultRoot ?? null;
-      // vaultKnown only when the cache recorded a definitive answer; an old
-      // cache entry leaves it false so requireVault says "sign in again"
-      // rather than falsely claiming the account has no vault.
-      session.vaultKnown = cached.vaultEnabled !== undefined;
-      // Self-heal: a session cached before the public-record feature has an
-      // encrypted entry but no cleartext one. Writing it here means the very
-      // next lightweight read sees the identity, no re-login required.
-      await persistPublicSession();
-      return {
-        restored: true,
-        everydayPublicKey: session.signer.getPublicKey(),
-        accountId: cached.accountId,
-        everydayKeyDerived: session.everydayKeyDerived
-      };
+      // Sealed under the lock, and not unlocked: not "no session". The caller asks for the PIN or the device.
+      if (!lockKey && (await cachedSessionState(store)) === "locked") return { restored: false, locked: true };
+      return restoreFromCache();
     }
 
     case "logout": {
-      clearSession();
+      lockNow();
+      await removeLock(store);
       await clearCachedSession(store);
       await clearPublicSession(store);
       return {};
@@ -1057,6 +1550,9 @@ const KNOWN_ACTIONS = new Set<string>([
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
+  "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass",
+  "takeBack", "signerCheck",
+  "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

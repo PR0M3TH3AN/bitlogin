@@ -28,7 +28,10 @@ export default defineConfig({
         // signer, which is the whole of a page with no interface, and what the
         // window's page uses to find it and hand over.
         "bitlogin-signer": resolve(__dirname, "src/embedded/signer.ts"),
-        "bitlogin-window": resolve(__dirname, "src/embedded/window.ts")
+        "bitlogin-window": resolve(__dirname, "src/embedded/window.ts"),
+        // For an application that signs in through the window (§SW8, §SW9): it
+        // embeds the signer, says what it wants, and asks. It holds no key.
+        "bitlogin-client": resolve(__dirname, "src/embedded/client.ts")
       },
       formats: ["es"],
       fileName: (_format, entryName) => `${entryName}.js`

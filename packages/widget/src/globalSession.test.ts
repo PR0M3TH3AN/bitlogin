@@ -58,8 +58,8 @@ describe("element wiring", () => {
       widgetSource.indexOf("private noteSignerClaim"),
     );
     expect(dispatchBody).toContain("setActiveSession(this");
-    // Both logout branches and DOM removal clear it.
+    // Both logout branches, DOM removal, and locking (the optional lock, §SW12) clear it.
     const clearCount = widgetSource.split("clearActiveSession(this)").length - 1;
-    expect(clearCount).toBe(3);
+    expect(clearCount).toBe(4);
   });
 });

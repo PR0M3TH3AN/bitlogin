@@ -11,6 +11,7 @@
  * later version.
  */
 import type { NostrEvent } from "@bitlogin/core/nostr";
+import { readPermissions, type AppPermissions } from "./permissions.js";
 
 export const SIGNER_PROTOCOL = "nswp-signer";
 export const HANDOFF_PROTOCOL = "nswp-handoff";
@@ -22,13 +23,21 @@ export const SIGN_LIMITS = {
   tags: 60,
   tagItems: 8,
   tagChars: 400,
-  /** How long a site stays allowed, in seconds: thirty days from Allow, unless the user signs out of it sooner. */
+  /** How long a remembered site BitLogin knows stays allowed, in seconds: thirty days from Allow, unless the user signs out of it sooner. */
   grantSec: 30 * 24 * 3600,
-  /** No more than this many signatures for one site in `perMs`. */
-  burst: 6,
+  /** The same for a site BitLogin does not know: seven days (§SW11). */
+  unknownGrantSec: 7 * 24 * 3600,
+  /** How long a site that is not remembered stays allowed while its page stays open, in seconds (§SW11). */
+  visitSec: 12 * 3600,
+  /** No more than this many signatures for one site in `perMs`. The same numbers as NSWP's own (kit 0.28.0). */
+  burst: 3,
   perMs: 60_000,
   /** And no more than this many in an hour. */
-  hourly: 60
+  hourly: 20,
+  /** Room passes are counted apart from notes (§SW16), so signing in does not use up a post: this many in `perMs`. */
+  passBurst: 2,
+  /** And this many in an hour. */
+  passHourly: 10
 } as const;
 
 /** "ordinary": allowed once the user has unlocked the signer for that site. "careful": only with their say each
@@ -142,12 +151,21 @@ export function createSignGate(limits: { burst: number; perMs: number; hourly: n
 export type SignerRequest =
   | { t: "state"; id: string }
   | { t: "lock"; id: string }
-  | { t: "sign"; id: string; event: unknown };
+  | { t: "sign"; id: string; event: unknown }
+  /** A room pass for this site, naming the given session key (§SW16). Everything else in it is the signer's. */
+  | { t: "pass"; id: string; session: string }
+  // From an application (§SW9). A world sends none of these.
+  /** What the application would like to be approved for. Shown in the window the next time it is opened. */
+  | { t: "want"; id: string; permissions: AppPermissions }
+  | { t: "encrypt"; id: string; peer: string; text: string; scheme: "nip44" | "nip04" }
+  | { t: "decrypt"; id: string; peer: string; text: string; scheme: "nip44" | "nip04" }
+  | { t: "read"; id: string; event: unknown };
 
 export type SignerReply =
   | { t: "ready" }
-  | { t: "state"; id?: string; unlocked: boolean; pubkey?: string; name?: string; until?: number }
+  | { t: "state"; id?: string; unlocked: boolean; pubkey?: string; name?: string; picture?: string; about?: string; until?: number; remembered?: boolean; permissions?: AppPermissions }
   | { t: "signed"; id: string; event: NostrEvent }
+  | { t: "text"; id: string; text: string }
   | { t: "refused"; id: string };
 
 const ID = /^[0-9a-z-]{1,40}$/iu;
@@ -163,6 +181,15 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.t === "state") return { t: "state", id: d.id };
   if (d.t === "lock") return { t: "lock", id: d.id };
   if (d.t === "sign" && d.event && typeof d.event === "object") return { t: "sign", id: d.id, event: d.event };
+  if (d.t === "pass" && typeof d.session === "string" && HEX64.test(d.session)) return { t: "pass", id: d.id, session: d.session };
+  if (d.t === "want") {
+    const permissions = readPermissions(d.permissions);
+    return permissions ? { t: "want", id: d.id, permissions } : null;
+  }
+  if ((d.t === "encrypt" || d.t === "decrypt") && typeof d.peer === "string" && HEX64.test(d.peer) && typeof d.text === "string" && d.text.length <= 200_000) {
+    return { t: d.t, id: d.id, peer: d.peer, text: d.text, scheme: d.scheme === "nip04" ? "nip04" : "nip44" };
+  }
+  if (d.t === "read" && d.event && typeof d.event === "object") return { t: "read", id: d.id, event: d.event };
   return null;
 }
 
@@ -172,8 +199,9 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
 export type HandoffMessage =
   /** Window to every frame of the page that opened it: "is one of you mine?" */
   | { t: "hello"; nonce: string }
-  /** Signer to window: which site embeds it (as the browser says), and a throwaway key to seal the hand-off to. */
-  | { t: "frame"; nonce: string; world: string; recipient: string }
+  /** Signer to window: which site embeds it (as the browser says), a throwaway key to seal the hand-off to, and
+   *  what that site said it wants, if it is an application (§SW9). */
+  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions }
   /** Window to signer, after the user pressed Allow: the sealed hand-off, for that site. */
   | { t: "grant"; nonce: string; world: string; sealed: { senderPublicKey: string; payload: string }; name?: string }
   /** Signer to window: it is unlocked, or it could not be. */
@@ -187,10 +215,15 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
   if (d.nswp !== HANDOFF_PROTOCOL || d.v !== PROTOCOL_VERSION || typeof d.nonce !== "string" || !ID.test(d.nonce)) return null;
   const hex = (v: unknown): v is string => typeof v === "string" && HEX64.test(v);
   if (d.t === "hello") return { t: "hello", nonce: d.nonce };
-  if (d.t === "frame" && cleanOrigin(d.world) && hex(d.recipient)) return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient };
+  if (d.t === "frame" && cleanOrigin(d.world) && hex(d.recipient)) {
+    // A set that does not read as one is no frame at all: the window must not show part of what was asked.
+    const wants = d.wants === undefined ? undefined : readPermissions(d.wants);
+    if (wants === null) return null;
+    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}) };
+  }
   if (d.t === "grant" && cleanOrigin(d.world) && d.sealed && typeof d.sealed === "object") {
     const s = d.sealed as Record<string, unknown>;
-    if (!hex(s.senderPublicKey) || typeof s.payload !== "string" || s.payload.length > 4000) return null;
+    if (!hex(s.senderPublicKey) || typeof s.payload !== "string" || s.payload.length > 12_000) return null;
     const name = cleanName(d.name);
     return { t: "grant", nonce: d.nonce, world: cleanOrigin(d.world), sealed: { senderPublicKey: s.senderPublicKey, payload: s.payload }, ...(name ? { name } : {}) };
   }

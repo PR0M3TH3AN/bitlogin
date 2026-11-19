@@ -13,3 +13,30 @@
 .connect-small { font-size: .9rem; color: var(--muted); }
 .connect .cta-row { margin-top: 1.1rem; }
 #widget-slot { margin: 1rem 0 .4rem; }
+
+/* What an application asks that deserves a second look (docs/sign-in-window.md §SW9.7). */
+.connect-warning {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid #b45309;
+  border-radius: 10px;
+  background: rgba(180, 83, 9, 0.12);
+}
+.connect-warning p { margin: 0 0 6px; }
+.connect-warning ul { margin: 0; }
+.connect-known {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(22, 163, 74, 0.14);
+}
+
+.connect-remember { display: flex; align-items: center; gap: .5rem; margin: .8rem 0 .2rem; font-size: .95rem; }
+.connect-remember input { width: 1.05rem; height: 1.05rem; }
+.sites-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .8rem; }
+.sites-list .connect-site { margin-bottom: .4rem; }
+.sites-list p { margin: .25rem 0; }
+.sites-ended { opacity: .7; }
+
+/* An element marked hidden is hidden, whatever else its class says about how it is laid out. */
+.connect [hidden] { display: none !important; }

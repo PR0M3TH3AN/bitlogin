@@ -31,6 +31,23 @@ function filesBelow(directory, prefix = "") {
   });
 }
 
+// A beta build says so on every page a person can see. The beta site is a
+// real sign-in address with real key handling, so nobody should mistake it
+// for the one their accounts live at. The mark is a body attribute and a CSS
+// rule, with no script: the pages' policies stay exactly as they are. The
+// embedded signer's page is left alone, because it has no interface.
+const channel = process.env.BITLOGIN_CHANNEL ?? "";
+if (channel) {
+  if (!/^[a-z]{1,12}$/u.test(channel)) throw new Error("BITLOGIN_CHANNEL must be a short lowercase word.");
+  for (const page of filesBelow(outDir).filter((path) => path.endsWith(".html") && !path.startsWith("signer"))) {
+    const file = join(outDir, page);
+    const html = readFileSync(file, "utf8");
+    if (!/<body[ >]/u.test(html)) throw new Error(`No <body> to mark in ${page}`);
+    writeFileSync(file, html.replace(/<body([ >])/u, `<body data-channel="${channel}"$1`));
+  }
+  console.log(`Marked every page as the ${channel} channel.`);
+}
+
 const swPath = join(outDir, "sw.js");
 const swTemplate = readFileSync(swPath, "utf8");
 const artifacts = filesBelow(outDir)

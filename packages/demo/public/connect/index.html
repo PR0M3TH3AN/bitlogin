@@ -19,21 +19,61 @@
 <main class="connect-main">
   <p id="status" class="connect-status" role="status">Looking for the site that asked.</p>
 
+  <section id="unlock" class="connect-card" hidden>
+    <h1>Unlock BitLogin</h1>
+    <p>This browser is locked. Open it to answer the site that is asking.</p>
+    <button id="unlock-device" class="btn primary" type="button" hidden>Unlock with this device</button>
+    <form id="unlock-form">
+      <label for="unlock-pin">Your BitLogin PIN</label>
+      <input id="unlock-pin" type="password" autocomplete="off" required />
+      <button id="unlock-go" class="btn secondary" type="submit">Unlock</button>
+    </form>
+    <p id="unlock-note" class="connect-small">The PIN opens only what this browser kept. It is not your password, and it is never sent anywhere.</p>
+  </section>
+
   <section id="ask" class="connect-card" hidden>
     <h1>Let this site sign notes as you?</h1>
     <p id="site" class="connect-site"></p>
     <p class="connect-small">Only allow a site you meant to visit. This is its address exactly as your browser reports it.</p>
     <p>Signing as <strong id="who"></strong><span id="who-key" class="connect-key"></span>.</p>
     <ul>
-      <li>It can post notes and reactions as you: a few a minute at most.</li>
+      <li>It can post notes and reactions as you: three a minute at most, and twenty an hour.</li>
       <li>Each one is marked with this site's address.</li>
+      <li>It can tell the other people there who you are: your name, picture and the line about you from your Nostr profile. That is good at this site only, for four hours at a time.</li>
       <li>It can't read your messages, change your profile or who you follow, or touch your account or anything in it.</li>
-      <li>It lasts until you sign out of that site, or 30 days, on this device.</li>
+      <li id="lasts">It lasts until you sign out of that site, or 30 days, on this device.</li>
     </ul>
+    <label id="remember-row" class="connect-remember" hidden><input id="remember" type="checkbox" checked /> <span id="remember-label">Remember this site on this device</span></label>
     <p class="connect-small">Your key stays with BitLogin. The site never sees it, and nothing is typed there.</p>
     <div class="cta-row">
       <button id="allow" class="btn primary" type="button">Allow</button>
       <button id="deny" class="btn secondary" type="button">Don't allow</button>
+    </div>
+  </section>
+
+  <section id="ask-app" class="connect-card" hidden>
+    <h1>Let this application act as you?</h1>
+    <p id="app-site" class="connect-site"></p>
+    <p class="connect-small">Only allow an application you meant to use. This is its address exactly as your browser reports it.</p>
+    <p id="app-known" class="connect-known" hidden>BitLogin knows this address: it is <strong id="app-known-name"></strong>.</p>
+    <p id="app-unknown" class="connect-small" hidden>BitLogin does not know this application. That is not a warning by itself: most are not on its list. Go by the address.</p>
+    <p id="app-name-line" hidden>It calls itself <strong id="app-name"></strong>. Anyone can call themselves anything: go by the address.</p>
+    <p>Acting as <strong id="app-who"></strong><span id="app-who-key" class="connect-key"></span>, it asks to do these <strong>without asking you again</strong>:</p>
+    <ul id="app-ordinary"></ul>
+    <div id="app-sensitive-block" class="connect-warning" hidden>
+      <p><strong>And these, which deserve a second look:</strong></p>
+      <ul id="app-sensitive"></ul>
+    </div>
+    <ul>
+      <li>Everything it does as you is marked with its address.</li>
+      <li>It can't take your key, sign in anywhere else as you, or touch your BitLogin account.</li>
+      <li id="app-lasts">It lasts until you sign out of that application, or 30 days, on this device.</li>
+    </ul>
+    <label id="remember-app-row" class="connect-remember" hidden><input id="remember-app" type="checkbox" checked /> <span id="remember-app-label">Remember this application on this device</span></label>
+    <p class="connect-small">Your key stays with BitLogin. The application never sees it, and nothing is typed there.</p>
+    <div class="cta-row">
+      <button id="allow-app" class="btn primary" type="button">Allow</button>
+      <button id="deny-app" class="btn secondary" type="button">Don't allow</button>
     </div>
   </section>
 

@@ -2,7 +2,7 @@ name: Security and release integrity
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
   workflow_dispatch:
 

@@ -98,6 +98,36 @@ disclosure process.
 - Match the existing code's structure rather than introducing a new
   abstraction for something only used once.
 
+## Release channels
+
+BitLogin's own site is a sign-in address: people type their password there,
+and other sites ask it to sign for them (`docs/sign-in-window.md`). A change
+to it reaches everyone who uses it, at once. So there are two channels.
+
+| | Branch | Site | Deploys |
+|---|---|---|---|
+| Beta | `beta` | `https://bitlogin-beta.vercel.app/` | When someone runs `npm run deploy:beta` |
+| Production | `main` | `https://bitlogin.network/` | By itself, when something is merged to `main` |
+
+- **Work lands on `beta`.** Branch from `beta` and open pull requests
+  against `beta`. CI runs on both.
+- **Beta is a separate sign-in address.** Sessions, approved sites and
+  passkeys made there exist only there. Every page says "BETA SITE" (set at
+  build time by `BITLOGIN_CHANNEL=beta`; see `packages/demo/build.mjs`). Use
+  throwaway accounts on it.
+- **`npm run deploy:beta`** refuses unless the checkout is a clean `beta`
+  that matches GitHub. It then checks that the live site serves the widget
+  that commit builds, that the pages are marked, and that `/signer/` and
+  `/connect/` kept their framing rules.
+- **Promoting to production** is a pull request from `beta` into `main`,
+  merged with a merge commit so both histories are kept. Do it when a piece
+  of work is solid, not on a schedule, and say in the pull request what was
+  tried on beta. It is the owner's to merge.
+- **After a promotion,** merge `main` back into `beta` if `main` gained
+  anything `beta` lacks (a hotfix, a Dependabot update).
+- **A fix that cannot wait** may go to `main` directly, by pull request,
+  and is then merged back into `beta` the same day.
+
 ## Pull requests
 
 - Run `npm test` and `npm run typecheck` before opening a PR; both must

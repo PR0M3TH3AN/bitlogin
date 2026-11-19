@@ -29,8 +29,16 @@ import type {
   WorkerNotification,
   HandoffExportPayload,
   HandoffSealed,
+  LoadProfilePayload,
+  LockDevicePayload,
+  LockOpenPayload,
+  LockPinPayload,
+  RoomPassPayload,
   SignerKeepPayload,
+  TakeBackPayload,
   SignerSitePayload,
+  AppCryptPayload,
+  AppDecryptEventPayload,
   SignerTouchPayload
 } from "./protocol.js";
 
@@ -219,6 +227,39 @@ export class WorkerClient {
   handoffAccept(payload: HandoffSealed) {
     return this.call("handoffAccept", payload);
   }
+  loadProfile(payload: LoadProfilePayload = {}) {
+    return this.call("loadProfile", payload);
+  }
+  takeBack(payload: TakeBackPayload) {
+    return this.call("takeBack", payload);
+  }
+  signerCheck(payload: SignerSitePayload) {
+    return this.call("signerCheck", payload);
+  }
+  lockStatus() {
+    return this.call("lockStatus", {});
+  }
+  lockEnable(payload: LockPinPayload) {
+    return this.call("lockEnable", payload);
+  }
+  lockSetDevice(payload: LockDevicePayload) {
+    return this.call("lockSetDevice", payload);
+  }
+  lockRemoveDevice() {
+    return this.call("lockRemoveDevice", {});
+  }
+  lockDisable() {
+    return this.call("lockDisable", {});
+  }
+  lockNow() {
+    return this.call("lockNow", {});
+  }
+  lockOpen(payload: LockOpenPayload) {
+    return this.call("lockOpen", payload);
+  }
+  roomPass(payload: RoomPassPayload) {
+    return this.call("roomPass", payload);
+  }
   signerKeep(payload: SignerKeepPayload) {
     return this.call("signerKeep", payload);
   }
@@ -230,6 +271,15 @@ export class WorkerClient {
   }
   signerForget(payload: SignerSitePayload) {
     return this.call("signerForget", payload);
+  }
+  appEncrypt(payload: AppCryptPayload) {
+    return this.call("appEncrypt", payload);
+  }
+  appDecrypt(payload: AppCryptPayload) {
+    return this.call("appDecrypt", payload);
+  }
+  appDecryptEvent(payload: AppDecryptEventPayload) {
+    return this.call("appDecryptEvent", payload);
   }
   vaultStatus() {
     return this.call("vaultStatus", {});

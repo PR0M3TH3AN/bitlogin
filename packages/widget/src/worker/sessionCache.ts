@@ -54,6 +54,39 @@ interface EncryptedSession {
   ciphertext: string;
 }
 
+/**
+ * With the optional lock on (lock.ts, spec §21.5), the v2 record above is
+ * sealed once more, under the lock key. Both layers are needed to read it:
+ * the device key, which never leaves this browser profile, and the lock
+ * key, which is in memory only while the user has unlocked.
+ */
+interface LockedSession {
+  v: 3;
+  iv: string;
+  ciphertext: string;
+}
+
+function isLockedSession(value: unknown): value is LockedSession {
+  return Boolean(value && typeof value === "object" && (value as LockedSession).v === 3 && typeof (value as LockedSession).iv === "string" && typeof (value as LockedSession).ciphertext === "string");
+}
+
+async function lockAes(lockKey: Uint8Array, usage: "encrypt" | "decrypt"): Promise<CryptoKey> {
+  if (lockKey.length !== 32) throw new Error("Not a lock key.");
+  return crypto.subtle.importKey("raw", toArrayBuffer(lockKey), "AES-GCM", false, [usage]);
+}
+
+/** What is cached: nothing, a session that can be restored, or one sealed under the lock. */
+export async function cachedSessionState(store: SessionStore): Promise<"none" | "open" | "locked"> {
+  try {
+    const raw = await store.get(SESSION_KEY);
+    if (!raw) return "none";
+    const parsed = JSON.parse(raw) as unknown;
+    return isLockedSession(parsed) ? "locked" : isEncryptedSession(parsed) ? "open" : "none";
+  } catch {
+    return "none";
+  }
+}
+
 interface DeviceKeyStore {
   getOrCreateDeviceKey(key: string): Promise<CryptoKey>;
   deleteDeviceKey(key: string): Promise<void>;
@@ -88,7 +121,7 @@ function isEncryptedSession(value: unknown): value is EncryptedSession {
   );
 }
 
-export async function saveCachedSession(store: SessionStore, data: CachedSessionData): Promise<void> {
+export async function saveCachedSession(store: SessionStore, data: CachedSessionData, lockKey?: Uint8Array | null): Promise<void> {
   const stored: PlainSession = {
     everydayPrivateKeyHex: Array.from(data.everydayPrivateKey, (byte) => byte.toString(16).padStart(2, "0")).join(""),
     accountId: data.accountId,
@@ -125,13 +158,22 @@ export async function saveCachedSession(store: SessionStore, data: CachedSession
       iv: toBase64(iv),
       ciphertext: toBase64(new Uint8Array(ciphertext))
     };
-    await store.set(SESSION_KEY, JSON.stringify(encrypted));
+    if (!lockKey) {
+      await store.set(SESSION_KEY, JSON.stringify(encrypted));
+      return;
+    }
+    // The lock is on: the record is sealed once more, under the lock key.
+    const lockIv = crypto.getRandomValues(new Uint8Array(12));
+    const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv: lockIv }, await lockAes(lockKey, "encrypt"), new TextEncoder().encode(JSON.stringify(encrypted)));
+    const locked: LockedSession = { v: 3, iv: toBase64(lockIv), ciphertext: toBase64(new Uint8Array(sealed)) };
+    await store.set(SESSION_KEY, JSON.stringify(locked));
   } catch {
-    // ignore
+    // With the lock on, a session that could not be sealed is not left behind unsealed.
+    if (lockKey) await store.delete(SESSION_KEY).catch(() => {});
   }
 }
 
-export async function loadCachedSession(store: SessionStore): Promise<CachedSessionData | null> {
+export async function loadCachedSession(store: SessionStore, lockKey?: Uint8Array | null): Promise<CachedSessionData | null> {
   let raw: string | undefined;
   try {
     raw = await store.get(SESSION_KEY);
@@ -140,7 +182,14 @@ export async function loadCachedSession(store: SessionStore): Promise<CachedSess
   }
   if (!raw) return null;
   try {
-    const encrypted = JSON.parse(raw) as unknown;
+    let encrypted = JSON.parse(raw) as unknown;
+    if (isLockedSession(encrypted)) {
+      // Sealed under the lock. Without the lock key it stays where it is: it is not "no session", and it is
+      // never removed for being unreadable. With the wrong key it is unreadable, and stays too.
+      if (!lockKey) return null;
+      const inner = await crypto.subtle.decrypt({ name: "AES-GCM", iv: toArrayBuffer(fromBase64(encrypted.iv)) }, await lockAes(lockKey, "decrypt"), toArrayBuffer(fromBase64(encrypted.ciphertext)));
+      encrypted = JSON.parse(new TextDecoder().decode(inner)) as unknown;
+    }
     if (!isEncryptedSession(encrypted) || typeof store.getOrCreateDeviceKey !== "function") {
       // A v1 record contains a plaintext private key. Remove it rather than
       // silently preserving the insecure cache; the user can sign in once.

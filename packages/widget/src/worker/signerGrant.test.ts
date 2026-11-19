@@ -60,8 +60,24 @@ describe("what the embedded signer remembers for a site", () => {
   it("is never kept longer than the limit, whatever is asked", async () => {
     const store = new TestStore();
     await saveSignerGrant(store, grant({ until: NOW + 10 * 365 * 24 * 3600 }), NOW);
-    expect((await loadSignerGrant(store, SITE, NOW))!.until).toBe(NOW + GRANT_LIMITS.keepSec);
-    expect(await loadSignerGrant(store, SITE, NOW + GRANT_LIMITS.keepSec + 1)).toBeNull();
+    // Seven days for a site BitLogin does not know, thirty for one it does: by the address, and nothing else.
+    expect((await loadSignerGrant(store, SITE, NOW))!.until).toBe(NOW + GRANT_LIMITS.unknownKeepSec);
+    expect(await loadSignerGrant(store, SITE, NOW + GRANT_LIMITS.unknownKeepSec + 1)).toBeNull();
+    const known = "https://bitvid.network";
+    await saveSignerGrant(store, grant({ site: known, until: NOW + 10 * 365 * 24 * 3600 }), NOW);
+    expect((await loadSignerGrant(store, known, NOW))!.until).toBe(NOW + GRANT_LIMITS.keepSec);
+    expect(await loadSignerGrant(store, known, NOW + GRANT_LIMITS.keepSec + 1)).toBeNull();
+    expect({ known: GRANT_LIMITS.keepSec, unknown: GRANT_LIMITS.unknownKeepSec }).toEqual({ known: 30 * 24 * 3600, unknown: 7 * 24 * 3600 });
+  });
+
+  it("keeps the count of room passes apart, across a page load", async () => {
+    const store = new TestStore();
+    await saveSignerGrant(store, grant({ signedPass: [5, 6, NaN as never] }), NOW);
+    expect((await loadSignerGrant(store, SITE, NOW))!.signedPass).toEqual([5, 6]);
+    await saveSignerGrant(store, grant({ signedPass: Array.from({ length: 40 }, (_, i) => i) }), NOW);
+    expect((await loadSignerGrant(store, SITE, NOW))!.signedPass).toHaveLength(GRANT_LIMITS.passKept);
+    await saveSignerGrant(store, grant(), NOW);
+    expect((await loadSignerGrant(store, SITE, NOW))!.signedPass).toBeUndefined();
   });
 
   it("keeps nothing that isn't a grant, or where it couldn't be kept encrypted", async () => {
@@ -103,5 +119,32 @@ describe("what the embedded signer remembers for a site", () => {
   it("a site is exactly an origin", () => {
     expect(grantSite(SITE)).toBe(SITE);
     for (const not of ["https://app.example/", "https://app.example/x", "javascript:alert(1)", "", 7, null, "app.example"]) expect(grantSite(not)).toBe("");
+  });
+
+  it("keeps what an application was approved for with the grant, and its sensitive count apart", async () => {
+    const store = new TestStore();
+    const permissions = { name: "Example", sign: [0, 1, 27235], appData: [], proofs: ["https://api.example"], read: [], peers: [] };
+    expect(await saveSignerGrant(store, grant({ permissions, signed: [1, 2, 3], signedSensitive: [4] }), NOW)).toBe(true);
+    const kept = await loadSignerGrant(store, SITE, NOW);
+    expect(kept?.permissions).toEqual(permissions);
+    expect(kept?.signed).toEqual([1, 2, 3]);
+    expect(kept?.signedSensitive).toEqual([4]);
+    // Not in the store in the clear either.
+    expect([...store.values.values()].join("")).not.toContain("api.example");
+    // A site that declared nothing has no set, and is counted as before.
+    await saveSignerGrant(store, grant(), NOW);
+    const plain = await loadSignerGrant(store, SITE, NOW);
+    expect(plain?.permissions).toBeUndefined();
+    expect(plain?.signedSensitive).toBeUndefined();
+  });
+
+  it("ends a grant whose permission set no longer reads as one, instead of restoring part of it", async () => {
+    const store = new TestStore();
+    // Written as a rule-abiding set would be, then the rule tightens: here, a kind that is now never signed.
+    const permissions = { sign: [1, 27302], appData: [], proofs: [], read: [], peers: [] };
+    expect(await saveSignerGrant(store, grant({ permissions }), NOW)).toBe(true);
+    expect(await loadSignerGrant(store, SITE, NOW)).toBeNull();
+    // And it is gone, so the user is asked again and sees what is asked.
+    expect(store.values.size).toBe(0);
   });
 });

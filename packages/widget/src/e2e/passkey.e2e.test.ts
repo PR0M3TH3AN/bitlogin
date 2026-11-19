@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MockRelay } from "../../../core/src/test-support/mockRelay.js";
 import { generatePrivateKey, getPublicKeyHex } from "../../../core/src/crypto/secp256k1.js";
 import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
+import { verifyNostrEvent } from "../../../core/src/nostr/event.js";
 
 const DIST = fileURLToPath(new URL("../../../demo/dist/", import.meta.url));
 const MIME: Record<string, string> = {
@@ -56,7 +57,8 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
-      const relative = url.pathname === "/" ? "/index.html" : url.pathname;
+      // A directory is served by its index page, as the real site serves /signer/ and /connect/.
+      const relative = url.pathname.endsWith("/") ? `${url.pathname}index.html` : url.pathname;
       const filePath = join(DIST, normalize(relative).replace(/^(\.\.[/\\])+/u, ""));
       if (!existsSync(filePath)) {
         res.writeHead(404).end("not found");
@@ -70,6 +72,11 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
             "<bitlogin-auth id=\"bitlogin-widget\">",
             `<bitlogin-auth id="bitlogin-widget" vault-relays="${relayList}" discovery-relays="${relayList}">`
           );
+      }
+      // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
+      // signer reads it. Each is given the mock relays, as the account page is.
+      if (relative === "/connect/index.html" || relative === "/sites/index.html" || relative === "/signer/index.html") {
+        body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}">`);
       }
       res.writeHead(200, {
         "content-type": MIME[extname(filePath)] ?? "application/octet-stream",
@@ -448,6 +455,32 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const session = await account.evaluate(() => window.bitlogin?.activeSession());
         const me = session!.publicKey;
 
+        // Their own profile, signed by them and on the relays: where the sign-in window finds who they are. It is
+        // newer than the one sign-up published. With an older one beside it, and one signed by somebody else,
+        // neither of which may be believed.
+        const profileOf = (content: Record<string, string>, created_at: number) =>
+          account.evaluate((e) => (window as any).nostr.signEvent(e), { kind: 0, created_at, tags: [], content: JSON.stringify(content) });
+        const nowSec = Math.floor(Date.now() / 1000);
+        const stranger = generatePrivateKey();
+        const profiles = [
+          await profileOf({ name: "Old Name", picture: "https://pictures.example/old.png" }, nowSec - 500),
+          await profileOf({ name: "Ada\u202e Lovelace  ", picture: "https://pictures.example/ada.png", about: "Line one\nline two" }, nowSec + 2),
+          { ...(await profileOf({ name: "Forged" }, nowSec + 9)), pubkey: getPublicKeyHex(stranger) }
+        ];
+        for (const relay of relays) {
+          await new Promise<void>((resolve, reject) => {
+            const socket = new WebSocket(relay.url);
+            socket.onerror = () => reject(new Error("mock relay refused a connection"));
+            socket.onopen = () => {
+              for (const event of profiles) socket.send(JSON.stringify(["EVENT", event]));
+              setTimeout(() => {
+                socket.close();
+                resolve();
+              }, 300);
+            };
+          });
+        }
+
         // The asking site, in another tab.
         const page = await context.newPage();
         const errors: string[] = [];
@@ -461,12 +494,16 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const locked = await ask({ t: "sign", event: { kind: 1, content: "before", tags: [] } });
         expect(locked.t).toBe("refused");
         expect(Object.keys(locked).sort()).toEqual(["id", "nswp", "t", "v"]);
+        const sessionKey = getPublicKeyHex(generatePrivateKey());
+        expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
 
         // The window: BitLogin's own page, naming the site as the browser reports it.
         const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
         await popup.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
         expect(new URL(popup.url()).origin).toBe(origin);
         expect(await popup.locator("#site").textContent()).toBe(site);
+        // The window says the site can tell others who they are.
+        expect(await popup.locator("#ask").textContent()).toContain("who you are");
         // The address can be read, in a light-themed browser and a dark one. It once could not: dark text on a
         // dark bar, in the light theme, on the one line the user is told to check.
         for (const colorScheme of ["light", "dark"] as const) {
@@ -490,13 +527,61 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow").click();
         await page.waitForTimeout(400);
         expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+        // Remembered unless they untick it, and the window says for how long: seven days for an address BitLogin
+        // does not know. Unticked, it is for this visit.
+        expect(await popup.locator("#remember-row").isVisible()).toBe(true);
+        expect(await popup.locator("#remember").isChecked()).toBe(true);
+        expect(await popup.locator("#remember-row").textContent()).toContain("7 days");
+        expect(await popup.locator("#lasts").textContent()).toContain("7 days");
+        await popup.locator("#remember").uncheck();
+        expect(await popup.locator("#lasts").textContent()).toContain("for this visit");
         await popup.waitForTimeout(800);
         await popup.locator("#allow").click();
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        const visit = await ask({ t: "state" });
+        expect(visit).toMatchObject({ t: "state", unlocked: true, pubkey: me, remembered: false });
+        expect(visit.until - Date.now() / 1000).toBeLessThanOrEqual(12 * 3600);
+        expect((await ask({ t: "sign", event: { kind: 1, content: "on a visit", tags: [] } })).t).toBe("signed");
+        // The page is loaded again: the visit is over, nothing was kept, and nothing is signed.
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await ask({ t: "state" })).toMatchObject({ t: "state", unlocked: false });
+        expect((await ask({ t: "sign", event: { kind: 1, content: "after the visit", tags: [] } })).t).toBe("refused");
+
+        // Asked again, and this time the tick is left on. The first window closes itself a moment after Allow.
+        if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 10_000 }).catch(() => popup.close());
+        const [popupAgain] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await popupAgain.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await popupAgain.locator("#remember").isChecked()).toBe(true);
+        expect(await popupAgain.locator("#lasts").textContent()).toContain("7 days");
+        await popupAgain.waitForTimeout(1000);
+        await popupAgain.locator("#allow").click();
         await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
 
         // Unlocked, as the account that is signed in at the sign-in address.
         const state = await ask({ t: "state" });
-        expect(state).toMatchObject({ t: "state", unlocked: true, pubkey: me });
+        expect(state).toMatchObject({ t: "state", unlocked: true, pubkey: me, remembered: true });
+        // Who they are: from the newest profile their own key signed, tidied. Not the older one, not the forged one.
+        expect({ name: state.name, picture: state.picture, about: state.about }).toEqual({
+          name: "Ada Lovelace",
+          picture: "https://pictures.example/ada.png",
+          about: "Line one line two"
+        });
+
+        // A room pass (§SW16): the site names a session key, and the signer makes everything else.
+        const passed = await ask({ t: "pass", session: sessionKey, origin: "https://elsewhere.example", name: "Somebody Else", ttl: 999_999 });
+        expect(passed.t).toBe("signed");
+        const pass = passed.event;
+        expect(verifyNostrEvent(pass)).toBe(true);
+        expect(pass).toMatchObject({ kind: 27300, pubkey: me, content: "" });
+        expect(pass.tags.slice(0, 2)).toEqual([["nswp:session", sessionKey], ["nswp:origin", site]]);
+        expect(pass.tags[2][0]).toBe("expiration");
+        expect(Number(pass.tags[2][1]) - pass.created_at).toBe(4 * 3600);
+        expect(Math.abs(pass.created_at - Date.now() / 1000)).toBeLessThan(120);
+        expect(pass.tags.slice(3)).toEqual([["name", "Ada Lovelace"], ["picture", "https://pictures.example/ada.png"], ["about", "Line one line two"]]);
+        // Not for the identity key itself, not for something that is no key, and never through "sign".
+        expect((await ask({ t: "pass", session: me })).t).toBe("refused");
+        expect((await ask({ t: "pass", session: "not a key" })).t).toBe("no answer");
         const signed = await ask({ t: "sign", event: { kind: 1, content: "from a site that asks", tags: [["t", "x"], ["nswp:world", "https://elsewhere.example"]], created_at: 1 } });
         expect(signed.t).toBe("signed");
         expect(signed.event).toMatchObject({ kind: 1, content: "from a site that asks", pubkey: me, tags: [["t", "x"], ["nswp:world", site]] });
@@ -512,20 +597,55 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await page.reload();
         await page.waitForFunction(() => typeof (window as any).ask === "function");
         const afterReload = await ask({ t: "state" });
-        expect(afterReload).toMatchObject({ t: "state", unlocked: true, pubkey: me });
-        expect(afterReload.until - Date.now() / 1000).toBeGreaterThan(29 * 24 * 3600);
-        expect(context.pages().length).toBe(pagesBefore);
+        expect(afterReload).toMatchObject({ t: "state", unlocked: true, pubkey: me, remembered: true });
+        // Seven days, for an address BitLogin does not know.
+        expect(afterReload.until - Date.now() / 1000).toBeGreaterThan(6 * 24 * 3600);
+        expect(afterReload.until - Date.now() / 1000).toBeLessThanOrEqual(7 * 24 * 3600);
+        // No window was opened. (Not "the same number": the sign-in window may only now be closing.)
+        expect(context.pages().length).toBeLessThanOrEqual(pagesBefore);
         const again = await ask({ t: "sign", event: { kind: 1, content: "after a reload", tags: [] } });
         expect(again.event).toMatchObject({ kind: 1, content: "after a reload", pubkey: me, tags: [["nswp:world", site]] });
-        // Loading the page again is not a way round the count: six a minute, with the one signed before.
+        expect(afterReload).toMatchObject({ name: "Ada Lovelace", picture: "https://pictures.example/ada.png", about: "Line one line two" });
+        // Loading the page again is not a way round the count: three notes a minute, and that was the second.
+        // The pass did not use one up: passes are counted apart.
         let more = 0;
-        for (let i = 0; i < 8; i++) if ((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t === "signed") more++;
-        expect(more).toBe(4);
+        for (let i = 0; i < 4; i++) if ((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t === "signed") more++;
+        expect(more).toBe(1);
+        // Two passes a minute, and the first was made before the page was loaded again.
+        expect((await ask({ t: "pass", session: sessionKey })).t).toBe("signed");
+        expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
         await page.reload();
         await page.waitForFunction(() => typeof (window as any).ask === "function");
         expect((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("refused");
+        expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
         // What is kept is not the key in the clear, and the site still can't read any of it.
         expect(await page.evaluate(() => (window as any).tryToRead().frame)).toBe("refused: SecurityError");
+
+        // The sign-in address's own list (§SW18) has the site once, as it was last allowed: remembered.
+        const listing = await context.newPage();
+        await listing.goto(`${origin}/sites/index.html`);
+        const row = listing.locator("#sites li[data-site]");
+        await row.first().waitFor({ timeout: 30_000 });
+        expect(await row.count()).toBe(1);
+        expect(await row.getAttribute("data-site")).toBe(site);
+        expect(await row.locator(".connect-site").textContent()).toBe(site);
+        expect(await row.textContent()).toContain("Remembered on this device");
+        // Its link to the site gives the site no way back to this page.
+        expect(await row.locator("a").getAttribute("rel")).toBe("noopener noreferrer");
+        // Taken back (docs/take-back.md): a record goes to the relays, sealed, and the line leaves the list.
+        expect(await row.locator("button").textContent()).toBe("Take it back");
+        await row.locator("button").click();
+        await listing.locator("#said", { hasText: "Taken back" }).waitFor({ timeout: 30_000 });
+        expect(await listing.locator("#sites li").count()).toBe(0);
+        expect(await listing.locator("#empty").isVisible()).toBe(true);
+        expect(relays.every((relay) => relay.storedEventKinds().filter((kind) => kind === 30078).length >= 3)).toBe(true);
+        // It is not instant, as the page says. This site's signer asked the relays a moment ago, when its page
+        // was last loaded, and does not ask again for a day: until then it still signs.
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        await page.waitForTimeout(1500);
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true });
+        await listing.close();
 
         // Lock: nothing more is signed, and the site is forgotten, across a reload too.
         expect(await ask({ t: "lock" })).toMatchObject({ t: "state", unlocked: false });
@@ -536,6 +656,84 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         // The sign-in address itself is still signed in, with a full session: handing over took nothing from it.
         expect(await account.evaluate(() => window.bitlogin?.activeSession()?.publicKey)).toBe(me);
         expect(errors).toEqual([]);
+
+        // A site allowed and then taken back before its signer has ever asked: the next time its page is loaded,
+        // the signer asks, finds the record, and is locked. Nobody signed out at the site.
+        const allowAgain = async () => {
+          const [again] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+          await again.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+          await again.waitForTimeout(1000);
+          await again.locator("#allow").click();
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+          if (!again.isClosed()) await again.waitForEvent("close", { timeout: 10_000 }).catch(() => again.close());
+        };
+        const lockedSoon = () =>
+          page.waitForFunction(async () => (await (window as any).ask({ t: "state" })).unlocked === false, null, { timeout: 30_000, polling: 500 });
+        await allowAgain();
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true, remembered: true });
+        const takingBack = await context.newPage();
+        await takingBack.goto(`${origin}/sites/index.html`);
+        await takingBack.locator("#sites li[data-site] button").click();
+        await takingBack.locator("#said", { hasText: "Taken back" }).waitFor({ timeout: 30_000 });
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        await lockedSoon();
+        expect((await ask({ t: "sign", event: { kind: 1, content: "after it was taken back", tags: [] } })).t).toBe("refused");
+        // And it stays gone: the grant was removed, not paused.
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+        // The site never learns why, and nothing of the record reaches it.
+        expect(JSON.stringify(await page.evaluate(() => (window as any).heard))).not.toMatch(/taken-back|all_before/u);
+
+        // Allowed again afterwards, it is allowed: the record ends what came before it, and nothing after.
+        await allowAgain();
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        await page.waitForTimeout(2000);
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true, remembered: true });
+
+        // "Sign out of every site" ends it too, though this browser's signer for it checked a moment ago: so
+        // here it shows only at the sign-in address, where the list is emptied and the record is published.
+        await takingBack.reload();
+        await takingBack.locator("#sites li[data-site]").first().waitFor({ timeout: 30_000 });
+        await takingBack.locator("#all").click();
+        await takingBack.locator("#said", { hasText: "Every site is taken back" }).waitFor({ timeout: 30_000 });
+        expect(await takingBack.locator("#sites li").count()).toBe(0);
+        await takingBack.close();
+        expect(await ask({ t: "lock" })).toMatchObject({ unlocked: false });
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+
+        // With the lock on (§SW12), the window asks for it before anything is handed over, and nothing is kept
+        // for the site whatever is ticked: a key at rest in a site's storage is one the lock would not cover.
+        await account.bringToFront();
+        await widget.locator('[data-action="goto-lock-settings"]').click();
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill("246810");
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill("246810");
+        await widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        await widget.locator('[data-action="lock-off"]').waitFor({ timeout: 60_000 });
+        const [lockedPopup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await lockedPopup.locator("#unlock").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await lockedPopup.locator("#ask").isVisible()).toBe(false);
+        expect(await lockedPopup.locator("#unlock-device").isVisible()).toBe(false);
+        await lockedPopup.locator("#unlock-pin").fill("000000");
+        await lockedPopup.locator("#unlock-go").click();
+        await lockedPopup.locator("#status", { hasText: "4 tries left" }).waitFor({ timeout: 60_000 });
+        expect(await lockedPopup.locator("#ask").isVisible()).toBe(false);
+        await lockedPopup.locator("#unlock-pin").fill("246810");
+        await lockedPopup.locator("#unlock-go").click();
+        await lockedPopup.locator("#allow").waitFor({ state: "visible", timeout: 60_000 });
+        // No box to tick: with the lock on, nothing is kept for any site, and the window says so.
+        expect(await lockedPopup.locator("#remember-row").isVisible()).toBe(false);
+        expect(await lockedPopup.locator("#lasts").textContent()).toContain("Your lock is on");
+        await lockedPopup.waitForTimeout(1000);
+        await lockedPopup.locator("#allow").click();
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me, remembered: false });
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
 
         // Someone not signed in at the sign-in address is asked to sign in there, with the ordinary widget, and
         // is offered no Allow.
@@ -696,4 +894,445 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     },
     180_000
   );
+  it(
+    "an application declares what it wants, the user approves it once, and it then signs in the background (sign-in-window.md §SW9)",
+    async () => {
+      // An application on its own origin, using BitLogin's client the way a real one would: vendored, same-origin.
+      const vendor = join(DIST, "vendor", "bitlogin");
+      const asking = createServer(async (req, res) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (url.pathname.startsWith("/vendor/bitlogin/")) {
+          const file = join(vendor, normalize(url.pathname.slice("/vendor/bitlogin/".length)).replace(/^(\.\.[/\\])+/u, ""));
+          if (!existsSync(file)) return void res.writeHead(404).end("not found");
+          res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+          return void res.end(await readFile(file));
+        }
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(`<!doctype html><meta charset="utf-8"><title>an application</title><button id="open">Sign in with BitLogin</button>
+<script type="module">
+  import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
+  const more = new URLSearchParams(location.search).has("more");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  window.bl = createBitLoginClient({
+    at: "${origin}",
+    permissions: {
+      name: "Test App",
+      sign: [0, 1, 5, 7, 27235, 30078, ...(more ? [3] : [])],
+      appData: ["testapp:"],
+      proofs: ["https://api.testapp.example"],
+      read: [30078]
+    }
+  });
+  window.attempt = async (method, ...args) => {
+    try {
+      const target = method.includes(".") ? window.bl[method.split(".")[0]] : window.bl;
+      return { ok: true, value: await target[method.split(".").pop()](...args) };
+    } catch (err) {
+      return { ok: false, name: err.name };
+    }
+  };
+  document.getElementById("open").onclick = () => { window.signedIn = window.bl.signIn(); };
+  window.isReady = window.bl.ready();
+</script>`);
+      });
+      await new Promise<void>((resolve) => asking.listen(0, "127.0.0.1", () => resolve()));
+      const askingAddress = asking.address();
+      const site = `http://127.0.0.1:${typeof askingAddress === "object" && askingAddress ? askingAddress.port : 0}`;
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (err) => errors.push(String(err)));
+        await page.goto(`${site}/`);
+        const attempt = (method: string, ...args: unknown[]) =>
+          page.evaluate(([m, a]) => (window as any).attempt(m, ...(a as unknown[])), [method, args] as const) as Promise<{ ok: boolean; value?: any; name?: string }>;
+        const sign = (event: Record<string, unknown>) => attempt("signEvent", event);
+
+        // Not allowed yet: nobody is signed in to it, and nothing is signed.
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false });
+        expect(await sign({ kind: 1, content: "before", tags: [] })).toEqual({ ok: false, name: "BitLoginRefused" });
+
+        // The window shows the address, the name it gave itself, and everything it asked, the sensitive apart.
+        const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await popup.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(new URL(popup.url()).origin).toBe(origin);
+        expect(await popup.locator("#app-site").textContent()).toBe(site);
+        expect(await popup.locator("#app-name").textContent()).toBe("Test App");
+        // The address can be read, in a light-themed browser and a dark one. It once could not: dark text on a
+        // dark bar, in the light theme, on the one line the user is told to check.
+        for (const colorScheme of ["light", "dark"] as const) {
+          await popup.emulateMedia({ colorScheme });
+          const contrast = await popup.locator("#app-site").evaluate((el) => {
+            const luminance = (css: string): number => {
+              const [r, g, b] = (css.match(/[\d.]+/gu) ?? []).slice(0, 3).map((v) => {
+                const c = Number(v) / 255;
+                return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+              });
+              return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+            };
+            const style = getComputedStyle(el);
+            const [hi, lo] = [luminance(style.color), luminance(style.backgroundColor)].sort((a, b) => b - a);
+            return (hi! + 0.05) / (lo! + 0.05);
+          });
+          expect(contrast, colorScheme).toBeGreaterThan(7);
+        }
+        // An address BitLogin has no name for is said to be unknown, and its own name for itself is shown as only that.
+        expect(await popup.locator("#app-known").isVisible()).toBe(false);
+        expect(await popup.locator("#app-unknown").isVisible()).toBe(true);
+        expect(await popup.locator("#app-name-line").isVisible()).toBe(true);
+        expect(await popup.locator("#ask").isVisible()).toBe(false);
+        expect(await popup.locator("#app-ordinary li").allTextContents()).toEqual([
+          `prove who you are to ${new URL(site).host}, api.testapp.example`,
+          "post notes",
+          "post reactions",
+          "save its own data (testapp:)",
+          "read its own saved data"
+        ]);
+        expect(await popup.locator("#app-sensitive li").allTextContents()).toEqual(["change your profile", "delete what you have posted"]);
+        // An application BitLogin does not know is remembered for seven days, unless they untick it.
+        expect(await popup.locator("#remember-app").isChecked()).toBe(true);
+        expect(await popup.locator("#app-lasts").textContent()).toContain("7 days");
+        await popup.waitForTimeout(1000);
+        await popup.locator("#allow-app").click();
+        expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
+        expect(await page.evaluate(() => (window as any).bl.state())).toMatchObject({ signedIn: true, pubkey: me });
+
+        // What it was approved for is signed with no prompt, marked with the application's address.
+        const note = await sign({ kind: 1, content: "from an application", tags: [["t", "x"], ["bitlogin:site", "https://elsewhere.example"]] });
+        expect(note.value).toMatchObject({ kind: 1, pubkey: me, content: "from an application", tags: [["t", "x"], ["bitlogin:site", site]] });
+        expect((await sign({ kind: 0, content: "{}", tags: [] })).ok).toBe(true);
+        // What it did not ask for is refused, and so is anything outside the terms of what it did.
+        expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
+        expect((await sign({ kind: 27302, content: "", tags: [] })).ok).toBe(false);
+        const data = (d: string) => sign({ kind: 30078, content: "x", tags: [["d", d]] });
+        expect((await data("testapp:settings")).ok).toBe(true);
+        expect((await data("otherapp:settings")).ok).toBe(false);
+        expect((await data("bitlogin:password:v1")).ok).toBe(false);
+        const proof = (u: string) => sign({ kind: 27235, content: "", tags: [["u", u], ["method", "GET"]] });
+        expect((await proof(`${site}/v1/me`)).ok).toBe(true);
+        expect((await proof("https://api.testapp.example/v1/orders")).ok).toBe(true);
+        // A proof that would work at someone else's server is not signed.
+        expect((await proof("https://api.bitunlock.network/v1/orders")).ok).toBe(false);
+
+        // Reading is tied to an event of a kind it may read. Its own draft: yes. Raw, against the user's own key: no.
+        const sealed = await attempt("nip44.encrypt", me, "a private draft");
+        expect(sealed.ok).toBe(true);
+        expect(sealed.value).not.toContain("a private draft");
+        const draft = await sign({ kind: 30078, content: sealed.value, tags: [["d", "testapp:draft:1"]] });
+        expect(await attempt("decryptEvent", draft.value)).toEqual({ ok: true, value: "a private draft" });
+        expect(await attempt("nip44.decrypt", me, sealed.value)).toEqual({ ok: false, name: "BitLoginRefused" });
+        // The same ciphertext in a kind it may not read stays closed.
+        const asNote = await sign({ kind: 1, content: sealed.value, tags: [] });
+        expect(await attempt("decryptEvent", asNote.value)).toEqual({ ok: false, name: "BitLoginRefused" });
+        // And it may not encrypt to a stranger: it asked for no peers and no messages.
+        expect((await attempt("nip44.encrypt", "c".repeat(64), "hello")).ok).toBe(false);
+
+        // In the background, at an application's pace: forty proofs in a row, where a world gets three a minute.
+        const burst = await page.evaluate(async (u) => {
+          let ok = 0;
+          for (let i = 0; i < 40; i++) if ((await (window as any).attempt("signEvent", { kind: 27235, content: "", tags: [["u", u], ["method", "GET"]] })).ok) ok++;
+          return ok;
+        }, `${site}/v1/poll`);
+        expect(burst).toBe(40);
+
+        // The page is loaded again: still allowed, for the same things, with no window.
+        const pagesBefore = context.pages().length;
+        await page.reload();
+        expect(await page.evaluate(() => (window as any).isReady)).toMatchObject({ signedIn: true, pubkey: me });
+        // No window was opened. (Not "the same number": the sign-in window may only now be closing.)
+        expect(context.pages().length).toBeLessThanOrEqual(pagesBefore);
+        expect((await sign({ kind: 7, content: "+", tags: [] })).ok).toBe(true);
+        expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
+        expect(await attempt("decryptEvent", draft.value)).toEqual({ ok: true, value: "a private draft" });
+
+        // The application now wants more than was approved: it is not signed in until the user is asked again.
+        await page.goto(`${site}/?more`);
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, needsMore: true });
+        expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
+
+        // Nothing the application heard was a key.
+        expect(JSON.stringify(await page.evaluate(() => (window as any).heard))).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
+
+        // Signing out of the application ends it, across a reload too.
+        await page.goto(`${site}/`);
+        await page.evaluate(() => (window as any).isReady);
+        expect((await attempt("signOut")).ok).toBe(true);
+        await page.reload();
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false });
+        expect((await sign({ kind: 1, content: "after", tags: [] })).ok).toBe(false);
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+        asking.close();
+      }
+    },
+    240_000
+  );
+
+  it(
+    "the optional lock: a PIN, the device's own unlock, Lock now, and signed out after too many wrong tries (§SW12)",
+    async () => {
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const errors: string[] = [];
+        page.on("pageerror", (err) => errors.push(String(err)));
+        await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = page.locator("bitlogin-auth");
+        const active = () => page.evaluate(() => window.bitlogin?.activeSession()?.publicKey ?? null);
+        const setPin = async (pin: string) => {
+          await widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill(pin);
+          await widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill(pin);
+          await widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        };
+        const typePin = async (pin: string) => {
+          await widget.locator('form[data-form="lock-open"] input[name="lockPin"]').fill(pin);
+          await widget.locator('form[data-form="lock-open"] button[type="submit"]').click();
+        };
+
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, "locker");
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 90_000 });
+        const me = await active();
+        expect(me).toMatch(/^[0-9a-f]{64}$/u);
+
+        // Off unless turned on: no Lock now, and a reload asks nothing.
+        expect(await widget.locator('[data-action="lock-now"]').count()).toBe(0);
+        await widget.locator('[data-action="goto-lock-settings"]').click();
+        // A PIN too short, or typed two ways, turns nothing on.
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill("246810");
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill("246811");
+        await widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        await widget.locator(".notice.error").waitFor({ timeout: 10_000 });
+        expect(await widget.locator('[data-action="lock-off"]').count()).toBe(0);
+        await setPin("246810");
+        await widget.locator('[data-action="lock-off"]').waitFor({ timeout: 60_000 });
+
+        // A page load: locked. Nobody is signed in as far as the page can tell, and nothing signs.
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator('form[data-form="lock-open"]').waitFor({ timeout: 30_000 });
+        expect(await active()).toBeNull();
+        expect(await widget.locator('[data-action="lock-device-open"]').count()).toBe(0);
+        expect(await page.evaluate(() => (window as any).nostr.signEvent({ kind: 1, created_at: 1, tags: [], content: "locked" }).then(() => "signed", () => "refused"))).toBe("refused");
+        await typePin("000000");
+        await widget.locator(".notice.error", { hasText: "4 tries left" }).waitFor({ timeout: 60_000 });
+        expect(await active()).toBeNull();
+        await typePin("246810");
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        expect(await active()).toBe(me);
+
+        // The device's own unlock, added, is offered first; and Lock now locks without a page load.
+        await widget.locator('[data-action="goto-lock-settings"]').click();
+        await widget.locator('[data-action="lock-device-add"]').click();
+        await widget.locator('[data-action="lock-device-remove"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="goto-dashboard"]').click();
+        await widget.locator('[data-action="lock-now"]').click();
+        await widget.locator('[data-action="lock-device-open"]').waitFor({ timeout: 30_000 });
+        expect(await active()).toBeNull();
+        await widget.locator('[data-action="lock-device-open"]').click();
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        expect(await active()).toBe(me);
+
+        // What is at rest is sealed twice: the cached session is not the ordinary record.
+        const kept = await page.evaluate(
+          () =>
+            new Promise<string>((resolve) => {
+              const open = indexedDB.open("bitlogin");
+              open.onerror = () => resolve("no database");
+              open.onsuccess = () => {
+                const db = open.result;
+                const names = Array.from(db.objectStoreNames);
+                const out: string[] = [];
+                let left = names.length;
+                if (!left) resolve("empty");
+                for (const name of names) {
+                  const all = db.transaction(name).objectStore(name).getAll();
+                  all.onsuccess = () => {
+                    out.push(JSON.stringify(all.result));
+                    if (--left === 0) resolve(out.join("\n"));
+                  };
+                  all.onerror = () => {
+                    if (--left === 0) resolve(out.join("\n"));
+                  };
+                }
+              };
+            })
+        );
+        if (kept !== "no database" && kept !== "empty") {
+          expect(kept).toContain('\\"v\\":3');
+          expect(kept).not.toContain("246810");
+        }
+
+        // Too many wrong tries: the lock and what was kept are removed, and it is an ordinary sign-in again.
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator('form[data-form="lock-open"]').waitFor({ timeout: 30_000 });
+        for (let left = 4; left >= 1; left--) {
+          await typePin("111111");
+          await widget.locator(".notice.error", { hasText: `${left} ${left === 1 ? "try" : "tries"} left` }).waitFor({ timeout: 60_000 });
+        }
+        await typePin("111111");
+        await widget.locator(".notice.error", { hasText: "Too many wrong tries" }).waitFor({ timeout: 60_000 });
+        expect(await widget.locator('form[data-form="lock-open"]').count()).toBe(0);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator('[data-action="goto-login"]').waitFor({ timeout: 30_000 });
+        expect(await widget.locator('form[data-form="lock-open"]').count()).toBe(0);
+        expect(await active()).toBeNull();
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    },
+    300_000
+  );
+
+  /**
+   * A browser's password manager saves from, and fills into, real form fields:
+   * a login name marked `username` beside a field of type "password" marked
+   * `new-password` or `current-password`, in a form that is submitted. This
+   * checks that every screen which makes or takes a password is such a form,
+   * in each engine. It cannot check the browser's own prompt: that is drawn
+   * outside the page, and no test harness sees it.
+   */
+  for (const engine of ["chromium", "firefox", "webkit"] as const) {
+    const installed = (() => {
+      try {
+        const path = playwright?.[engine].executablePath();
+        return !!path && existsSync(path);
+      } catch {
+        return false;
+      }
+    })();
+    it.skipIf(!installed)(
+      `every password screen is a form a password manager can save from and fill (${engine})`,
+      async () => {
+        const browser = await playwright![engine].launch();
+        try {
+          const page = await (await browser.newContext()).newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (err) => errors.push(String(err)));
+          await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+          const widget = page.locator("bitlogin-auth");
+          const loginName = `saver-${engine}`;
+
+          /** What a password manager reads off a form: the marked fields, in order. */
+          const fieldsOf = (form: string): Promise<{ autocomplete: string; type: string; value: string; readOnly: boolean; visible: boolean }[]> =>
+            widget.locator(`form[data-form="${form}"]`).evaluate((el) =>
+              Array.from(el.querySelectorAll<HTMLInputElement>("input[autocomplete]")).map((input) => ({
+                // The attribute as written: Firefox's `input.autocomplete` property is empty for these values.
+                autocomplete: input.getAttribute("autocomplete") ?? "",
+                type: input.type,
+                value: input.value,
+                readOnly: input.readOnly,
+                visible: input.getClientRects().length > 0
+              }))
+            );
+
+          // Sign-up: the generated password is in a real field, beside the login name.
+          await widget.locator('[data-action="goto-create"]').click();
+          await widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(loginName);
+          await widget.locator('form[data-form="create-name"] button[type="submit"]').click();
+          const shown: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          expect(shown.length).toBeGreaterThan(20);
+          expect(await fieldsOf("create-credential")).toEqual([
+            { autocomplete: "username", type: "text", value: loginName, readOnly: true, visible: true },
+            { autocomplete: "new-password", type: "password", value: shown, readOnly: false, visible: true }
+          ]);
+          // It cannot be made to differ from the password the account gets.
+          const generated = widget.locator("#generatedPassword");
+          await generated.fill("something else entirely");
+          expect(await generated.inputValue()).toBe(shown);
+          await generated.press("End");
+          await generated.pressSequentially("xyz");
+          expect(await generated.inputValue()).toBe(shown);
+          // A different password is a different field value too.
+          await widget.locator('[data-action="regenerate-credential"]').click();
+          const password: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          expect(password).not.toBe(shown);
+          expect(await generated.inputValue()).toBe(password);
+
+          await widget.locator("#saved-check").check();
+          await widget.locator('form[data-form="create-credential"] button[type="submit"]').click();
+          const words = await completeRecoveryCeremony(widget);
+          await widget.locator(".pubkey").waitFor({ timeout: 90_000 });
+
+          // Sign-in: filled the way a password manager fills, then submitted.
+          await widget.locator('[data-action="logout"]').click();
+          await widget.locator('[data-action="goto-login"]').click();
+          expect((await fieldsOf("login")).map(({ autocomplete, type, readOnly, visible }) => ({ autocomplete, type, readOnly, visible }))).toEqual([
+            { autocomplete: "username", type: "text", readOnly: false, visible: true },
+            { autocomplete: "current-password", type: "password", readOnly: false, visible: true }
+          ]);
+          await widget.locator('form[data-form="login"]').evaluate(
+            (el, [name, secret]) => {
+              const set = (selector: string, value: string) => {
+                const input = el.querySelector<HTMLInputElement>(selector)!;
+                input.value = value;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+              };
+              set('input[autocomplete="username"]', name!);
+              set('input[autocomplete="current-password"]', secret!);
+            },
+            [loginName, password]
+          );
+          await widget.locator('form[data-form="login"] button[type="submit"]').click();
+          await widget.locator(".pubkey").waitFor({ timeout: 90_000 });
+
+          // Rotation: the login name, the old password and the new one, as a change-password form.
+          await widget.locator('[data-action="goto-change-password"]').click();
+          const rotated: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          expect(await fieldsOf("change-password")).toEqual([
+            { autocomplete: "username", type: "text", value: loginName, readOnly: true, visible: true },
+            { autocomplete: "current-password", type: "password", value: "", readOnly: false, visible: true },
+            { autocomplete: "new-password", type: "password", value: rotated, readOnly: false, visible: true }
+          ]);
+          await widget.locator('[data-action="goto-dashboard"]').click();
+
+          // Recovery: a new login name, typed, and the new password, as a sign-up form.
+          await widget.locator('[data-action="logout"]').click();
+          await widget.locator('[data-action="goto-login"]').click();
+          await widget.locator('[data-action="goto-recover"]').click();
+          await widget.locator('form[data-form="recover-phrase"] input[name="phrase"]').fill(words.join(" "));
+          await widget.locator('form[data-form="recover-phrase"] button[type="submit"]').click();
+          await widget.locator('form[data-form="recover-new-credentials"]').waitFor({ timeout: 90_000 });
+          const recovered: string = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          expect(await fieldsOf("recover-new-credentials")).toEqual([
+            { autocomplete: "username", type: "text", value: "", readOnly: false, visible: true },
+            { autocomplete: "new-password", type: "password", value: recovered, readOnly: false, visible: true }
+          ]);
+          expect(errors).toEqual([]);
+        } finally {
+          await browser.close();
+        }
+      },
+      300_000
+    );
+  }
 });

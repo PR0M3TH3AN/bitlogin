@@ -23,6 +23,8 @@
  * Who is asking is what the browser says, never what the site says.
  */
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
+import { APP_LIMITS, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
+import type { Profile } from "./profile.js";
 import {
   cleanOrigin,
   createSignGate,
@@ -43,7 +45,13 @@ export interface EmbeddedSignerHandle {
   stop(): void;
 }
 
-export function startEmbeddedSigner(): EmbeddedSignerHandle {
+export interface EmbeddedSignerOptions {
+  /** Relays other than BitLogin's own list. The live page names none. */
+  vaultRelays?: string[];
+  discoveryRelays?: string[];
+}
+
+export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): EmbeddedSignerHandle {
   if (typeof window === "undefined" || window.parent === window) return { embedded: false, stop() {} };
   const me = location.origin;
   /** The site this page is embedded in: the browser's word for it. */
@@ -51,14 +59,61 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   let headless: HeadlessSigner | null = null;
   let pubkey: string | null = null;
   let name: string | null = null;
+  /** Their own signed profile, as BitLogin's worker read it out of the sealed hand-off or the kept grant (§SW16). */
+  let profile: Profile | null = null;
   /** When what the user allowed stops, in seconds. */
   let until = 0;
+  /** Whether this site is kept across page loads, or allowed for this visit only (§SW11). */
+  let remembered = false;
   let gate: SignGate = createSignGate();
+  /** Room passes, counted apart from notes (§SW16). */
+  const passLimits = { burst: SIGN_LIMITS.passBurst, perMs: SIGN_LIMITS.perMs, hourly: SIGN_LIMITS.passHourly };
+  let passGate: SignGate = createSignGate(passLimits);
+  /** What an application was approved for (§SW9), as BitLogin's worker read it out of the sealed hand-off or the
+   *  grant kept from one. Null for a site that declared nothing: a note and a reaction, as §SW5 has it. */
+  let app: AppPermissions | null = null;
+  /** What the site has said it wants, for the window to show the next time it is opened. Approves nothing. */
+  let wanted: AppPermissions | null = null;
+  /** An application's counts, apart from a world's (§SW9.6). Only the public and the sensitive are kept across
+   *  page loads: they are what a reload could be used to get round. */
+  let gates = { quiet: createSignGate(APP_LIMITS.quiet), public: createSignGate(APP_LIMITS.public), sensitive: createSignGate(APP_LIMITS.sensitive), read: createSignGate(APP_LIMITS.read) };
+  const appGates = (signedPublic: number[] = [], signedSensitive: number[] = []) => ({
+    quiet: createSignGate(APP_LIMITS.quiet),
+    public: createSignGate(APP_LIMITS.public, signedPublic),
+    sensitive: createSignGate(APP_LIMITS.sensitive, signedSensitive),
+    read: createSignGate(APP_LIMITS.read)
+  });
   /** The hand-off in flight: the window that asked, and the word it gave. */
   let asking: { nonce: string; from: MessageEventSource } | null = null;
 
   // Never restore(): this origin's own session is not the asking site's to use.
-  const load = async (): Promise<HeadlessSigner> => (headless ??= await createHeadlessSigner());
+  const load = async (): Promise<HeadlessSigner> => (headless ??= await createHeadlessSigner(options));
+  /** No longer unlocked, with nothing forgotten: the grant is gone already (taken back), or is to be kept (too
+   *  long unchecked, and no relay answered). */
+  const drop = () => {
+    const held = headless;
+    headless = null;
+    pubkey = null;
+    name = null;
+    profile = null;
+    until = 0;
+    remembered = false;
+    app = null;
+    held?.destroy();
+  };
+  /**
+   * Ask the user's relays whether this site was taken back (docs/take-back.md). The worker asks at most once a
+   * day, and says what it found. Taken back, or too long unchecked with no relay answering: this stops signing,
+   * and the site is told only that it is locked.
+   */
+  const checkTakenBack = async (): Promise<void> => {
+    const held = headless;
+    if (!held || !pubkey || !remembered || !site) return;
+    const found = await held.checkTakenBack(site).catch(() => "ok" as const);
+    if (found === "ok" || headless !== held) return;
+    drop();
+    say(state());
+  };
   /** Lock: the site is forgotten, and the key goes with the worker that held it. */
   const lock = () => {
     const held = headless;
@@ -66,7 +121,10 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     headless = null;
     pubkey = null;
     name = null;
+    profile = null;
     until = 0;
+    remembered = false;
+    app = null;
     if (held) void (forSite ? held.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => held.destroy());
   };
   /**
@@ -83,8 +141,16 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
         if (!kept) return;
         pubkey = kept.pubkey;
         name = kept.name ?? null;
+        profile = kept.profile ?? null;
         until = kept.until;
-        gate = createSignGate(SIGN_LIMITS, kept.signed);
+        remembered = true;
+        app = kept.permissions ?? null;
+        if (app) gates = appGates(kept.signed, kept.signedSensitive);
+        else gate = createSignGate(SIGN_LIMITS, kept.signed);
+        // Too long unchecked: the answer waits for the check. Otherwise the check is made behind the answer.
+        if (kept.check === "overdue") await checkTakenBack();
+        else if (kept.check === "due") void checkTakenBack();
+        passGate = createSignGate(passLimits, kept.signedPass);
       } catch {
         /* nothing kept, or no storage here: the user is asked, as before */
       }
@@ -94,7 +160,18 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   };
   const state = (id?: string): SignerReply => {
     if (pubkey && Date.now() / 1000 >= until) lock();
-    return { t: "state", ...(id ? { id } : {}), unlocked: !!pubkey, ...(pubkey ? { pubkey, until } : {}), ...(pubkey && name ? { name } : {}) };
+    return {
+      t: "state",
+      ...(id ? { id } : {}),
+      unlocked: !!pubkey,
+      ...(pubkey ? { pubkey, until, remembered } : {}),
+      // The name in their own signed profile, where they have one; else the name the sign-in address knew them by.
+      ...(pubkey && (profile?.name || name) ? { name: profile?.name || name! } : {}),
+      ...(pubkey && profile?.picture ? { picture: profile.picture } : {}),
+      ...(pubkey && profile?.about ? { about: profile.about } : {}),
+      // An application is told what it was approved for, so it can tell that from what it now wants.
+      ...(pubkey && app ? { permissions: app } : {})
+    };
   };
 
   const fromSite = async (e: MessageEvent) => {
@@ -111,18 +188,62 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       lock();
       return say(state(ask.id));
     }
-    // "sign". Every way this can fail says the same thing: refused.
+    if (ask.t === "want") {
+      // Remembered for the window to show. It approves nothing: only Allow, in the window, does. A set this site
+      // may not hold at all (a kind reserved to another address) is not remembered, so the window never shows it.
+      wanted = mayHold(site, ask.permissions) ? ask.permissions : null;
+      return say(state(ask.id));
+    }
+    // Everything else is asked of an unlocked signer. Every way it can fail says the same thing: refused.
     const refuse = () => say({ t: "refused", id: ask.id });
     if (pubkey && Date.now() / 1000 >= until) lock();
     if (!headless || !pubkey) return refuse();
-    const prepared = prepareForSite(ask.event, site, Date.now() / 1000);
-    if (!prepared || !gate.take(Date.now())) return refuse();
+
+    if (ask.t === "encrypt" || ask.t === "decrypt" || ask.t === "read") {
+      // Only an application the user approved may ask, and BitLogin's worker holds it to what they approved.
+      if (!app || (ask.t !== "encrypt" && !gates.read.take(Date.now()))) return refuse();
+      try {
+        const text =
+          ask.t === "read"
+            ? await headless.appDecryptEvent(ask.event)
+            : ask.t === "encrypt"
+              ? await headless.appEncrypt(ask.peer, ask.text, ask.scheme)
+              : await headless.appDecrypt(ask.peer, ask.text, ask.scheme);
+        return say({ t: "text", id: ask.id, text });
+      } catch {
+        return refuse();
+      }
+    }
+
+    if (ask.t === "pass") {
+      // Not for an application: it is held to the set the user read. Counted apart from notes, so that signing
+      // in does not use up a post. The worker builds all of it, for the site the hand-off was sealed for.
+      if (app || ask.session === pubkey || !passGate.take(Date.now())) return refuse();
+      try {
+        const pass = await headless.roomPass(ask.session);
+        if (pass.pubkey !== pubkey) return refuse();
+        say({ t: "signed", id: ask.id, event: pass });
+        void headless.touchSignerGrant(site, gate.times(), undefined, passGate.times()).catch(() => {});
+      } catch {
+        refuse();
+      }
+      return;
+    }
+
+    // "sign".
+    const now = Date.now();
+    const prepared = app ? prepareForApp(app, ask.event, site, now / 1000) : prepareForSite(ask.event, site, now / 1000);
+    if (!prepared) return refuse();
+    const counted = app ? limitClass(prepared.kind) : null;
+    if (!(counted ? gates[counted] : gate).take(now)) return refuse();
     try {
       const signed = await headless.signEvent(prepared);
       if (signed.pubkey !== pubkey) return refuse();
       say({ t: "signed", id: ask.id, event: signed });
-      // Counted where loading the page again can't lose the count.
-      void headless.touchSignerGrant(site, gate.times()).catch(() => {});
+      // Counted where loading the page again can't lose the count. What an application signs on timers is not
+      // written down each time: that count starts again with the page, and is generous either way.
+      if (!counted) void headless.touchSignerGrant(site, gate.times()).catch(() => {});
+      else if (counted !== "quiet") void headless.touchSignerGrant(site, gates.public.times(), gates.sensitive.times()).catch(() => {});
     } catch {
       refuse();
     }
@@ -139,7 +260,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }
@@ -152,13 +273,22 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     try {
       const signer = await load();
       const got = await signer.acceptHandoff(msg.sealed);
+      // A hand-off sealed for an application names the site it was approved for. For another site it is refused.
+      if ((got.app && got.app.site !== site) || (got.site && got.site !== site)) throw new Error("for another site");
+      profile = got.profile ?? null;
+      app = got.app?.permissions ?? null;
+      gates = appGates();
       pubkey = got.pubkey;
       name = msg.name ?? null;
-      until = Math.floor(Date.now() / 1000) + SIGN_LIMITS.grantSec;
       gate = createSignGate();
-      // Remembered for this site, so the user is not asked again when its page is next loaded. Where it can't be
-      // kept (a browser that gives an embedded page no storage), it lasts as long as the page does.
-      await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false);
+      passGate = createSignGate(passLimits);
+      // A site the user left "remember" ticked for is kept, so they are not asked again when its page is next
+      // loaded: thirty days for one BitLogin knows, seven for any other. A site they unticked it for is allowed
+      // for this visit: it lasts as long as the page does, and nothing is written down. So does one that can't
+      // be kept (a browser that gives an embedded page no storage), and every site while the lock is on.
+      until = Math.floor(Date.now() / 1000) + (got.remember ? (knownAppName(site) !== null ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec);
+      remembered = got.remember === true && (await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false));
+      if (!remembered) until = Math.min(until, Math.floor(Date.now() / 1000) + SIGN_LIMITS.visitSec);
       back({ t: "done", nonce: msg.nonce, ok: true });
     } catch {
       lock();
@@ -173,6 +303,8 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     if (e.origin === me && e.source !== window) void fromWindow(e);
   };
   window.addEventListener("message", onMessage);
+  // While the page stays open, the worker is asked hourly whether a check is due. It is, once a day.
+  const watch = setInterval(() => void checkTakenBack(), 3_600_000);
   // Said to the page that embeds this, where the browser says which page that is: it is here. Nothing is ever sent
   // to an address this doesn't know. Where the browser doesn't say (no ancestorOrigins), nothing is said: the site
   // asks "state" once the frame has loaded, and the answer goes to the address that question came from.
@@ -186,6 +318,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   return {
     embedded: true,
     stop() {
+      clearInterval(watch);
       window.removeEventListener("message", onMessage);
       lock();
     }

@@ -1,6 +1,8 @@
 /** Request/response envelope for the main-thread <-> crypto-worker RPC channel. */
 import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
 import type { RebroadcastResult, RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
+import type { AppPermissions } from "../embedded/permissions.js";
+import type { Profile } from "../embedded/profile.js";
 
 export interface WorkerRequest<TAction extends string = string, TPayload = unknown> {
   id: string;
@@ -180,6 +182,36 @@ export interface HandoffBeginResult {
 
 export interface HandoffExportPayload {
   recipientPublicKey: string;
+  /** What an application was approved for, as the window showed it (§SW9). The worker reads it again before sealing. */
+  app?: { site: string; permissions: unknown };
+  /** The site the hand-off is for. Sealed with the key, so the worker that opens it knows which site it serves. */
+  site?: string;
+  /** The user left "remember" ticked in the window. Without it nothing is kept. */
+  remember?: boolean;
+}
+
+// ---- Taking a site back (docs/take-back.md) ----
+
+export interface LoadProfilePayload {
+  /** False to fetch only the relay list: for an application, which is not told who someone is. */
+  profile?: boolean;
+}
+export interface TakeBackPayload {
+  /** The site to take back. */
+  site?: string;
+  /** Every site, on every device: "sign out of every site". */
+  all?: boolean;
+}
+export interface TakeBackResult {
+  /** Enough relays accepted the record for it to be found. False: nothing was taken back. */
+  ok: boolean;
+  accepted: number;
+  of: number;
+}
+export interface SignerCheckResult {
+  /** "ok": carry on. "ended": the site was taken back; the grant is gone. "stale": too long unchecked, and no
+   *  relay answered: locked until one does. */
+  state: "ok" | "ended" | "stale";
 }
 
 export interface HandoffSealed {
@@ -189,6 +221,32 @@ export interface HandoffSealed {
 
 export interface HandoffAcceptResult {
   everydayPublicKey: string;
+  /** What the hand-off says an application was approved for, as the worker read it. Absent for a plain one. */
+  app?: { site: string; permissions: AppPermissions };
+  /** The site the hand-off was sealed for, where it names one. */
+  site?: string;
+  /** The person's own signed profile, as the sending worker fetched and checked it. */
+  profile?: Profile;
+  /** Whether the hand-off may be kept for the site across page loads (§SW11). */
+  remember?: boolean;
+}
+
+/** A world's session public key. Everything else in a room pass is the worker's own (§SW16). */
+export interface RoomPassPayload {
+  session: string;
+}
+
+// ---- What an approved application may ask beyond signing (docs/sign-in-window.md §SW9.5) ----
+
+export interface AppCryptPayload {
+  peerPublicKey: string;
+  /** Plaintext to encrypt, or ciphertext to decrypt. */
+  text: string;
+  scheme: "nip44" | "nip04";
+}
+export interface AppDecryptEventPayload {
+  /** A whole signed event. Its signature is checked in the worker. */
+  event: unknown;
 }
 
 // ---- What the embedded signer remembers for a site (docs/sign-in-window.md §SW11) ----
@@ -209,6 +267,10 @@ export interface SignerTouchPayload {
   site: string;
   /** When the last signatures for this site were made, in milliseconds. */
   signed: number[];
+  /** For an application: its sensitive signatures, counted apart. */
+  signedSensitive?: number[];
+  /** Room passes, counted apart from notes. Left as they were when absent. */
+  signedPass?: number[];
 }
 
 export interface SignerRestoreResult {
@@ -216,11 +278,54 @@ export interface SignerRestoreResult {
   everydayPublicKey?: string;
   until?: number;
   name?: string;
+  profile?: Profile;
   signed?: number[];
+  signedPass?: number[];
+  /** Whether the take-back check is fresh, due behind the answer, or overdue and to be made before answering. */
+  check?: "fresh" | "due" | "overdue";
+  permissions?: AppPermissions;
+  signedSensitive?: number[];
+}
+
+// ---- The optional lock (docs/sign-in-window.md §SW12) ----
+
+export interface LockStatusResult {
+  /** Whether the lock is turned on in this browser. */
+  on: boolean;
+  /** On, and not unlocked: a session is cached, sealed, and nothing can sign until it is opened. */
+  locked: boolean;
+  /** Whether the device's own unlock was added. */
+  device: boolean;
+  /** The passkey that is the device's unlock, to ask the browser for exactly that one. */
+  credentialId?: string;
+  triesLeft: number;
+}
+export interface LockPinPayload {
+  pin: string;
+}
+export interface LockDevicePayload {
+  /** base64url. */
+  credentialId: string;
+  /** The passkey's PRF output, base64url. */
+  prfOutput: string;
+}
+export interface LockOpenPayload {
+  pin?: string;
+  /** The passkey's PRF output, base64url. Used where it is given; the PIN otherwise. */
+  prfOutput?: string;
+}
+export interface LockOpenResult extends RestoreSessionResult {
+  ok: boolean;
+  /** Wrong tries left before the lock and the cached session are removed. */
+  left: number;
+  /** They were removed: sign in again the ordinary way. */
+  removed: boolean;
 }
 
 export interface RestoreSessionResult {
   restored: boolean;
+  /** A session is cached but sealed under the lock: ask for the PIN or the device, then `lockOpen`. */
+  locked?: boolean;
   everydayPublicKey?: string;
   accountId?: string;
   everydayKeyDerived?: boolean;
@@ -361,6 +466,20 @@ export type WorkerActionMap = {
   signerRestore: [SignerSitePayload, SignerRestoreResult];
   signerTouch: [SignerTouchPayload, Record<string, never>];
   signerForget: [SignerSitePayload, Record<string, never>];
+  appEncrypt: [AppCryptPayload, { text: string }];
+  appDecrypt: [AppCryptPayload, { text: string }];
+  appDecryptEvent: [AppDecryptEventPayload, { text: string }];
+  loadProfile: [LoadProfilePayload, { profile?: Profile; relays?: string[] }];
+  takeBack: [TakeBackPayload, TakeBackResult];
+  signerCheck: [SignerSitePayload, SignerCheckResult];
+  lockStatus: [Record<string, never>, LockStatusResult];
+  lockEnable: [LockPinPayload, LockStatusResult];
+  lockSetDevice: [LockDevicePayload, LockStatusResult];
+  lockRemoveDevice: [Record<string, never>, LockStatusResult];
+  lockDisable: [Record<string, never>, LockStatusResult];
+  lockNow: [Record<string, never>, LockStatusResult];
+  lockOpen: [LockOpenPayload, LockOpenResult];
+  roomPass: [RoomPassPayload, NostrEvent];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];
   vaultList: [Record<string, never>, VaultListResult];

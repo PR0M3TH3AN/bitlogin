@@ -12,16 +12,31 @@
  */
 import type { HeadlessSigner } from "../headless.js";
 import { handoffMessage, readHandoffMessage } from "./policy.js";
+import { describePermissions, knownAppName, mayHold, type AppPermissions, type PermissionWords } from "./permissions.js";
+
+export { describePermissions, knownAppName, type AppPermissions, type PermissionWords };
+export { describeAllowed, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
+export { SIGN_LIMITS } from "./policy.js";
+export { askLockDevice } from "../lockDevice.js";
 
 export interface FoundSigner {
   /** The site the signer is embedded in, as the browser reported it to the signer. Show this, exactly. */
   readonly site: string;
   /**
+   * What the site said it wants, if it is an application (§SW9): already
+   * read and tidied. Show it, with `describePermissions`, before Allow. Null
+   * for a site that declared nothing: it is asking for a note and a reaction.
+   */
+  readonly wants: AppPermissions | null;
+  /**
    * Hand the signer the session's key, sealed inside the workers. Call it
-   * only after the user pressed Allow on a page that showed `site`. Resolves
+   * only after the user pressed Allow on a page that showed `site`. `remember`
+   * is whether they left it ticked. Resolves
    * true once the signer says it is unlocked.
    */
-  grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string): Promise<boolean>;
+  grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string, remember?: boolean): Promise<boolean>;
+  /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
+  readonly known: boolean;
 }
 
 export interface FindSignerOptions {
@@ -75,10 +90,15 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       clearTimeout(giveUp);
       settled = true;
       const { world, recipient } = msg;
+      // Checked again here, on the page that shows it: a set this site may not hold is no request at all.
+      const wants = msg.wants && mayHold(world, msg.wants) ? msg.wants : null;
       resolve({
         site: world,
-        async grant(session, name) {
-          const sealed = await session.exportHandoff(recipient);
+        wants,
+        known: knownAppName(world) !== null,
+        async grant(session, name, remember) {
+          // What is sealed is exactly what this page was given to show: the set, for the site the browser named.
+          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world, remember === true);
           const answered = new Promise<boolean>((done) => {
             onDone = done;
             setTimeout(() => done(false), 8000);

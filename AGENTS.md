@@ -33,6 +33,14 @@ Requires Node 22 (per CI). Run `npm install` first, then:
   SECURITY.md, "Dependency audit policy")
 - Run `npm run dev:demo` — serves the demo at :4173
 
+## Release channels
+
+Work lands on the `beta` branch and is tried on the beta site
+(`npm run deploy:beta`). `main` is production: merging to it redeploys
+`bitlogin.network`, the address people sign in at, so it changes only by a
+promotion pull request from `beta` that the owner merges. See
+`CONTRIBUTING.md`, "Release channels".
+
 ## Conventions
 
 - TypeScript ES modules; npm workspaces; vitest.

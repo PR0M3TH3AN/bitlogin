@@ -8,6 +8,95 @@ would plausibly want. Newest first.
 
 ## 2026-11-19
 
+**A site can be taken back from one place (`docs/take-back.md`).** For
+sites that sign in through the window.
+
+- **"Take it back" and "Sign out of every site" at `/sites/`** publish a
+  record, sealed to the user's own key, on their relays. Every embedded
+  signer asks for it on its first page load after Allow and then once a
+  day, and forgets its site if the record says so. It is not instant.
+- **A deployment must change one header:** the embedded signer's page
+  needs `connect-src 'self' wss:` where it had `connect-src 'self'`.
+  Without it the check cannot run, and a remembered site locks after three
+  days.
+- **A grant kept more than three days without a check that succeeded is
+  locked** until a relay answers.
+- **New on the headless signer:** `takeBack()`, `checkTakenBack()`;
+  `loadProfile()` takes `{ profile: false }` and also reads the user's
+  relay list (kind 10002). `startEmbeddedSigner()` takes relay options.
+
+**An optional lock (`docs/spec.md` §21.5, `docs/sign-in-window.md` §SW12).**
+Off unless the user turns it on, from the account screen.
+
+- **A PIN, and optionally the device's own unlock.** With it on, what the
+  browser keeps is sealed a second time, and the widget shows an unlock
+  screen on each page load and after fifteen minutes unused. Five wrong
+  tries sign the browser out.
+- **"Lock now"** on the account screen.
+- **For a host page:** locking fires `bitlogin-logout` and unlocking fires
+  `bitlogin-login`, as signing out and in do. Nothing changes for a user
+  who never turns it on.
+- **While it is on, no asking site is remembered:** each is allowed for
+  one visit.
+- **New on the headless signer:** `lockStatus()`, `lockOpen()`. `restore()`
+  resolves null while locked.
+
+**A world is held tighter, and an unknown site is remembered for a week
+where it was a month (`docs/sign-in-window.md` §SW11, §SW18).** For sites that sign in
+through the window.
+
+- **Three signatures a minute and twenty an hour** for a site that
+  declared no permissions, where it was six and sixty. NSWP's kit 0.28.0
+  uses the same numbers. An application's own limits (§SW9.6) are as they
+  were.
+- **A site is remembered unless the user unticks it in the window:**
+  thirty days for a site BitLogin knows, seven for any other (it was
+  thirty for all). Unticked, it is allowed for the visit and asks again
+  when its page is next loaded. `state` says `remembered: true` or
+  `false`.
+- **A room pass is counted apart from notes:** two a minute and ten an
+  hour.
+- **A page at the sign-in address, `/sites/`,** lists the sites allowed
+  from this browser. It cannot switch one off: a browser does not let it.
+- **`exportHandoff()` takes a fourth argument,** whether "remember" was
+  left ticked; `FoundSigner.grant()` a third, the same; `FoundSigner.known`
+  says whether BitLogin knows the address.
+
+**A world can know its visitor by name (`docs/sign-in-window.md` §SW16).**
+For a site that signs in through the window and declared no permissions.
+
+- **`state` carries `name`, `picture` and `about`,** from the person's own
+  signed profile. BitLogin's worker fetches and checks it at the sign-in
+  address and seals it into the hand-off; the site never supplies it.
+- **New request `{ t: "pass", id, session }`.** The reply is NSWP's room
+  pass (kind 27300) for the asking site, four hours long, naming that
+  session key. The site sends a session public key and nothing else.
+- **`sign` still refuses kind 27300.**
+- **New on the headless signer:** `loadProfile()`, `roomPass()`, and a
+  third argument to `exportHandoff()`: the site the hand-off is for.
+- **A site allowed before this build** keeps working, with no picture and
+  no profile name until the user is next asked there: its kept grant holds
+  no profile.
+
+**The browser can save a new password (`docs/TODO.md` item 11).** The
+generated password was shown as text only, so a browser or password manager
+had nothing to save from at sign-up, after recovery, or after a rotation,
+except in Chromium, which was asked outright.
+
+- **Sign-up, recovery and rotation are real forms now:** the login name
+  marked `username`, and the generated password in a field of type
+  `password` marked `new-password`. Rotation also keeps the old password
+  marked `current-password`, the shape a browser reads as a changed
+  password.
+- **The field cannot differ from the account's password.** It is put back
+  if it is typed in or filled by a password manager's own suggestion.
+- **Nothing for an integrator to change.** The saved login belongs to the
+  address the form is on: the application's, where the widget is embedded;
+  BitLogin's, in the sign-in window.
+- **Not verified:** the browsers' own prompts. The forms are checked in
+  three engines; whether each browser then offers to save and fill has to
+  be looked at by a person.
+
 **The embedded signer remembers a site (`docs/sign-in-window.md` §SW11).**
 It held the handed-over key in memory, so every load of the asking site's
 page began locked and the window had to be opened again.
@@ -69,6 +158,26 @@ that which belongs here.
   A site that never calls these is unaffected.
 - **Not here, at first:** the sign-in window page and the per-site
   permission list. They followed the same day: see the entry above.
+
+## 2026-11-19 (on `beta` only; not yet on `main`)
+
+- **An application can sign in through the sign-in window and then act in
+  the background.** It declares a permission set; the user sees all of it
+  once, in the window; after Allow it signs those kinds with no prompt for
+  thirty days or until the user signs out of it. New file to vendor:
+  `bitlogin-client.js` (`createBitLoginClient`). See
+  `docs/sign-in-window.md` §SW8 and §SW9.
+- **What an application may and may not have.** Never: wallet and
+  remote-signer traffic, NSWP passes and grants, BitLogin's own data. A
+  web-request proof is signed only for the application's own origin or one
+  it declared. Reading is tied to a signed event of a kind it declared, so
+  approval to read one kind is not approval to read another; raw decrypting
+  against the user's own key is not offered.
+- **Changed for integrators already on the window (worlds):** nothing. A
+  site that declares no permissions gets a note and a reaction, as before.
+- **A beta channel.** Work lands on the `beta` branch and
+  `https://bitlogin-beta.vercel.app/` before production
+  (`CONTRIBUTING.md`, "Release channels").
 
 ## 2026-11-18
 
