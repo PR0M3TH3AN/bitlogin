@@ -191,6 +191,34 @@ export interface HandoffAcceptResult {
   everydayPublicKey: string;
 }
 
+// ---- What the embedded signer remembers for a site (docs/sign-in-window.md §SW11) ----
+
+export interface SignerKeepPayload {
+  /** The asking site's origin, as the browser reported it. */
+  site: string;
+  /** When it stops, in seconds. Never kept past the limit, whatever this says. */
+  until: number;
+  name?: string;
+}
+
+export interface SignerSitePayload {
+  site: string;
+}
+
+export interface SignerTouchPayload {
+  site: string;
+  /** When the last signatures for this site were made, in milliseconds. */
+  signed: number[];
+}
+
+export interface SignerRestoreResult {
+  restored: boolean;
+  everydayPublicKey?: string;
+  until?: number;
+  name?: string;
+  signed?: number[];
+}
+
 export interface RestoreSessionResult {
   restored: boolean;
   everydayPublicKey?: string;
@@ -329,6 +357,10 @@ export type WorkerActionMap = {
   handoffBegin: [Record<string, never>, HandoffBeginResult];
   handoffExport: [HandoffExportPayload, HandoffSealed];
   handoffAccept: [HandoffSealed, HandoffAcceptResult];
+  signerKeep: [SignerKeepPayload, { kept: boolean }];
+  signerRestore: [SignerSitePayload, SignerRestoreResult];
+  signerTouch: [SignerTouchPayload, Record<string, never>];
+  signerForget: [SignerSitePayload, Record<string, never>];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];
   vaultList: [Record<string, never>, VaultListResult];

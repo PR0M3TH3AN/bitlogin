@@ -10,11 +10,15 @@
  * A site asks it to sign. It answers with the signed event, or with a refusal
  * that says nothing. It never hands out a key, and nothing is typed into it.
  *
- * It starts locked in every site, and stays locked until BitLogin's own
- * window (embedded/window.ts), where the user pressed Allow, hands it a key
- * that can only sign. It never restores what this browser keeps for this
- * origin, even where a browser would let it: a site that shares a
- * registrable domain with the sign-in address is treated like any other.
+ * It is locked in a site until BitLogin's own window (embedded/window.ts),
+ * where the user pressed Allow, hands it a key that can only sign. It then
+ * remembers that site, so they are not asked again each time its page is
+ * loaded: for thirty days, or until they sign out of the site (§SW11).
+ *
+ * It never restores this origin's own session, even where a browser would
+ * let it: what it takes up is only what it kept for the site it is in, and
+ * a site that shares a registrable domain with the sign-in address is
+ * treated like any other.
  *
  * Who is asking is what the browser says, never what the site says.
  */
@@ -53,16 +57,38 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   /** The hand-off in flight: the window that asked, and the word it gave. */
   let asking: { nonce: string; from: MessageEventSource } | null = null;
 
-  // Never restore(): what this browser keeps for this origin is not the asking site's to use.
+  // Never restore(): this origin's own session is not the asking site's to use.
   const load = async (): Promise<HeadlessSigner> => (headless ??= await createHeadlessSigner());
-  /** Lock: the key goes with the worker that held it. Nothing was stored, so there is nothing to clear. */
+  /** Lock: the site is forgotten, and the key goes with the worker that held it. */
   const lock = () => {
-    headless?.destroy();
+    const held = headless;
+    const forSite = site;
     headless = null;
     pubkey = null;
     name = null;
     until = 0;
+    if (held) void (forSite ? held.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => held.destroy());
   };
+  /**
+   * Take up what was kept for this site, once, as soon as it is known which
+   * site this is. Everything a site asks waits for it, so a page loaded
+   * again is answered "unlocked" from the first question.
+   */
+  let remembering: Promise<void> | null = null;
+  const remember = (): Promise<void> =>
+    (remembering ??= (async () => {
+      if (!site) return;
+      try {
+        const kept = await (await load()).restoreSignerGrant(site);
+        if (!kept) return;
+        pubkey = kept.pubkey;
+        name = kept.name ?? null;
+        until = kept.until;
+        gate = createSignGate(SIGN_LIMITS, kept.signed);
+      } catch {
+        /* nothing kept, or no storage here: the user is asked, as before */
+      }
+    })());
   const say = (reply: SignerReply) => {
     if (site) window.parent.postMessage(signerMessage(reply), site);
   };
@@ -79,6 +105,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     if (from !== site) return;
     const ask = readSignerRequest(e.data);
     if (!ask) return;
+    await remember();
     if (ask.t === "state") return say(state(ask.id));
     if (ask.t === "lock") {
       lock();
@@ -94,6 +121,8 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       const signed = await headless.signEvent(prepared);
       if (signed.pubkey !== pubkey) return refuse();
       say({ t: "signed", id: ask.id, event: signed });
+      // Counted where loading the page again can't lose the count.
+      void headless.touchSignerGrant(site, gate.times()).catch(() => {});
     } catch {
       refuse();
     }
@@ -106,6 +135,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     if (msg.t === "hello") {
       // Not yet known which site this is in (it hasn't spoken): the window is left to ask again.
       if (!site) return;
+      await remember();
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
@@ -120,11 +150,15 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     if (!asking || asking.nonce !== msg.nonce || asking.from !== e.source || msg.world !== site) return;
     asking = null;
     try {
-      const got = await (await load()).acceptHandoff(msg.sealed);
+      const signer = await load();
+      const got = await signer.acceptHandoff(msg.sealed);
       pubkey = got.pubkey;
       name = msg.name ?? null;
       until = Math.floor(Date.now() / 1000) + SIGN_LIMITS.grantSec;
       gate = createSignGate();
+      // Remembered for this site, so the user is not asked again when its page is next loaded. Where it can't be
+      // kept (a browser that gives an embedded page no storage), it lasts as long as the page does.
+      await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false);
       back({ t: "done", nonce: msg.nonce, ok: true });
     } catch {
       lock();
@@ -142,7 +176,13 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   // Said to the page that embeds this, where the browser says which page that is: it is here. Nothing is ever sent
   // to an address this doesn't know. Where the browser doesn't say (no ancestorOrigins), nothing is said: the site
   // asks "state" once the frame has loaded, and the answer goes to the address that question came from.
-  if (site) window.parent.postMessage(signerMessage({ t: "ready" }), site);
+  if (site) {
+    window.parent.postMessage(signerMessage({ t: "ready" }), site);
+    // And if this site was allowed before, it is told so without having to ask.
+    void remember().then(() => {
+      if (pubkey) say(state());
+    });
+  }
   return {
     embedded: true,
     stop() {

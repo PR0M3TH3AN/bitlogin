@@ -60,7 +60,9 @@ describe("signer hand-off", () => {
 describe("a session that arrived by a hand-off", () => {
   it("can sign and say who it is, and is refused everything else", async () => {
     const { SIGNER_ONLY_ACTIONS } = await import("./handoff.js");
-    for (const allowed of ["getPublicKey", "signEvent", "getSessionStatus", "logout"]) expect(SIGNER_ONLY_ACTIONS.has(allowed), allowed).toBe(true);
+    for (const allowed of ["getPublicKey", "signEvent", "getSessionStatus", "logout", "signerKeep", "signerRestore", "signerTouch", "signerForget"]) {
+      expect(SIGNER_ONLY_ACTIONS.has(allowed), allowed).toBe(true);
+    }
     for (const refused of [
       "exportIdentity", "handoffExport", "nip44Decrypt", "nip04Decrypt", "nip44Encrypt", "changePassword", "buildRecoveryExport",
       "vaultList", "vaultRevealNwc", "vaultSaveNwc", "vaultFindForOrigin", "publishProfileAndRelayLists", "restoreSession", "login", "register"
@@ -80,6 +82,15 @@ describe("a session that arrived by a hand-off", () => {
     const accept = handle.slice(handle.indexOf('case "handoffAccept"'), handle.indexOf('case "', handle.indexOf('case "handoffAccept"') + 10));
     expect(accept).toContain("session.signerOnly = true");
     expect(accept).not.toMatch(/persistSession|persistPublicSession|saveCachedSession|store\./);
+    // A full session is never written as a site's grant: only one that arrived by a hand-off is kept or counted.
+    for (const action of ["signerKeep", "signerTouch"]) {
+      const body = handle.slice(handle.indexOf(`case "${action}"`), handle.indexOf('case "', handle.indexOf(`case "${action}"`) + 10));
+      expect(body, action).toContain("if (!session.signerOnly) throw");
+    }
+    // And taking a grant up makes a signer-only session, never a full one, and writes nothing to the session cache.
+    const restore = handle.slice(handle.indexOf('case "signerRestore"'), handle.indexOf('case "signerTouch"'));
+    expect(restore).toContain("session.signerOnly = true");
+    expect(restore).not.toMatch(/persistSession|persistPublicSession|saveCachedSession|connectionVaultRoot/u);
     // Ending any session ends being signer-only with it.
     const clear = source.slice(source.indexOf("function clearSession()"), source.indexOf("function clearSession()") + 900);
     expect(clear).toContain("session.signerOnly = false");

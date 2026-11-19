@@ -1,6 +1,6 @@
 # The Sign-In Window and the Signer Hand-Off
 
-**Document version:** 0.2
+**Document version:** 0.3
 **Date:** 2026-11-19
 **Status:** Implemented, not deployed: the **signer hand-off** (§SW4:
 `worker/handoff.ts`, three worker actions, four methods on the headless
@@ -8,7 +8,8 @@ signer); the **embedded signer** and its rules (§SW5: `embedded/signer.ts`,
 `embedded/policy.ts`, built as `bitlogin-signer.js`); the **window's
 finding and handing over** (§SW3: `embedded/window.ts`, built as
 `bitlogin-window.js`); and both pages on BitLogin's own site
-(`/signer/`, `/connect/`), with the headers of §SW6. NOT implemented: what
+(`/signer/`, `/connect/`), with the headers of §SW6; and the signer
+**remembering a site** (§SW11: `worker/signerGrant.ts`). NOT implemented: what
 an application needs beyond a note and a reaction (§SW9), and adding a
 passkey to an existing account (§SW7). Both are design only.
 **Depends on:** `docs/spec.md` §22.1, §22.4, §26.3; `docs/passkey-login.md`.
@@ -94,8 +95,9 @@ frame worker    handoffAccept({ senderPublicKey, payload })
   `signEvent`. Every other action is refused before it runs: decrypting,
   encrypting, exporting the key, the vault, changing the account, handing
   the key on again. The list is `SIGNER_ONLY_ACTIONS`.
-- **It is never stored.** Accepting a hand-off writes nothing to the
-  session cache or the public record. Closing the page ends it.
+- **Accepting writes nothing.** A hand-off writes nothing to the session
+  cache or the public record. Whether it outlasts the page is a separate
+  step, for the embedded signer alone: §SW11.
 - **One at a time, used once.** The receiving worker's throwaway key is
   wiped when the hand-off is opened, or replaced if another is begun.
 - **The sealing is not what protects against the asking site.** The browser
@@ -125,8 +127,9 @@ Unlocking is not agreeing to everything. `embedded/policy.ts` is the list.
 - **A refusal never says why.** Locked, over the limit, the wrong kind and
   a malformed request all answer `refused`, with the request's id and
   nothing else.
-- **It ends** when the site's page closes, when the site is told to lock
-  (the user's own doing, from the site), or after four hours.
+- **It lasts** until the site is told to lock (the user's own doing, from
+  the site: signing out of it), or thirty days from Allow. Loading the
+  site's page again does not end it: §SW11.
 - **Nothing is addressed to "any origin".** Every message the signer sends
   goes to the site's address as the browser gave it, or to this origin. A
   site learns the signer is there by asking `state` once the frame has
@@ -134,9 +137,10 @@ Unlocking is not agreeing to everything. `embedded/policy.ts` is the list.
 - **The asking site's address is the browser's word:** `ancestorOrigins`
   where there is one, and otherwise the origin of the first message from
   the embedding page. Never anything a message says.
-- **It never restores this origin's session,** and touches no storage: a
-  site that shares a registrable domain with the sign-in address is treated
-  like any other. A test reads the source for this.
+- **It never restores this origin's own session.** What it takes up on a
+  page load is only what it kept for the site it is in (§SW11). A site that
+  shares a registrable domain with the sign-in address is treated like any
+  other. A test reads the source for this.
 
 Under the list is a floor BitLogin's worker keeps whatever a page does: a
 handed-over session can sign and nothing else (§SW4).
@@ -202,7 +206,57 @@ are needed before an application can sign in this way:
    default. It must not be the only one possible: the site is static, and
    anyone can serve it themselves.
 
-# SW10. Not covered
+# SW11. Remembering a site (implemented)
+
+The first version held the handed-over key in memory, so every load of the
+asking site's page began locked, and the window had to be opened again. The
+owner asked for that to stop (2026-11-19): being asked once for a site is
+the point, and a window on every page load is not that.
+
+So the signer remembers. When a hand-off is accepted, the worker keeps a
+**grant** for the asking site (`worker/signerGrant.ts`):
+
+- **What is kept:** the everyday key, the site's origin, the date it stops,
+  the name shown, and when the last signatures were made. AES-GCM, under a
+  non-extractable key held by IndexedDB: the same protection at rest as the
+  session cache (§21), and the same limits to it.
+- **Under names of its own.** A grant is never read as a full session, and
+  a full session is never written as a grant: only a session that arrived
+  by a hand-off can be kept, and what is taken up from a grant can only
+  sign (§SW4).
+- **For one site.** The record is filed under the site's origin and names
+  it inside; one moved under another site's name opens nothing. Another
+  address of the same site finds nothing.
+- **Thirty days from Allow,** never longer whatever is asked, and removed
+  when it is past its date.
+- **The count goes with it.** Six signatures a minute and sixty an hour are
+  counted across page loads, so loading the page again is not a way round
+  them.
+- **Signing out of the site forgets it.** `lock` deletes the grant.
+
+**Where it lives** is the embedded signer's own storage. A browser keeps
+that apart for each site the signer is embedded in, so the asking site
+cannot read it, and what is kept for one site is not there for another.
+
+**What it costs,** plainly:
+
+- The key is at rest in the browser for each site the user allowed, where
+  before it was only in the sign-in address's own storage.
+- A site the user allowed can have notes and reactions signed whenever they
+  have that site open, for thirty days, within the count. It cannot use the
+  signer when they are not there: the key is in their browser, never with
+  the site.
+- **The sign-in address cannot list or take back these grants.** A browser
+  does not let a page see what was stored for it inside other sites. They
+  end by signing out at the site, by their date, or by clearing the
+  browser's data. A list of allowed sites that can be taken back from one
+  place needs a different design (a record on relays that every signer
+  checks), and is not built.
+- Where a browser gives an embedded page no lasting storage (some do, or
+  clear it when the last tab of the site closes), nothing is kept, and the
+  user is asked again, as before.
+
+# SW12. Not covered
 
 - Safari, and phones, where a window is a tab: not tried.
 - An asking site that cuts its link to windows it opens: the window finds
