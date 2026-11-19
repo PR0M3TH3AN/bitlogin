@@ -42,6 +42,27 @@ export interface HeadlessSigner {
   signEvent(event: SignEventPayload): Promise<NostrEvent>;
   nip44Encrypt(peerPublicKey: string, plaintext: string): Promise<string>;
   nip44Decrypt(peerPublicKey: string, payload: string): Promise<string>;
+  /**
+   * Signer hand-off (docs/sign-in-window.md), receiving side, first step: a
+   * throwaway public key for a window of this same origin to seal the
+   * hand-off to. Use it once.
+   */
+  beginHandoff(): Promise<string>;
+  /**
+   * Sending side: seal this session's everyday key (and nothing else) to the
+   * receiving worker's throwaway key. Rejects if no session is unlocked, or
+   * if this session itself arrived by a hand-off. The caller must deliver the
+   * result only to a frame of this origin.
+   */
+  exportHandoff(recipientPublicKey: string): Promise<{ senderPublicKey: string; payload: string }>;
+  /**
+   * Receiving side, last step: open the hand-off. This signer then holds a
+   * signer-only session, in memory: it can sign and say who it is, and
+   * nothing else, and nothing is cached.
+   */
+  acceptHandoff(sealed: { senderPublicKey: string; payload: string }): Promise<{ pubkey: string }>;
+  /** Whether the unlocked session arrived by a hand-off and can only sign. */
+  isSignerOnly(): Promise<boolean>;
   /** Clear the cached session for this origin. */
   logout(): Promise<void>;
   /** Tear down the crypto worker. The signer is unusable afterward; create a
@@ -99,6 +120,21 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async nip44Decrypt(peerPublicKey, payload) {
       await requirePubkey();
       return (await client.nip44Decrypt({ peerPublicKey, payload })).plaintext;
+    },
+    async beginHandoff() {
+      return (await client.handoffBegin()).recipientPublicKey;
+    },
+    async exportHandoff(recipientPublicKey) {
+      await requirePubkey();
+      return client.handoffExport({ recipientPublicKey });
+    },
+    async acceptHandoff(sealed) {
+      const res = await client.handoffAccept(sealed);
+      pubkey = res.everydayPublicKey;
+      return { pubkey };
+    },
+    async isSignerOnly() {
+      return Boolean((await client.getSessionStatus()).signerOnly);
     },
     async logout() {
       await client.logout();

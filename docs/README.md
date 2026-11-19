@@ -15,6 +15,9 @@ for compatible applications.
 - [`login-methods.md`](./login-methods.md) — the widget as the single login
   surface: NIP-07 and NIP-46 sign-in behind the existing provider facade
   (implemented; nsec-paste login rejected on the record)
+- [`sign-in-window.md`](./sign-in-window.md) — the password typed at one
+  address, and a hidden signer other sites ask: the signer hand-off
+  (implemented); the window and permissions (a deployment's own)
 - [`passkey-login.md`](./passkey-login.md) — passkey sign-in via the WebAuthn
   PRF extension (implemented): zero registration, zero servers, a frozen
   derivation contract, and the graduation ladder to self-custody

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<meta name="robots" content="noindex" />
+<title>BitLogin — a site is asking</title>
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="../assets/site.css" />
+<link rel="stylesheet" href="../assets/connect.css" />
+</head>
+<body class="connect">
+
+<nav class="nav">
+  <span class="brand"><img class="lockup" src="../assets/lockup.svg" alt="BitLogin" /></span>
+</nav>
+
+<main class="connect-main">
+  <p id="status" class="connect-status" role="status">Looking for the site that asked.</p>
+
+  <section id="ask" class="connect-card" hidden>
+    <h1>Let this site sign notes as you?</h1>
+    <p id="site" class="connect-site"></p>
+    <p class="connect-small">Only allow a site you meant to visit. This is its address exactly as your browser reports it.</p>
+    <p>Signing as <strong id="who"></strong><span id="who-key" class="connect-key"></span>.</p>
+    <ul>
+      <li>It can post notes and reactions as you: a few a minute at most.</li>
+      <li>Each one is marked with this site's address.</li>
+      <li>It can't read your messages, change your profile or who you follow, or touch your account or anything in it.</li>
+      <li>It ends when you leave that site, or after four hours.</li>
+    </ul>
+    <p class="connect-small">Your key stays with BitLogin. The site never sees it, and nothing is typed there.</p>
+    <div class="cta-row">
+      <button id="allow" class="btn primary" type="button">Allow</button>
+      <button id="deny" class="btn secondary" type="button">Don't allow</button>
+    </div>
+  </section>
+
+  <section id="signin" class="connect-card" hidden>
+    <h1>Sign in to BitLogin first</h1>
+    <p>A site is asking to sign notes as you, and you aren't signed in on this device. Sign in here, and the question comes next.</p>
+    <p class="connect-small">Before you type anything, check the address above: it should be BitLogin's own. A site that asks for your BitLogin password on a page of its own is not to be trusted.</p>
+    <div id="widget-slot"></div>
+    <div class="cta-row"><button id="deny-2" class="btn secondary" type="button">Not now</button></div>
+  </section>
+</main>
+
+<script type="module" src="../vendor/bitlogin/bitlogin.js"></script>
+<script type="module" src="../assets/connect.js"></script>
+</body>
+</html>

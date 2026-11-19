@@ -49,6 +49,7 @@ import {
 } from "@bitlogin/core/vault";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
+import { openHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type SealedHandoff } from "./handoff.js";
 import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { SerialQueue } from "./serialQueue.js";
 import type { VaultConnectionSummary } from "./protocol.js";
@@ -71,7 +72,8 @@ import type {
   Nip04DecryptPayload,
   PreviewImportKeyPayload,
   Nip46ConnectPayload,
-  Nip46NostrconnectStartPayload
+  Nip46NostrconnectStartPayload,
+  HandoffExportPayload
 } from "./protocol.js";
 
 interface SessionState {
@@ -93,6 +95,10 @@ interface SessionState {
   connectionVaultRoot: Uint8Array | null;
   vaultKnown: boolean;
   vault: VaultSession | null;
+  /** True for a session that arrived by a signer hand-off (docs/sign-in-window.md):
+   *  the everyday key and nothing else, held in memory, never cached. Such a
+   *  session can sign and can say who it is. It can do nothing else. */
+  signerOnly: boolean;
 }
 
 const session: SessionState = {
@@ -106,8 +112,14 @@ const session: SessionState = {
   everydayKeyDerived: false,
   connectionVaultRoot: null,
   vaultKnown: false,
-  vault: null
+  vault: null,
+  signerOnly: false
 };
+
+/** The throwaway key a hand-off is to be sealed to, between handoffBegin and
+ *  handoffAccept. One at a time, used once. */
+let pendingHandoff: Uint8Array | null = null;
+
 
 let vaultRelayUrls: string[] = [...BUILTIN_VAULT_RELAYS];
 let discoveryRelayUrls: string[] = [...BUILTIN_DISCOVERY_RELAYS];
@@ -145,6 +157,7 @@ function clearSession(): void {
   if (session.connectionVaultRoot) session.connectionVaultRoot.fill(0);
   session.connectionVaultRoot = null;
   session.vaultKnown = false;
+  session.signerOnly = false;
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
@@ -357,7 +370,51 @@ function adoptNip46Client(client: Nip46Client, userPubkey: string): void {
 }
 
 async function handle(action: string, payload: unknown): Promise<unknown> {
+  if (session.signerOnly && !SIGNER_ONLY_ACTIONS.has(action)) {
+    throw new Error("This session can only sign. Sign in at your own BitLogin page for anything else.");
+  }
   switch (action) {
+    // ---- Signer hand-off (docs/sign-in-window.md) ----
+
+    // The receiving side, first: a throwaway key for the hand-off to be sealed to.
+    case "handoffBegin": {
+      if (pendingHandoff) wipe(pendingHandoff);
+      pendingHandoff = generatePrivateKey();
+      return { recipientPublicKey: getPublicKeyHex(pendingHandoff) };
+    }
+
+    // The sending side: this worker has the session, and seals the everyday
+    // key (only that) to the receiving worker's throwaway key.
+    case "handoffExport": {
+      const { everydayPrivateKey } = requireUnlocked();
+      const sender = generatePrivateKey();
+      try {
+        return sealHandoff(everydayPrivateKey, (payload as HandoffExportPayload).recipientPublicKey, sender);
+      } finally {
+        wipe(sender);
+      }
+    }
+
+    // The receiving side, last: open it with the throwaway key, which is
+    // then gone. What results is a signer-only session, in memory. It is
+    // never written to the session cache or the public record.
+    case "handoffAccept": {
+      if (!pendingHandoff) throw new Error("No hand-off was begun here.");
+      const mine = pendingHandoff;
+      pendingHandoff = null;
+      let key: Uint8Array;
+      try {
+        key = openHandoff(payload as SealedHandoff, mine);
+      } finally {
+        wipe(mine);
+      }
+      clearSession();
+      session.signer = new NostrSigner(key);
+      session.everydayPrivateKey = key;
+      session.signerOnly = true;
+      return { everydayPublicKey: session.signer.getPublicKey() };
+    }
+
     case "nip46Connect": {
       const p = payload as Nip46ConnectPayload;
       const pointer = parseBunkerUri(p.uri);
@@ -745,7 +802,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "getSessionStatus": {
-      return { unlocked: !!session.signer, everydayPublicKey: session.signer?.getPublicKey() };
+      return { unlocked: !!session.signer, everydayPublicKey: session.signer?.getPublicKey(), signerOnly: session.signerOnly };
     }
 
     // Called once, right after "configure", before the widget renders its welcome
@@ -950,6 +1007,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
+  "handoffBegin", "handoffExport", "handoffAccept",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

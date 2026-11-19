@@ -17,7 +17,7 @@ const vercel = JSON.parse(
     headers: Array<{ key: string; value: string }>;
   }>;
 };
-const demoPages = ["index.html", "docs.html", "account.html"].map((name) =>
+const demoPages = ["index.html", "docs.html", "account.html", "signer/index.html", "connect/index.html"].map((name) =>
   readFileSync(new URL(`../../demo/public/${name}`, import.meta.url), "utf8"),
 );
 
@@ -225,12 +225,21 @@ describe("widget security policy", () => {
     );
   });
 
+  // Three sets of headers (docs/sign-in-window.md §SW6): every page; the embedded signer, which other sites frame;
+  // and the sign-in window, which must keep its link to the page that opened it. Nothing else differs.
+  const ruleFor = (source: string) => {
+    const rule = vercel.headers.find((entry) => entry.source === source);
+    expect(rule, `a header rule for ${source}`).toBeTruthy();
+    return new Map(rule!.headers.map((header) => [header.key, header.value]));
+  };
+
   it("pins the deployment CSP and baseline browser headers", () => {
-    const headers = new Map(
-      vercel.headers
-        .flatMap((entry) => entry.headers)
-        .map((header) => [header.key, header.value]),
-    );
+    expect(vercel.headers.map((entry) => entry.source)).toEqual([
+      "/((?!signer/|connect/).*)",
+      "/signer/(.*)",
+      "/connect/(.*)",
+    ]);
+    const headers = ruleFor("/((?!signer/|connect/).*)");
     expect(headers.get("Content-Security-Policy")).toContain(
       "default-src 'none'",
     );
@@ -259,6 +268,42 @@ describe("widget security policy", () => {
         true,
       );
     }
+  });
+
+  it("lets other sites frame the embedded signer, and nothing else", () => {
+    const signer = ruleFor("/signer/(.*)");
+    const csp = signer.get("Content-Security-Policy") ?? "";
+    // It may be framed by an https site. It loads nothing from anywhere else and reaches no network but its own files.
+    expect(csp).toContain("frame-ancestors https:");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).not.toMatch(/connect-src[^;]*(wss:|https:)/u);
+    expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'");
+    expect(csp).not.toContain(" 'unsafe-eval'");
+    expect(csp).not.toMatch(/style-src|img-src|font-src/u);
+    // A header that forbids framing would contradict the policy above.
+    expect(signer.has("X-Frame-Options")).toBe(false);
+    for (const required of ["X-Content-Type-Options", "Referrer-Policy", "Permissions-Policy", "Cross-Origin-Resource-Policy"]) {
+      expect(signer.has(required), `${required} must be configured`).toBe(true);
+    }
+    // Exactly one rule anywhere allows framing.
+    const framable = vercel.headers.filter((entry) =>
+      entry.headers.some((h) => h.key === "Content-Security-Policy" && !h.value.includes("frame-ancestors 'none'")),
+    );
+    expect(framable.map((entry) => entry.source)).toEqual(["/signer/(.*)"]);
+  });
+
+  it("lets the sign-in window keep its link to the page that opened it, and nothing else", () => {
+    const everything = ruleFor("/((?!signer/|connect/).*)");
+    const connect = ruleFor("/connect/(.*)");
+    // The window finds the signer through window.opener. Cross-Origin-Opener-Policy: same-origin would cut that.
+    expect(connect.has("Cross-Origin-Opener-Policy")).toBe(false);
+    // In every other respect it is a page like any other: it is never framed, and has the same policy.
+    const rest = new Map(everything);
+    rest.delete("Cross-Origin-Opener-Policy");
+    expect([...connect]).toEqual([...rest]);
+    expect(connect.get("X-Frame-Options")).toBe("DENY");
+    expect(connect.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   });
 
   it("keeps demo pages free of inline scripts and remote font dependencies", () => {
