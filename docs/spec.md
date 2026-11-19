@@ -1472,6 +1472,7 @@ recovered.
    sign in.
 8. **While it is on, nothing is kept for an asking site** (§SW11): every
    site is allowed for one visit, so no key is at rest outside the lock.
+   With it off, a site is remembered unless the user unticks it.
 9. **What it is for:** someone who sits down at the browser. It does not
    stop malware on the device, or a copied browser profile: a short PIN is
    guessed quickly offline, and a count kept in software can be put back.

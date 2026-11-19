@@ -71,19 +71,25 @@ describe("remembering a site (§SW11): decided in the worker that seals the hand
   const to = getPublicKeyHex(recipient);
   const open = (also: { site?: unknown; remember?: unknown }) => openAppHandoff(sealHandoff(everyday, to, generatePrivateKey(), undefined, also), recipient).remember;
 
-  it("remembers a site BitLogin knows whatever is ticked, and any other only when ticked", () => {
-    expect(open({ site: "https://bitvid.network" })).toBe(true);
-    expect(open({ site: "https://bitvid.network", remember: false })).toBe(true);
-    expect(open({ site: "https://world.example" })).toBe(false);
+  it("remembers a site only where the tick was left on, known to BitLogin or not", () => {
     expect(open({ site: "https://world.example", remember: true })).toBe(true);
+    expect(open({ site: "https://bitvid.network", remember: true })).toBe(true);
+    expect(open({ site: "https://world.example" })).toBe(false);
+    expect(open({ site: "https://bitvid.network" })).toBe(false);
+    expect(open({ site: "https://bitvid.network", remember: false })).toBe(false);
     // Only a real tick counts, and a hand-off that names no site is never remembered.
     expect(open({ site: "https://world.example", remember: "yes" })).toBe(false);
     expect(open({ remember: true })).toBe(false);
-    // A look-alike of a known address is not known.
-    expect(open({ site: "https://bitvid.network.evil.example" })).toBe(false);
   });
 
-  it("holds a world to three signatures a minute and twenty an hour, and a visit to twelve hours", () => {
-    expect({ burst: SIGN_LIMITS.burst, hourly: SIGN_LIMITS.hourly, visitSec: SIGN_LIMITS.visitSec, grantSec: SIGN_LIMITS.grantSec }).toEqual({ burst: 3, hourly: 20, visitSec: 12 * 3600, grantSec: 30 * 24 * 3600 });
+  it("remembers nothing while the lock is on, whatever is ticked", () => {
+    const locked = (site: string) => openAppHandoff(sealHandoff(everyday, to, generatePrivateKey(), undefined, { site, remember: true, visitOnly: true }), recipient).remember;
+    expect(locked("https://world.example")).toBe(false);
+    expect(locked("https://bitvid.network")).toBe(false);
+  });
+
+  it("holds a world to three notes a minute and twenty an hour, two passes and ten, and a visit to twelve hours", () => {
+    const { burst, hourly, passBurst, passHourly, visitSec, grantSec, unknownGrantSec } = SIGN_LIMITS;
+    expect({ burst, hourly, passBurst, passHourly, visitSec, grantSec, unknownGrantSec }).toEqual({ burst: 3, hourly: 20, passBurst: 2, passHourly: 10, visitSec: 12 * 3600, grantSec: 30 * 24 * 3600, unknownGrantSec: 7 * 24 * 3600 });
   });
 });

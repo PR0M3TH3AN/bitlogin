@@ -18,6 +18,8 @@ const TOO_SOON_MS = 900;
 
 let found = null;
 let who = null;
+/** Whether the optional lock is on in this browser. Then nothing is kept for any site (§SW12). */
+let lockOn = false;
 let askedAt = 0;
 let finished = false;
 
@@ -61,18 +63,21 @@ const leave = () => {
 };
 
 /**
- * How long it lasts (§SW11). A site BitLogin knows is remembered for thirty days. Any other is allowed for this
- * visit, and remembered only if the box is ticked: it is never ticked for them.
+ * How long it lasts (§SW11). Remembered unless they untick it: thirty days for a site BitLogin knows, seven for
+ * any other. Unticked, it is for this visit. With the lock on, every site is for one visit, and there is no box.
  */
-const lasting = (what, row, box, line) => {
+const days = () => (found.known ? 30 : 7);
+const lasting = (what, row, box, label, line) => {
   const say = () => {
-    $(line).textContent =
-      found.known || $(box).checked
-        ? `It lasts until you sign out of that ${what}, or 30 days, on this device.`
+    $(line).textContent = lockOn
+      ? `It lasts for this visit: until that ${what}'s page is closed or loaded again. Your lock is on, so nothing is kept for any site.`
+      : $(box).checked
+        ? `It lasts until you sign out of that ${what}, or ${days()} days, on this device.`
         : `It lasts for this visit: until that ${what}'s page is closed or loaded again. Then you are asked again.`;
   };
-  $(row).hidden = found.known;
-  $(box).checked = false;
+  $(row).hidden = lockOn;
+  $(label).textContent = `Remember this ${what} on this device for ${days()} days`;
+  $(box).checked = !lockOn;
   $(box).onchange = say;
   say();
 };
@@ -103,7 +108,7 @@ const askApp = () => {
   $("app-name-line").hidden = !found.wants.name || !!known;
   $("app-who").textContent = who.name || shortKey(who.npub);
   $("app-who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
-  lasting("application", "remember-app-row", "remember-app", "app-lasts");
+  lasting("application", "remember-app-row", "remember-app", "remember-app-label", "app-lasts");
   fill("app-ordinary", words.ordinary);
   fill("app-sensitive", words.sensitive);
   $("app-sensitive-block").hidden = words.sensitive.length === 0;
@@ -120,7 +125,7 @@ const ask = () => {
   $("site").textContent = found.site;
   $("who").textContent = who.name || shortKey(who.npub);
   $("who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
-  lasting("site", "remember-row", "remember", "lasts");
+  lasting("site", "remember-row", "remember", "remember-label", "lasts");
   status("A site is asking to sign notes as you. Check the address.");
   $("ask").hidden = false;
   // Allow is never given the keys unasked: a key meant for the site, pressed as this window came up, must not land on it.
@@ -186,14 +191,14 @@ const allow = async (button) => {
   try {
     session = await prepare();
     await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
-    const remember = found.known || $(found.wants ? "remember-app" : "remember").checked;
+    const remember = !lockOn && $(found.wants ? "remember-app" : "remember").checked;
     const ok = await found.grant(session, who.name, remember);
     $("ask").hidden = true;
     $("ask-app").hidden = true;
     if (!ok) return status("That didn't work, and nothing was handed over. Close this window and try again from the site that opened it.");
     // Written down at the sign-in address, for the list of sites allowed. A record only: it lets nothing sign.
     const at = Math.floor(Date.now() / 1000);
-    recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (remember ? SIGN_LIMITS.grantSec : SIGN_LIMITS.visitSec), remembered: remember, ...(found.wants ? { wants: found.wants } : {}) });
+    recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (remember ? (found.known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec), remembered: remember, ...(found.wants ? { wants: found.wants } : {}) });
     const how = remember ? "until you sign out of it" : "for this visit";
     status(found.wants ? `Done. That application can act as you, as you allowed, ${how}.` : `Done. That site can sign notes as you ${how}.`);
     setTimeout(leave, 700);
@@ -220,6 +225,7 @@ if (!window.opener) {
   } else {
     who = await readCachedSession();
     const lock = who ? await (await theWorker()).lockStatus().catch(() => null) : null;
+    lockOn = lock?.on === true;
     if (!who) signIn();
     else if (lock?.locked) unlock(lock);
     else ask();

@@ -22,7 +22,7 @@
  */
 import { NostrSigner } from "@bitlogin/core/account";
 import { getPublicKeyHex } from "@bitlogin/core/crypto";
-import { knownAppName, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
 import { grantSite } from "./signerGrant.js";
 
@@ -107,9 +107,9 @@ export function sealHandoff(
   const forSite = also.site === undefined ? "" : grantSite(also.site);
   if (also.site !== undefined && (!forSite || (sealedApp && sealedApp.site !== forSite))) throw new Error("The hand-off names no usable site.");
   const profile = readProfile(also.profile);
-  // Remembered across page loads (§SW11): a site BitLogin knows, or one the user ticked "remember" for. Decided
-  // here, in the worker that holds the key, from the site's address and never from what a site says of itself.
-  const remember = !!forSite && also.visitOnly !== true && (knownAppName(forSite) !== null || also.remember === true);
+  // Remembered across page loads (§SW11) only where the user left "remember" ticked in the window, and never
+  // while the lock is on. How long is decided where it is kept, from the site's address (signerGrant.ts).
+  const remember = !!forSite && also.visitOnly !== true && also.remember === true;
   // A signer wipes the key it was given when it is destroyed. It is given a copy: the caller's is the caller's to wipe.
   const sender = new NostrSigner(senderPrivateKey.slice());
   try {

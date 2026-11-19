@@ -651,6 +651,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         ...(grant.name ? { name: grant.name } : {}),
         ...(grant.profile ? { profile: grant.profile } : {}),
         signed: grant.signed,
+        ...(grant.signedPass ? { signedPass: grant.signedPass } : {}),
         ...(grant.permissions ? { permissions: grant.permissions, signedSensitive: grant.signedSensitive ?? [] } : {})
       };
     }
@@ -666,7 +667,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (kept && getPublicKeyHex(kept.everydayPrivateKey) === getPublicKeyHex(everydayPrivateKey)) {
         await saveSignerGrant(
           store,
-          { ...kept, signed: Array.isArray(p.signed) ? p.signed : [], ...(kept.permissions ? { signedSensitive: Array.isArray(p.signedSensitive) ? p.signedSensitive : [] } : {}) },
+          { ...kept, signed: Array.isArray(p.signed) ? p.signed : [], ...(Array.isArray(p.signedPass) ? { signedPass: p.signedPass } : {}), ...(kept.permissions ? { signedSensitive: Array.isArray(p.signedSensitive) ? p.signedSensitive : [] } : {}) },
           now
         );
       }

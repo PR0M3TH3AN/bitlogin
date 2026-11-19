@@ -31,12 +31,11 @@ export interface FoundSigner {
   /**
    * Hand the signer the session's key, sealed inside the workers. Call it
    * only after the user pressed Allow on a page that showed `site`. `remember`
-   * is whether they ticked it; a known site is remembered either way. Resolves
+   * is whether they left it ticked. Resolves
    * true once the signer says it is unlocked.
    */
   grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string, remember?: boolean): Promise<boolean>;
-  /** Whether BitLogin knows this address. A known site is remembered for thirty days; any other only if the user
-   *  ticks "remember" (§SW11). */
+  /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
   readonly known: boolean;
 }
 

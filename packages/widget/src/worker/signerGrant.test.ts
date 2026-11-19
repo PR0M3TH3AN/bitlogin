@@ -60,8 +60,24 @@ describe("what the embedded signer remembers for a site", () => {
   it("is never kept longer than the limit, whatever is asked", async () => {
     const store = new TestStore();
     await saveSignerGrant(store, grant({ until: NOW + 10 * 365 * 24 * 3600 }), NOW);
-    expect((await loadSignerGrant(store, SITE, NOW))!.until).toBe(NOW + GRANT_LIMITS.keepSec);
-    expect(await loadSignerGrant(store, SITE, NOW + GRANT_LIMITS.keepSec + 1)).toBeNull();
+    // Seven days for a site BitLogin does not know, thirty for one it does: by the address, and nothing else.
+    expect((await loadSignerGrant(store, SITE, NOW))!.until).toBe(NOW + GRANT_LIMITS.unknownKeepSec);
+    expect(await loadSignerGrant(store, SITE, NOW + GRANT_LIMITS.unknownKeepSec + 1)).toBeNull();
+    const known = "https://bitvid.network";
+    await saveSignerGrant(store, grant({ site: known, until: NOW + 10 * 365 * 24 * 3600 }), NOW);
+    expect((await loadSignerGrant(store, known, NOW))!.until).toBe(NOW + GRANT_LIMITS.keepSec);
+    expect(await loadSignerGrant(store, known, NOW + GRANT_LIMITS.keepSec + 1)).toBeNull();
+    expect({ known: GRANT_LIMITS.keepSec, unknown: GRANT_LIMITS.unknownKeepSec }).toEqual({ known: 30 * 24 * 3600, unknown: 7 * 24 * 3600 });
+  });
+
+  it("keeps the count of room passes apart, across a page load", async () => {
+    const store = new TestStore();
+    await saveSignerGrant(store, grant({ signedPass: [5, 6, NaN as never] }), NOW);
+    expect((await loadSignerGrant(store, SITE, NOW))!.signedPass).toEqual([5, 6]);
+    await saveSignerGrant(store, grant({ signedPass: Array.from({ length: 40 }, (_, i) => i) }), NOW);
+    expect((await loadSignerGrant(store, SITE, NOW))!.signedPass).toHaveLength(GRANT_LIMITS.passKept);
+    await saveSignerGrant(store, grant(), NOW);
+    expect((await loadSignerGrant(store, SITE, NOW))!.signedPass).toBeUndefined();
   });
 
   it("keeps nothing that isn't a grant, or where it couldn't be kept encrypted", async () => {

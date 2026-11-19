@@ -61,7 +61,7 @@ export interface HeadlessSigner {
     app?: { site: string; permissions: unknown },
     /** The site the hand-off is for, as the signer reported it. Sealed with the key. */
     site?: string,
-    /** The user ticked "remember" in the window. A site BitLogin knows is remembered whatever this says. */
+    /** The user left "remember" ticked in the window. Without it nothing is kept. */
     remember?: boolean
   ): Promise<{ senderPublicKey: string; payload: string }>;
   /** The optional lock (docs/sign-in-window.md §SW12): whether it is on, and whether it is locked now. */
@@ -119,9 +119,9 @@ export interface HeadlessSigner {
    */
   restoreSignerGrant(
     site: string
-  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
+  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
-  touchSignerGrant(site: string, signed: number[], signedSensitive?: number[]): Promise<void>;
+  touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
   forgetSignerGrant(site: string): Promise<void>;
   /** Clear the cached session for this origin. */
@@ -234,11 +234,12 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         ...(res.name ? { name: res.name } : {}),
         ...(res.profile ? { profile: res.profile } : {}),
         signed: res.signed ?? [],
+        ...(res.signedPass ? { signedPass: res.signedPass } : {}),
         ...(res.permissions ? { permissions: res.permissions, signedSensitive: res.signedSensitive ?? [] } : {})
       };
     },
-    async touchSignerGrant(site, signed, signedSensitive) {
-      await client.signerTouch({ site, signed, ...(signedSensitive ? { signedSensitive } : {}) });
+    async touchSignerGrant(site, signed, signedSensitive, signedPass) {
+      await client.signerTouch({ site, signed, ...(signedSensitive ? { signedSensitive } : {}), ...(signedPass ? { signedPass } : {}) });
     },
     async forgetSignerGrant(site) {
       await client.signerForget({ site });

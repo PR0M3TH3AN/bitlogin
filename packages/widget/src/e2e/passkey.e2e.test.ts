@@ -526,10 +526,13 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow").click();
         await page.waitForTimeout(400);
         expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
-        // BitLogin does not know this address, so it is allowed for this visit unless "remember" is ticked. It
-        // is never ticked for them, and the window says which it will be.
+        // Remembered unless they untick it, and the window says for how long: seven days for an address BitLogin
+        // does not know. Unticked, it is for this visit.
         expect(await popup.locator("#remember-row").isVisible()).toBe(true);
-        expect(await popup.locator("#remember").isChecked()).toBe(false);
+        expect(await popup.locator("#remember").isChecked()).toBe(true);
+        expect(await popup.locator("#remember-row").textContent()).toContain("7 days");
+        expect(await popup.locator("#lasts").textContent()).toContain("7 days");
+        await popup.locator("#remember").uncheck();
         expect(await popup.locator("#lasts").textContent()).toContain("for this visit");
         await popup.waitForTimeout(800);
         await popup.locator("#allow").click();
@@ -544,12 +547,12 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(await ask({ t: "state" })).toMatchObject({ t: "state", unlocked: false });
         expect((await ask({ t: "sign", event: { kind: 1, content: "after the visit", tags: [] } })).t).toBe("refused");
 
-        // Asked again, and this time told to remember. The first window closes itself a moment after Allow.
+        // Asked again, and this time the tick is left on. The first window closes itself a moment after Allow.
         if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 10_000 }).catch(() => popup.close());
         const [popupAgain] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
         await popupAgain.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
-        await popupAgain.locator("#remember").check();
-        expect(await popupAgain.locator("#lasts").textContent()).toContain("30 days");
+        expect(await popupAgain.locator("#remember").isChecked()).toBe(true);
+        expect(await popupAgain.locator("#lasts").textContent()).toContain("7 days");
         await popupAgain.waitForTimeout(1000);
         await popupAgain.locator("#allow").click();
         await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
@@ -594,21 +597,26 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await page.waitForFunction(() => typeof (window as any).ask === "function");
         const afterReload = await ask({ t: "state" });
         expect(afterReload).toMatchObject({ t: "state", unlocked: true, pubkey: me, remembered: true });
-        expect(afterReload.until - Date.now() / 1000).toBeGreaterThan(29 * 24 * 3600);
+        // Seven days, for an address BitLogin does not know.
+        expect(afterReload.until - Date.now() / 1000).toBeGreaterThan(6 * 24 * 3600);
+        expect(afterReload.until - Date.now() / 1000).toBeLessThanOrEqual(7 * 24 * 3600);
         // No window was opened. (Not "the same number": the sign-in window may only now be closing.)
         expect(context.pages().length).toBeLessThanOrEqual(pagesBefore);
         const again = await ask({ t: "sign", event: { kind: 1, content: "after a reload", tags: [] } });
         expect(again.event).toMatchObject({ kind: 1, content: "after a reload", pubkey: me, tags: [["nswp:world", site]] });
         expect(afterReload).toMatchObject({ name: "Ada Lovelace", picture: "https://pictures.example/ada.png", about: "Line one line two" });
-        // Loading the page again is not a way round the count: three a minute, and that was the third, with the
-        // pass and the one signed before. A pass is counted like a signature.
+        // Loading the page again is not a way round the count: three notes a minute, and that was the second.
+        // The pass did not use one up: passes are counted apart.
         let more = 0;
         for (let i = 0; i < 4; i++) if ((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t === "signed") more++;
-        expect(more).toBe(0);
+        expect(more).toBe(1);
+        // Two passes a minute, and the first was made before the page was loaded again.
+        expect((await ask({ t: "pass", session: sessionKey })).t).toBe("signed");
         expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
         await page.reload();
         await page.waitForFunction(() => typeof (window as any).ask === "function");
         expect((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("refused");
+        expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
         // What is kept is not the key in the clear, and the site still can't read any of it.
         expect(await page.evaluate(() => (window as any).tryToRead().frame)).toBe("refused: SecurityError");
 
@@ -659,7 +667,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await lockedPopup.locator("#unlock-pin").fill("246810");
         await lockedPopup.locator("#unlock-go").click();
         await lockedPopup.locator("#allow").waitFor({ state: "visible", timeout: 60_000 });
-        await lockedPopup.locator("#remember").check();
+        // No box to tick: with the lock on, nothing is kept for any site, and the window says so.
+        expect(await lockedPopup.locator("#remember-row").isVisible()).toBe(false);
+        expect(await lockedPopup.locator("#lasts").textContent()).toContain("Your lock is on");
         await lockedPopup.waitForTimeout(1000);
         await lockedPopup.locator("#allow").click();
         await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
@@ -942,9 +952,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           "read its own saved data"
         ]);
         expect(await popup.locator("#app-sensitive li").allTextContents()).toEqual(["change your profile", "delete what you have posted"]);
-        // An application BitLogin does not know is remembered only if they say so.
-        expect(await popup.locator("#app-lasts").textContent()).toContain("for this visit");
-        await popup.locator("#remember-app").check();
+        // An application BitLogin does not know is remembered for seven days, unless they untick it.
+        expect(await popup.locator("#remember-app").isChecked()).toBe(true);
+        expect(await popup.locator("#app-lasts").textContent()).toContain("7 days");
         await popup.waitForTimeout(1000);
         await popup.locator("#allow-app").click();
         expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);

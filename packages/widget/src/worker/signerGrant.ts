@@ -15,15 +15,19 @@
  * off by the site it is embedded in. The asking site cannot read it.
  */
 import type { KeyValueStore } from "@bitlogin/core/storage";
-import { APP_LIMITS, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { APP_LIMITS, knownAppName, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
 
 const GRANT_PREFIX = "bitlogin:signer-grant:v1:";
 const GRANT_DEVICE_KEY = "bitlogin:signer-grant-device-key:v1";
 
 export const GRANT_LIMITS = {
-  /** The longest a site is remembered, in seconds: thirty days from Allow. */
+  /** The longest a site BitLogin knows is remembered, in seconds: thirty days from Allow. */
   keepSec: 30 * 24 * 3600,
+  /** The longest for a site it does not know: seven days. */
+  unknownKeepSec: 7 * 24 * 3600,
+  /** How many recent room passes are remembered, to count them across page loads. */
+  passKept: 10,
   /** How many recent signatures are remembered, to count them across page loads. */
   signedKept: 60
 } as const;
@@ -44,7 +48,12 @@ export interface SignerGrant {
   permissions?: AppPermissions;
   /** For an application: when its last sensitive signatures were made, counted apart (§SW9.6). */
   signedSensitive?: number[];
+  /** When the last room passes for this site were made, counted apart from notes (§SW16). */
+  signedPass?: number[];
 }
+
+/** How long a site may be kept from now, in seconds: by its address, never by anything it says of itself. */
+export const keepSecFor = (site: string): number => (knownAppName(site) !== null ? GRANT_LIMITS.keepSec : GRANT_LIMITS.unknownKeepSec);
 
 interface DeviceKeyStore {
   getOrCreateDeviceKey(key: string): Promise<CryptoKey>;
@@ -84,7 +93,7 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
   const site = grantSite(grant.site);
   if (!site || grant.everydayPrivateKey.length !== 32 || typeof store.getOrCreateDeviceKey !== "function") return false;
   // Never longer than the limit, whatever was asked.
-  const until = Math.min(Math.floor(grant.until), Math.floor(nowSeconds) + GRANT_LIMITS.keepSec);
+  const until = Math.min(Math.floor(grant.until), Math.floor(nowSeconds) + keepSecFor(site));
   if (!(until > nowSeconds)) return false;
   // Outside the try on purpose: with no source of randomness this throws, and nothing is kept. There is no
   // "carry on with something weaker" (crypto/random.ts, and the rule that guards it).
@@ -100,6 +109,7 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       // An application's public signatures are counted up to its own hourly limit, so more of them are kept.
       signed: grant.signed.filter((t) => Number.isFinite(t)).slice(-(grant.permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept)),
       ...(grant.permissions ? { permissions: grant.permissions } : {}),
+      ...(grant.signedPass?.length ? { signedPass: grant.signedPass.filter((t) => Number.isFinite(t)).slice(-GRANT_LIMITS.passKept) } : {}),
       ...(grant.permissions && grant.signedSensitive
         ? { signedSensitive: grant.signedSensitive.filter((t) => Number.isFinite(t)).slice(-APP_LIMITS.sensitive.hourly) }
         : {})
@@ -124,7 +134,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown };
     const profile = readProfile(p.profile);
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
     // again, and sees what is asked. It is never restored as a narrower or a wider one.
@@ -147,6 +157,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       ...(typeof p.name === "string" && p.name ? { name: p.name.slice(0, 48) } : {}),
       ...(profile ? { profile } : {}),
       signed: times(p.signed, permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept),
+      ...(times(p.signedPass, GRANT_LIMITS.passKept).length ? { signedPass: times(p.signedPass, GRANT_LIMITS.passKept) } : {}),
       ...(permissions ? { permissions, signedSensitive: times(p.signedSensitive, APP_LIMITS.sensitive.hourly) } : {})
     };
   } catch {

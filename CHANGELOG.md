@@ -24,23 +24,25 @@ Off unless the user turns it on, from the account screen.
 - **New on the headless signer:** `lockStatus()`, `lockOpen()`. `restore()`
   resolves null while locked.
 
-**A world is held tighter, and an unknown site is not remembered unless
-asked (`docs/sign-in-window.md` §SW11, §SW18).** For sites that sign in
+**A world is held tighter, and an unknown site is remembered for a week
+where it was a month (`docs/sign-in-window.md` §SW11, §SW18).** For sites that sign in
 through the window.
 
 - **Three signatures a minute and twenty an hour** for a site that
   declared no permissions, where it was six and sixty. NSWP's kit 0.28.0
   uses the same numbers. An application's own limits (§SW9.6) are as they
   were.
-- **Only a site BitLogin knows is remembered for thirty days.** Any other
-  is allowed for the visit, and asks again when its page is next loaded,
-  unless the user ticks "remember" in the window. `state` says
-  `remembered: true` or `false`. A site remembered before this build stays
-  remembered until its date.
+- **A site is remembered unless the user unticks it in the window:**
+  thirty days for a site BitLogin knows, seven for any other (it was
+  thirty for all). Unticked, it is allowed for the visit and asks again
+  when its page is next loaded. `state` says `remembered: true` or
+  `false`.
+- **A room pass is counted apart from notes:** two a minute and ten an
+  hour.
 - **A page at the sign-in address, `/sites/`,** lists the sites allowed
   from this browser. It cannot switch one off: a browser does not let it.
 - **`exportHandoff()` takes a fourth argument,** whether "remember" was
-  ticked; `FoundSigner.grant()` a third, the same; `FoundSigner.known`
+  left ticked; `FoundSigner.grant()` a third, the same; `FoundSigner.known`
   says whether BitLogin knows the address.
 
 **A world can know its visitor by name (`docs/sign-in-window.md` §SW16).**

@@ -461,21 +461,21 @@ So the signer remembers. When a hand-off is accepted, the worker keeps a
 - **For one site.** The record is filed under the site's origin and names
   it inside; one moved under another site's name opens nothing. Another
   address of the same site finds nothing.
-- **Only for a site BitLogin knows, or one the user ticked "remember"
-  for** (owner, 2026-11-19). The window shows the box for an address that
-  is not on BitLogin's list, and never ticks it for them. Any other site is
-  allowed for the visit: the key is held in memory, nothing is written
-  down, and it ends when the site's page is closed or loaded again, and
-  after twelve hours at the latest. Which it is to be is decided in the
-  worker that seals the hand-off, from the site's address, and travels
-  inside the seal; the worker that opens it keeps nothing unless the seal
-  says so. The signer's `state` reply says `remembered: true` or `false`.
-- **What this costs a world:** every world is an unknown address today, so
-  each asks on every visit unless the box was ticked. In a headset nothing
-  can ask, so a world meant for a headset needs the box ticked on a flat
-  browser first.
-- **Thirty days from Allow,** never longer whatever is asked, and removed
-  when it is past its date.
+- **Unless the user unticks "remember"** (owner, 2026-11-19; the first
+  rule that day was "only a known site, or one ticked", and was withdrawn
+  the same day: every world is an unknown address, a headset cannot open
+  the window, and the aim is one yes for a world and then no
+  interruptions). The window shows the box ticked, for every site. Left
+  ticked, the site is kept. Unticked, it is allowed for the visit: the key
+  is held in memory, nothing is written down, and it ends when the site's
+  page is closed or loaded again, and after twelve hours at the latest. The
+  tick travels inside the sealed hand-off; the worker that opens it keeps
+  nothing unless the seal says so. The signer's `state` reply says
+  `remembered: true` or `false`.
+- **Thirty days for a site BitLogin knows, seven for any other,** from
+  Allow. Decided where the grant is kept, from the site's address, and
+  never longer whatever is asked. Removed when it is past its date.
+- **Never while the lock is on** (§SW12): then every site is for one visit.
 - **The count goes with it.** Three signatures a minute and twenty an hour
   (NSWP's own numbers, from its kit 0.28.0; they were six and sixty) are
   counted across page loads, so loading the page again is not a way round
@@ -517,8 +517,8 @@ and in the widget wherever it runs:
 - Five wrong tries remove the lock and what this browser kept.
 - The sign-in window asks for it before Allow.
 - **While it is on, no site is remembered:** every site is allowed for one
-  visit, whatever is ticked and whether BitLogin knows it or not. So no key
-  is at rest outside the lock.
+  visit, whether BitLogin knows it or not, and the window shows no box to
+  tick. So no key is at rest outside the lock.
 
 **What is not built, and differs from the design below:**
 
@@ -724,8 +724,9 @@ then `name`, `picture`, `about` where the profile has them. Content empty.
 - **Refused** when the signer is locked, for an application, for a session
   key that is the identity key, for a hand-off that named no site (one made
   before this was built), and over the limit. A refusal says nothing.
-- **Counted like a signature:** three a minute and twenty an hour, with notes
-  and reactions, across page loads.
+- **Counted apart from notes** (owner, 2026-11-19, with NSWP's numbers):
+  two a minute and ten an hour, across page loads, so that signing in does
+  not use up a post.
 - **`sign` still refuses kind 27300.** The never-sign list is as it was.
   A pass for some other site is still BitPortal's alone to make (§SW9.4).
 - **The window says so** before Allow: the site can tell the other people

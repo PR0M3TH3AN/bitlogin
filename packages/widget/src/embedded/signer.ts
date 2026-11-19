@@ -23,7 +23,7 @@
  * Who is asking is what the browser says, never what the site says.
  */
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
-import { APP_LIMITS, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
+import { APP_LIMITS, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import type { Profile } from "./profile.js";
 import {
   cleanOrigin,
@@ -60,6 +60,9 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   /** Whether this site is kept across page loads, or allowed for this visit only (§SW11). */
   let remembered = false;
   let gate: SignGate = createSignGate();
+  /** Room passes, counted apart from notes (§SW16). */
+  const passLimits = { burst: SIGN_LIMITS.passBurst, perMs: SIGN_LIMITS.perMs, hourly: SIGN_LIMITS.passHourly };
+  let passGate: SignGate = createSignGate(passLimits);
   /** What an application was approved for (§SW9), as BitLogin's worker read it out of the sealed hand-off or the
    *  grant kept from one. Null for a site that declared nothing: a note and a reaction, as §SW5 has it. */
   let app: AppPermissions | null = null;
@@ -112,6 +115,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
         app = kept.permissions ?? null;
         if (app) gates = appGates(kept.signed, kept.signedSensitive);
         else gate = createSignGate(SIGN_LIMITS, kept.signed);
+        passGate = createSignGate(passLimits, kept.signedPass);
       } catch {
         /* nothing kept, or no storage here: the user is asked, as before */
       }
@@ -177,14 +181,14 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     }
 
     if (ask.t === "pass") {
-      // Not for an application: it is held to the set the user read. Counted like a signature, and the worker
-      // builds all of it, for the site the hand-off was sealed for.
-      if (app || ask.session === pubkey || !gate.take(Date.now())) return refuse();
+      // Not for an application: it is held to the set the user read. Counted apart from notes, so that signing
+      // in does not use up a post. The worker builds all of it, for the site the hand-off was sealed for.
+      if (app || ask.session === pubkey || !passGate.take(Date.now())) return refuse();
       try {
         const pass = await headless.roomPass(ask.session);
         if (pass.pubkey !== pubkey) return refuse();
         say({ t: "signed", id: ask.id, event: pass });
-        void headless.touchSignerGrant(site, gate.times()).catch(() => {});
+        void headless.touchSignerGrant(site, gate.times(), undefined, passGate.times()).catch(() => {});
       } catch {
         refuse();
       }
@@ -242,10 +246,12 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       pubkey = got.pubkey;
       name = msg.name ?? null;
       gate = createSignGate();
-      // A site BitLogin knows, or one the user ticked "remember" for, is kept, so they are not asked again when
-      // its page is next loaded. Any other is allowed for this visit: it lasts as long as the page does, and
-      // nothing is written down. So does one that can't be kept (a browser that gives an embedded page no storage).
-      until = Math.floor(Date.now() / 1000) + (got.remember ? SIGN_LIMITS.grantSec : SIGN_LIMITS.visitSec);
+      passGate = createSignGate(passLimits);
+      // A site the user left "remember" ticked for is kept, so they are not asked again when its page is next
+      // loaded: thirty days for one BitLogin knows, seven for any other. A site they unticked it for is allowed
+      // for this visit: it lasts as long as the page does, and nothing is written down. So does one that can't
+      // be kept (a browser that gives an embedded page no storage), and every site while the lock is on.
+      until = Math.floor(Date.now() / 1000) + (got.remember ? (knownAppName(site) !== null ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec);
       remembered = got.remember === true && (await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false));
       if (!remembered) until = Math.min(until, Math.floor(Date.now() / 1000) + SIGN_LIMITS.visitSec);
       back({ t: "done", nonce: msg.nonce, ok: true });

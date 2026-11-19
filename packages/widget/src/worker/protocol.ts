@@ -186,7 +186,7 @@ export interface HandoffExportPayload {
   app?: { site: string; permissions: unknown };
   /** The site the hand-off is for. Sealed with the key, so the worker that opens it knows which site it serves. */
   site?: string;
-  /** The user ticked "remember" in the window. A site BitLogin knows is remembered whatever this says. */
+  /** The user left "remember" ticked in the window. Without it nothing is kept. */
   remember?: boolean;
 }
 
@@ -245,6 +245,8 @@ export interface SignerTouchPayload {
   signed: number[];
   /** For an application: its sensitive signatures, counted apart. */
   signedSensitive?: number[];
+  /** Room passes, counted apart from notes. Left as they were when absent. */
+  signedPass?: number[];
 }
 
 export interface SignerRestoreResult {
@@ -254,6 +256,7 @@ export interface SignerRestoreResult {
   name?: string;
   profile?: Profile;
   signed?: number[];
+  signedPass?: number[];
   permissions?: AppPermissions;
   signedSensitive?: number[];
 }

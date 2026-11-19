@@ -177,9 +177,13 @@ that moved.
   The owner said yes to all four the same day.
   - [x] **Slower limits for a world:** 3 a minute and 20 an hour, the same
     as NSWP's kit 0.28.0. A room pass counts. On `beta`.
-  - [x] **Remember by trust (§SW11):** a site on `KNOWN_APPS` is remembered
-    30 days; any other is allowed for the visit unless "remember" is ticked
-    in the window. Decided and enforced in the workers. On `beta`.
+  - [x] **Remembering (§SW11),** as the owner settled it later the same
+    day through the NSWP session: on unless unticked, for every site;
+    thirty days for a site on `KNOWN_APPS`, seven for any other. The first
+    rule (unknown sites for one visit unless ticked) was built and
+    withdrawn. On `beta`.
+  - [x] **A room pass is counted apart from notes:** two a minute and ten
+    an hour, NSWP's numbers. On `beta`.
   - [x] **The list of sites allowed (§SW18):** `/sites/` at the sign-in
     address. On `beta`. It cannot switch a site off or show how often one
     signed: a browser does not let it.
