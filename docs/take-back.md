@@ -84,6 +84,11 @@ The sign-in address, with a full session.
 - It is published to the account's vault relays (`spec.md` §19): the
   relays every BitLogin worker already knows without being told, which is
   what lets a signer inside a site find it.
+- **And to the user's own write relays** (NIP-65, kind 10002), where they
+  differ: asked for by the owner on 2026-11-19, through the NSWP session.
+  That is where the user's other clients would look for anything of
+  theirs. See TB9, question 6, for why the signer still reads from the
+  vault relays alone.
 - Publishing needs two relays to accept it, as a capsule does. If fewer do,
   the page says the site was **not** taken back.
 - A new record carries everything the old one did. The page reads the
@@ -214,3 +219,19 @@ newest record seen. Neither is secret.
 5. **With this built, should memory get longer again?** Proposed: no.
    Seven days for a site BitLogin does not know is cheap, and it is the
    backstop when the record cannot be read.
+6. **Which relays does the signer read from?** The owner asked that relay
+   choice follow the user's own relay list (NIP-65). For writing, yes
+   (TB4). For the signer's reading, proposed: the vault relays only. A
+   user's relay list can name any relay at all, so reading from it would
+   mean letting the page that holds the key connect to any address
+   (`connect-src wss:`), which question 1 was written to avoid; and a
+   record that is on the vault relays is one every signer can find without
+   being told where to look. A BitLogin account's own relay list is the
+   vault relays today, so for most accounts the two are the same relays.
+   The other way round (carry the user's cleaned write relays inside the
+   hand-off, and open the policy to any relay) is possible, and is the
+   looser choice.
+
+Reported by the NSWP session on 2026-11-19: the owner answered question 1
+there, "yes use relays". The rest are open, and question 1 is still to be
+confirmed in BitLogin's own session before anything is built.
