@@ -220,9 +220,19 @@ newest record seen. Neither is secret.
      and sealed into the hand-off.
    - **The signer follows the list as it changes:** every check also reads
      their current kind 10002 and keeps it for the next check.
-   - Only `wss://` addresses with no credentials, query or fragment are
-     carried.
-   - A check needs one relay to answer. Dead relays cost nothing but time.
+   - Only `wss://` addresses to a public name are carried: no credentials,
+     query or fragment, no address written as numbers, nothing on this
+     machine, and no name that only means something inside a private
+     network. Where a public-looking name really leads is not something
+     the signer can tell.
+   - **The signer dials only these and BitLogin's own relays.** Nothing a
+     site can say to it carries an address.
+   - **A check needs two relays to answer.** One relay alone saying
+     "nothing" is not believed. Dead relays cost nothing but time.
+   - **Once a record has been seen, "no record" is not an answer.** A round
+     that returns none, or only an older one, or one that cannot be read,
+     is not a check, and the three-day clock keeps running. A record that
+     ends the grant ends it whatever else is true of the round.
 3. **How long may a grant go unchecked?** Checked on its first page load
    after Allow, then once a day; locked after three days with no check that
    succeeded.
@@ -246,6 +256,14 @@ newest record seen. Neither is secret.
   stale relies on BitLogin's vault relays alone, and those were chosen by a
   release. Keeping a user's relay list alive is `docs/relay-broadcast.md`
   (§RB4, §RB8), a design and not built.
+- **Follow-ups, from the NSWP session's review** (2026-11-19), not built:
+  - **The sockets are opened by the worker that holds the key.** A relay
+    client in a second worker with no key, handing over only finished
+    events to verify and decrypt, would keep relay bytes away from it.
+  - **Fewer relays asked.** Up to twelve are asked each day, and each
+    learns that this key is online from this address. A handful, rotated,
+    would tell fewer operators. It was left because BitLogin's own relays
+    are not dependable enough yet for a check that needs two answers.
 - **Not built: the widget inside an application.** An application that
   embeds the widget holds a full session, can sign anything, and is not
   reached by a take-back. It could also publish a newer, emptier record.

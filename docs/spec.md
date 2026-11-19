@@ -1494,8 +1494,11 @@ storage the sign-in address cannot reach. It is taken back with a record
    change it is making, so that no record gives back what an earlier one
    took, and shall date it later than the one it replaces.
 4. **A reader** shall believe only a validly signed record by the same
-   key, take the newest, not believe one dated more than ten minutes
-   ahead, and not believe one older than the newest it has already seen.
+   key, take the newest across every relay that answered, and not believe
+   one dated more than ten minutes ahead. A round counts as a check only
+   if two relays answered (or the only one asked), and, once a record has
+   been seen, only if it returned one that can be read and is no older. A
+   record that takes the key back shall be obeyed in any round.
 5. **A kept key shall be checked** against the record on its first use
    after it was kept and then at least once a day, and shall not be used
    once three days have passed with no relay answering.

@@ -112,7 +112,27 @@ export function newestTakeBackEvent(events: readonly unknown[], pubkey: string, 
   return best;
 }
 
-/** A relay address as a signer may be handed one: `wss://` (or loopback, for development), with nothing odd in it. */
+/**
+ * Whether a host is one a signer may be sent to on a user's say: a public
+ * name. Not an address written as numbers, not this machine, and not a name
+ * that only means something inside a private network. A relay list is input
+ * from whoever wrote it, and the page that follows it holds a key: it is not
+ * to be pointed at a router or a service on the user's own network.
+ *
+ * It cannot tell where a public-looking name really leads. That is the
+ * browser's and the network's to refuse.
+ */
+export function isPublicRelayHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/u, "");
+  if (!host.includes(".") || host.startsWith("[") || host.includes(":")) return false;
+  if (/^[0-9.]+$/u.test(host) || /^0x/u.test(host)) return false;
+  // Every label an ordinary one, and the last not a number: "1.2.3.4" in any spelling is not a name.
+  const labels = host.split(".");
+  if (!labels.every((label) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/u.test(label)) || /^[0-9]+$/u.test(labels[labels.length - 1]!)) return false;
+  return !["localhost", "local", "internal", "lan", "home", "intranet", "private", "corp", "test", "invalid", "onion"].includes(labels[labels.length - 1]!);
+}
+
+/** A relay address as a signer may be handed one: `wss://` to a public name, with nothing odd in it. */
 export function cleanRelays(input: unknown, limit: number = TAKE_BACK_LIMITS.relays): string[] {
   if (!Array.isArray(input)) return [];
   const out: string[] = [];
@@ -124,7 +144,7 @@ export function cleanRelays(input: unknown, limit: number = TAKE_BACK_LIMITS.rel
     } catch {
       continue;
     }
-    if (url.search) continue;
+    if (url.protocol !== "wss:" || url.search || !isPublicRelayHost(url.hostname)) continue;
     const clean = `${url.protocol}//${url.host}${url.pathname === "/" ? "" : url.pathname}`;
     if (!out.includes(clean)) out.push(clean);
     if (out.length >= limit) break;
@@ -148,6 +168,26 @@ export function writeRelaysFrom(events: readonly unknown[], pubkey: string, limi
     best.tags.filter((tag) => tag[0] === "r" && (tag[2] === undefined || tag[2] === "write")).map((tag) => tag[1]),
     limit
   );
+}
+
+/**
+ * Whether a round of asking relays told a signer anything it can rely on,
+ * given that it found no record that ends the grant. Not every answer does:
+ *
+ *  - one relay alone saying "nothing" is not "nothing was taken back": two
+ *    must answer (or the one, where only one was asked);
+ *  - once a record has been seen, a round that returns none at all, or only
+ *    an older one, did not find what is known to exist: a record cannot
+ *    stop existing, so it is being held back or has been dropped;
+ *  - a newest record that cannot be read says nothing either way.
+ *
+ * A round that told it nothing is not a check, and the three-day clock
+ * keeps running.
+ */
+export function checkLearned(round: { asked: number; answered: number; seenAt: number; newestAt: number | null; readable: boolean }): boolean {
+  if (round.answered < Math.min(2, round.asked) || round.answered === 0) return false;
+  if (round.newestAt === null) return round.seenAt === 0;
+  return round.readable && round.newestAt >= round.seenAt;
 }
 
 /** What to do about a kept grant now: nothing, check behind the answer, or check before answering. */

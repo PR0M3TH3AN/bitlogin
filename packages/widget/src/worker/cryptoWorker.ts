@@ -59,6 +59,7 @@ import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.
 import { deleteSignerGrant, grantedAt, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
   checkDue,
+  checkLearned,
   cleanRelays,
   isTakenBack,
   mergeTakenBack,
@@ -869,19 +870,27 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       } finally {
         pool.closeAll();
       }
-      // No relay answered: nothing was learned. A grant too long unchecked is locked until one does.
-      if (records.respondedCount === 0) return { state: due === "overdue" ? "stale" : "ok" };
       // The page was closed, or the site signed out of, while relays were answering.
       if (session.signer !== signer) return { state: "ok" };
+      // The newest valid record across every relay that answered: never the first to arrive.
       const newest = newestTakeBackEvent(records.outcomes.flatMap((o) => o.events), me, now);
-      // An older record than one already seen is a relay behind the times, or one holding the newer one back.
-      // The newer one was read when it was seen, and did not end this grant.
-      const record = newest && newest.created_at >= (grant.seenAt ?? 0) ? openTakenBack(signer, newest.content) : null;
+      const record = newest ? openTakenBack(signer, newest.content) : null;
+      // Whatever else is true of this round, a record that ends the grant ends it.
       if (record && isTakenBack(record, site, at)) {
         await deleteSignerGrant(store, site);
         clearSession();
         return { state: "ended" };
       }
+      // Otherwise the round counts as a check only if it could have found one (takeBack.ts, checkLearned).
+      const learned = checkLearned({
+        asked: relayUrls.length,
+        answered: records.respondedCount,
+        seenAt: grant.seenAt ?? 0,
+        newestAt: newest ? newest.created_at : null,
+        readable: record !== null
+      });
+      // Nothing was learned. A grant too long unchecked is locked until something is.
+      if (!learned) return { state: due === "overdue" ? "stale" : "ok" };
       // They may have changed where they write since: the next check follows their list as it is now.
       const theirs = writeRelaysFrom(lists.outcomes.flatMap((o) => o.events), me);
       await saveSignerGrant(

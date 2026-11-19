@@ -192,6 +192,9 @@ that moved.
     user's relays; every embedded signer reads it on its first page load
     and then daily, and forgets its site. The signer's page may now contact
     relays (`connect-src 'self' wss:`), by the owner's decision. On `beta`.
+  - [ ] **Two follow-ups to the take-back check** (`take-back.md` §TB10):
+    a relay client in a worker that holds no key, and asking a handful of
+    relays where it asks up to twelve.
   - [ ] **Try a take-back on public relays.** Some of the vault relays
     refuse keys they do not know. Tested on mock relays only.
   - [ ] **Keep a user's relay list alive** (item 10): the take-back check

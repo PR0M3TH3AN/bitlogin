@@ -3,7 +3,9 @@ import { generatePrivateKey, getPublicKeyHex } from "@bitlogin/core/crypto";
 import { signNostrEvent } from "@bitlogin/core/nostr";
 import {
   checkDue,
+  checkLearned,
   cleanRelays,
+  isPublicRelayHost,
   isTakenBack,
   mergeTakenBack,
   newestTakeBackEvent,
@@ -16,7 +18,7 @@ import {
   writeRelaysFrom,
   writeTakenBack
 } from "./takeBack.js";
-import { NEVER_KINDS, signClass } from "./policy.js";
+import { NEVER_KINDS, readSignerRequest, signClass } from "./policy.js";
 import { prepareForApp, readPermissions } from "./permissions.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS } from "../worker/handoff.js";
 
@@ -140,6 +142,7 @@ describe("where a signer looks (NIP-65)", () => {
         "wss://one.example/",
         // Not over TLS: refused. (Written in two parts so that a scanner does not take it for a connection.)
         `${"ws"}://plain.example`,
+        `${"ws"}://127.0.0.1:7777`,
         "https://not-a-relay.example",
         "wss://user:pw@creds.example",
         "wss://query.example/?x=1",
@@ -155,6 +158,79 @@ describe("where a signer looks (NIP-65)", () => {
     expect(cleanRelays("wss://one.example")).toEqual([]);
     // A stranger's list of five hundred relays is four relays.
     expect(writeRelaysFrom([list(Array.from({ length: 500 }, (_, i) => ["r", `wss://r${i}.example`]))], me)).toHaveLength(TAKE_BACK_LIMITS.relays);
+  });
+});
+
+describe("which addresses a signer will dial", () => {
+  it("is never sent to this machine or a private network on a relay list's say", () => {
+    for (const host of ["relay.example.com", "nos.lol", "a-b.relay.example.org", "relay.example.com."]) expect(isPublicRelayHost(host), host).toBe(true);
+    for (const host of [
+      "localhost",
+      "relay",
+      "127.0.0.1",
+      "10.0.0.5",
+      "192.168.1.1",
+      "169.254.169.254",
+      "0x7f.0.0.1",
+      "2130706433",
+      "1.2.3.4.",
+      "[::1]",
+      "::1",
+      "fe80::1",
+      "router.local",
+      "nas.lan",
+      "db.internal",
+      "app.localhost",
+      "printer.home",
+      "x.corp",
+      "hidden.onion",
+      "bad_host.example.com",
+      "-bad.example.com",
+      ""
+    ]) {
+      expect(isPublicRelayHost(host), host).toBe(false);
+    }
+    // And so none of them is ever carried to a signer, whatever a relay list says.
+    const sneaky = ["wss://127.0.0.1:4848", "wss://localhost", "wss://[::1]/", "wss://192.168.1.1", "wss://router.local", `${"ws"}://127.0.0.1:7777`, `${"ws"}://localhost:7777`, "wss://10.0.0.5/relay"];
+    expect(cleanRelays(sneaky)).toEqual([]);
+    expect(cleanRelays([...sneaky, "wss://real.example.com"])).toEqual(["wss://real.example.com"]);
+  });
+
+  it("has no way to be told an address by the site it is embedded in", () => {
+    // What a site can say to the signer is this list, and none of it carries a relay. Anything more is not read.
+    const base = { nswp: "nswp-signer", v: 1, id: "a1", relays: ["wss://evil.example.com"], vaultRelays: ["wss://evil.example.com"], relay: "wss://evil.example.com" };
+    for (const t of ["state", "lock"]) expect(readSignerRequest({ ...base, t })).toEqual({ t, id: "a1" });
+    expect(readSignerRequest({ ...base, t: "sign", event: { kind: 1 } })).toEqual({ t: "sign", id: "a1", event: { kind: 1 } });
+    expect(readSignerRequest({ ...base, t: "pass", session: "a".repeat(64) })).toEqual({ t: "pass", id: "a1", session: "a".repeat(64) });
+    for (const t of ["check", "signerCheck", "relays", "configure", "takeBack"]) expect(readSignerRequest({ ...base, t }), t).toBeNull();
+    // A set of permissions has no place for one either.
+    expect(JSON.stringify(readPermissions({ name: "App", sign: [1], relays: ["wss://evil.example.com"] }))).not.toContain("evil");
+  });
+});
+
+describe("what counts as having checked", () => {
+  const round = (over: Partial<Parameters<typeof checkLearned>[0]>) => checkLearned({ asked: 6, answered: 3, seenAt: 0, newestAt: null, readable: false, ...over });
+
+  it("needs two relays to answer, or the only one asked", () => {
+    expect(round({ answered: 0 })).toBe(false);
+    expect(round({ answered: 1 })).toBe(false);
+    expect(round({ answered: 2 })).toBe(true);
+    expect(round({ asked: 1, answered: 1 })).toBe(true);
+    expect(round({ asked: 0, answered: 0 })).toBe(false);
+  });
+
+  it("does not take 'no record' for an answer once one has been seen", () => {
+    expect(round({ seenAt: 0, newestAt: null })).toBe(true);
+    // A record that existed cannot have stopped existing: it is being held back, or was dropped.
+    expect(round({ seenAt: NOW, newestAt: null })).toBe(false);
+    expect(round({ seenAt: NOW, newestAt: NOW - 1, readable: true })).toBe(false);
+    expect(round({ seenAt: NOW, newestAt: NOW, readable: true })).toBe(true);
+    expect(round({ seenAt: NOW, newestAt: NOW + 5, readable: true })).toBe(true);
+  });
+
+  it("learns nothing from a record it cannot read", () => {
+    expect(round({ newestAt: NOW, readable: false })).toBe(false);
+    expect(round({ seenAt: NOW - 9, newestAt: NOW, readable: false })).toBe(false);
   });
 });
 
@@ -176,7 +252,7 @@ describe("when a kept grant is checked", () => {
     const everyday = generatePrivateKey();
     const recipient = generatePrivateKey();
     const to = getPublicKeyHex(recipient);
-    const opened = openAppHandoff(sealHandoff(everyday, to, generatePrivateKey(), undefined, { site: A, remember: true, at: NOW + 0.7, relays: ["wss://mine.example", "http://nope.example"] }), recipient);
+    const opened = openAppHandoff(sealHandoff(everyday, to, generatePrivateKey(), undefined, { site: A, remember: true, at: NOW + 0.7, relays: ["wss://mine.example", "http://nope.example", "wss://127.0.0.1:1"] }), recipient);
     expect(opened.at).toBe(NOW);
     expect(opened.relays).toEqual(["wss://mine.example"]);
     const bare = openAppHandoff(sealHandoff(everyday, to, generatePrivateKey()), recipient);
