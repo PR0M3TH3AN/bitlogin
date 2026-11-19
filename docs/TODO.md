@@ -1,6 +1,111 @@
 # BitLogin — open items
 
-Updated: 2026-11-18
+Updated: 2026-11-19
+
+## Sign-in window: what shipped, and what is next (2026-11-19)
+
+A site that embeds the widget can read the password as it is typed, and one
+BitLogin account is one identity on every site. So the password is now typed
+at one address, BitLogin's own, and other sites ask a hidden signer of that
+address. Design: `docs/sign-in-window.md`. Asked for by the owner while
+building signing inside NSWP worlds; the first asking site is that
+repository's flat demo (`docs/plans/signin-demo`).
+
+**Shipped, and live at `https://bitlogin.network`:**
+
+- `/signer/` (embedded unseen by a site) and `/connect/` (the window a site
+  opens), with headers of their own (§SW6). Pull requests #31 and #33.
+- The key moves from the window to the signer inside the crypto workers
+  (§SW4). What arrives can only sign.
+- The signer signs a note and a reaction for a site the user allowed, marks
+  each with the site's address, and refuses everything else (§SW5).
+- It remembers a site for thirty days, encrypted at rest, until the user
+  signs out of it there (§SW11).
+
+**Owner decisions taken 2026-11-19:**
+
+- BitLogin's own site is the sign-in address for every BitLogin system,
+  BitPortal included. It is the default and must not be the only one
+  possible: the site is static and anyone can serve it.
+- A password is never typed into an asking site.
+- A site the user allowed stays allowed across page loads.
+- An optional lock, with a PIN as one way to open it, even though a PIN is
+  not a strong gate: some people want one for privacy at home.
+- One press for a new site stays for now. Ways to lighten it are to be
+  explored (§SW15).
+- Several profiles on a device, natively.
+
+**Next, in this order.** None is started. Each is the owner's to release:
+merging to `main` deploys the site.
+
+- [ ] **1. The optional lock (§SW12).** Off by default. Opened by a
+  BitLogin PIN or by the device's own unlock through a passkey used only as
+  a wrapping key. Covers what the signer remembers for each site.
+  - Starts in `spec.md` §21: it is key handling at rest.
+  - The PIN wrap needs both the device key and an Argon2id-stretched key. A
+    count of wrong tries removes the record. The PIN is never a credential.
+  - The device's unlock makes no account and no capsule, and leaves the
+    derivation chain alone (see "Standing rule" below).
+  - The embedded signer's page gains a small panel for this one thing: its
+    policy (§SW6), the policy tests, and the site-to-signer messages change
+    with it. The NSWP kit must show the frame and allow it the passkey
+    prompt.
+  - Say in the interface what a PIN does not protect against, where it is
+    turned on.
+  - Decide: how long unused before it locks (fifteen minutes suggested), and
+    how many wrong tries (eight suggested).
+  - Browser test: lock, unlock by each way, wrong tries, a reload, and that
+    a site can read none of it.
+- [ ] **2. The same lock on the sign-in address's own session (§SW13).**
+  Then a new site is: the window, unlock, Allow, with no password.
+- [ ] **3. Several profiles.** `docs/account-switching.md` first (a design,
+  not built), then the picker in the window and a profile per remembered
+  site (§SW14).
+- [ ] **4. What an application declares (§SW9).** A note and a reaction are
+  not enough for an app. From a read of their code on 2026-11-19: bitunlock
+  asks its signer for web-request proofs, private messages and a wallet
+  connection; bitvid for video events, lists, reposts, deletions, zap
+  requests, application data, and encrypting and decrypting. Needs a
+  permission the app declares and the user sees, and a session between "can
+  only sign" and "everything". bitvid, bitunlock and BitPortal move onto
+  the window only after this.
+- [ ] **5. Explore fewer presses for a new site (§SW15).** The browser's
+  storage-access permission, and its federated sign-in. Neither is tried.
+  The one deliberate act stays; the window is what might go.
+- [ ] **6. One place to see and take back the sites allowed.** Not
+  possible as built: a browser does not let the sign-in address see what
+  was kept for it inside other sites (§SW11). Needs a design, perhaps a
+  record on relays every signer checks.
+- [ ] **7. Names of BitLogin's own.** The messages and the tag are NSWP's
+  (`nswp-signer`, `nswp-handoff`, `nswp:world`), kept so that kit worked
+  unchanged. Decide BitLogin's with the version item 4 needs.
+
+**Owner action items:**
+
+- [ ] Try the live flow with your own account, including a reload:
+  `?at=live` on the NSWP flat demo. Tried so far only with throwaway
+  accounts in the browser test.
+- [ ] Try it in Safari, Brave and on a phone. Some browsers give an
+  embedded page no lasting storage, and then a site is asked for again on
+  every load.
+- [ ] Confirm `bitlogin.network` as the sign-in address for good before
+  item 1 ships. A device-unlock passkey is bound to the address it was made
+  at. Changing the address later costs each user one ordinary sign-in, not
+  an identity, but it should be chosen on purpose.
+
+**Notes for whoever builds this:**
+
+- CI's `static-analysis` job runs `semgrep scan --config auto`, which is
+  broader than `npm run security:semgrep`. Run both before pushing. Two
+  things it caught on 2026-11-19: a message posted to any origin, and
+  randomness asked for inside a `try`.
+- Pushing a branch makes a preview deployment and merging makes a
+  production one. `vercel curl <path> --deployment <url> -- -sI` reads a
+  protected preview's headers.
+- The browser tests need the demo built first (`npm run build:demo`).
+- Nothing here signs anyone in from automation: the browser tests make
+  throwaway accounts against the mock relays.
+
 
 ## Relay-loss response (2026-11-18)
 

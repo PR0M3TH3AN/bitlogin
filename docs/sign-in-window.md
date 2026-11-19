@@ -1,6 +1,6 @@
 # The Sign-In Window and the Signer Hand-Off
 
-**Document version:** 0.3
+**Document version:** 0.4
 **Date:** 2026-11-19
 **Status:** Implemented, not deployed: the **signer hand-off** (§SW4:
 `worker/handoff.ts`, three worker actions, four methods on the headless
@@ -9,9 +9,11 @@ signer); the **embedded signer** and its rules (§SW5: `embedded/signer.ts`,
 finding and handing over** (§SW3: `embedded/window.ts`, built as
 `bitlogin-window.js`); and both pages on BitLogin's own site
 (`/signer/`, `/connect/`), with the headers of §SW6; and the signer
-**remembering a site** (§SW11: `worker/signerGrant.ts`). NOT implemented: what
-an application needs beyond a note and a reaction (§SW9), and adding a
-passkey to an existing account (§SW7). Both are design only.
+**remembering a site** (§SW11: `worker/signerGrant.ts`). NOT implemented, design only:
+what an application needs beyond a note and a reaction (§SW9), adding a
+passkey to an existing account (§SW7), the optional lock (§SW12, §SW13),
+profiles in the window (§SW14), and fewer presses for a new site (§SW15).
+The order of work is in `docs/TODO.md`.
 **Depends on:** `docs/spec.md` §22.1, §22.4, §26.3; `docs/passkey-login.md`.
 
 ---
@@ -206,6 +208,11 @@ are needed before an application can sign in this way:
    default. It must not be the only one possible: the site is static, and
    anyone can serve it themselves.
 
+# SW10. (Not used)
+
+The number belonged to a section that moved. It is kept empty so that
+references to §SW11 and later, in the code and elsewhere, stay right.
+
 # SW11. Remembering a site (implemented)
 
 The first version held the handed-over key in memory, so every load of the
@@ -256,7 +263,143 @@ cannot read it, and what is kept for one site is not there for another.
   clear it when the last tab of the site closes), nothing is kept, and the
   user is asked again, as before.
 
-# SW12. Not covered
+# SW12. An optional lock: a PIN, or the device's own unlock (design only)
+
+Decided by the owner on 2026-11-19: there should be a lock a user can turn
+on, and a PIN should be one of the ways to open it. Some people want a PIN
+for privacy at home, on a computer others can reach, and that is worth
+having even though a PIN is not a strong gate.
+
+**What it is.** Off by default: nothing gets slower for anyone who doesn't
+ask. Turned on, what this browser keeps is locked until the user opens it:
+
+- what the embedded signer remembers for each site (§SW11), and
+- the sign-in address's own cached session (§21).
+
+It locks when the browser is started again, and after a time unused. How
+long is an open decision (spec §34, question 5, asks the same of an
+unlocked identity); fifteen minutes is the suggestion to start from.
+
+**Two ways to open it,** the user's choice when they turn it on:
+
+1. **A BitLogin PIN.** The same on every device and browser, and nothing
+   to set up beyond choosing it. At least six digits; longer, or letters,
+   allowed.
+2. **The device's own unlock:** a fingerprint, a face, or the device's PIN,
+   through a passkey prompt the browser draws. Stronger, and it cannot be
+   imitated by a site. It needs a device and browser that can do it.
+
+**Where it is opened.** At the sign-in address, on its own pages. Inside a
+site, in a small panel the embedded signer's frame draws: no window, and no
+trip to the sign-in address. The site cannot read the panel.
+
+**How a PIN wraps what is kept.** Two layers, both needed:
+
+- the non-extractable device key (§21.2), as now, so a record is useless
+  off this browser profile; and
+- a key stretched from the PIN with Argon2id, the KDF already in use, with
+  a salt of the record's own.
+
+A count of wrong tries is kept beside the record. Past a small number
+(eight is the suggestion) the record is removed, and the user signs in
+again the ordinary way. Nothing is lost by that: the PIN is never a way
+into the account.
+
+**What a PIN does and does not do,** to be said in the interface where it
+is turned on, and not only here:
+
+- It stops someone who sits down at an unlocked browser.
+- It does not stop malware on the device, or someone who copies the browser
+  profile: six digits are quickly guessed, and a count kept in software can
+  be put back. `second-factor.md` §SF11 says the same of software-only PIN
+  wrapping.
+- It is not a credential. It replaces neither the password nor the recovery
+  phrase, opens nothing on any other device, and is never sent anywhere.
+  Forgetting it costs one ordinary sign-in.
+- A site can draw a look-alike panel and learn a PIN. What it learns opens
+  nothing: the record it would open is in storage only this origin can
+  reach.
+
+**How the device's unlock wraps it.** A passkey made at the sign-in
+address, used only as a wrapping key: the WebAuthn PRF output takes the
+place of the PIN-stretched key above. It is **not** a passkey account
+(`passkey-login.md`): nothing is derived from it but the wrapping key, no
+capsule is made, nothing goes to a relay, and the derivation chain is
+untouched. Losing it costs one ordinary sign-in. This is also the answer,
+for one device, to "a passkey for an account that already exists" (§SW7),
+with none of that section's new capsule.
+
+Tried, with simulated authenticators, in the NSWP repository's
+`docs/plans/in-game-identity.md` (Part 1): a frame of one site embedded in
+another gets the same PRF secret as on its own page, in Chrome 157 and
+Firefox 160, when the embedding page allows it
+(`allow="publickey-credentials-get"`). Not tried: Safari, real devices, a
+headset.
+
+**What it changes elsewhere.**
+
+- The embedded signer's page gains an interface, for this one thing. §SW6
+  says it has none, and its policy allows no styles: both change, and the
+  policy tests with them. The panel must be drawn only when the user's own
+  press asked for something that needs it, never unasked.
+- The embedding site must show the frame and allow it the passkey prompt.
+  The site-to-signer messages gain a way for the signer to say "show me"
+  and "I am done".
+- Inside a headset session nothing but the world can draw, so no panel can
+  appear there. The device's unlock, if its prompt can appear in a headset,
+  is the only one of the two that could work there, and that is untested.
+- This is key handling at rest: it starts in `spec.md` §21, and the pull
+  request says why as well as what (`CONTRIBUTING.md`).
+
+# SW13. The sign-in address remembers you (mostly exists)
+
+It already does: a session is cached (§21), so for someone signed in there
+a new site's window goes straight to the question, with no password. What
+is new is only that the lock (§SW12), when it is on, covers this session
+too. Then a new site is: the window, unlock, Allow. The password is typed
+once for a device, and after that only if the lock's record was removed.
+
+# SW14. Profiles in the window (design only)
+
+Wanted by the owner (2026-11-19): several profiles on a device, natively.
+It rests on `account-switching.md`, which is a design and not built: each
+profile is a whole account of its own, with its own password, phrase and
+identity, and the device keeps more than one signed in.
+
+With that in place:
+
+- The window says which profile it would allow a site as, and offers the
+  others: "Allow as: Personal / Work".
+- What the signer remembers for a site (§SW11) is for one profile. Allowing
+  the same site as another profile replaces it.
+- A site learns the public key of the profile it was allowed as, and
+  nothing of any other: not that they exist, and not how many.
+- With the lock on, one unlock opens the device's profiles, not one each.
+  Whether a profile may have a lock of its own is an open question.
+
+# SW15. Fewer presses for a new site (to explore)
+
+Decided by the owner (2026-11-19): one press for a new site stays, for now;
+ways to make it lighter are to be explored here.
+
+What must stay: a site that has never been allowed is not connected
+without the user doing something deliberate. A site connected silently
+learns who its visitor is, and could sign as them, by their merely arriving.
+
+What might go: the window. Two things to try, neither tried yet, and both
+different from browser to browser:
+
+- **The browser's storage-access permission.** A button the signer's frame
+  draws ("Continue as Alice"), a press on it, and the browser's own
+  question. If granted, the frame can reach what the sign-in address keeps,
+  and no window opens.
+- **The browser's federated sign-in.** The browser draws the choice of
+  account itself.
+
+Not to be built: a list of sites that are connected without asking. That is
+the silent connection above, by another name.
+
+# SW16. Not covered
 
 - Safari, and phones, where a window is a tab: not tried.
 - An asking site that cuts its link to windows it opens: the window finds
