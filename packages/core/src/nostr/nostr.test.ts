@@ -503,6 +503,7 @@ describe("signed relay list over relays (§19.1)", () => {
   });
 
   it("refuses to sign a list a client would reject", () => {
+    // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- verifies that a cleartext relay is refused
     expect(() => buildBootstrapListEvent({ version: 1, vaultRelays: ["ws://plain.example"], discoveryRelays: [] }, maintainerKey)).toThrow(/not valid/u);
     expect(() => buildBootstrapListEvent({ version: 0, vaultRelays: [], discoveryRelays: [] }, maintainerKey)).toThrow(/not valid/u);
   });
