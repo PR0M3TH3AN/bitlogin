@@ -764,6 +764,24 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(new URL(popup.url()).origin).toBe(origin);
         expect(await popup.locator("#app-site").textContent()).toBe(site);
         expect(await popup.locator("#app-name").textContent()).toBe("Test App");
+        // The address can be read, in a light-themed browser and a dark one. It once could not: dark text on a
+        // dark bar, in the light theme, on the one line the user is told to check.
+        for (const colorScheme of ["light", "dark"] as const) {
+          await popup.emulateMedia({ colorScheme });
+          const contrast = await popup.locator("#app-site").evaluate((el) => {
+            const luminance = (css: string): number => {
+              const [r, g, b] = (css.match(/[\d.]+/gu) ?? []).slice(0, 3).map((v) => {
+                const c = Number(v) / 255;
+                return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+              });
+              return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+            };
+            const style = getComputedStyle(el);
+            const [hi, lo] = [luminance(style.color), luminance(style.backgroundColor)].sort((a, b) => b - a);
+            return (hi! + 0.05) / (lo! + 0.05);
+          });
+          expect(contrast, colorScheme).toBeGreaterThan(7);
+        }
         // An address BitLogin has no name for is said to be unknown, and its own name for itself is shown as only that.
         expect(await popup.locator("#app-known").isVisible()).toBe(false);
         expect(await popup.locator("#app-unknown").isVisible()).toBe(true);
