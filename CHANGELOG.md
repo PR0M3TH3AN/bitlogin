@@ -8,6 +8,24 @@ would plausibly want. Newest first.
 
 ## 2026-11-19
 
+**The embedded signer remembers a site (`docs/sign-in-window.md` §SW11).**
+It held the handed-over key in memory, so every load of the asking site's
+page began locked and the window had to be opened again.
+
+- **A site the user allowed stays allowed** for thirty days on that device,
+  or until they sign out of it there. Loading the page again asks nothing.
+- **What is kept** is a grant for that one site: the key, encrypted at rest
+  like the session cache, under names of its own. What is taken up from it
+  can only sign.
+- **The count is kept with it,** so loading the page again is not a way
+  round six a minute and sixty an hour.
+- **New on the headless signer:** `keepSignerGrant()`,
+  `restoreSignerGrant()`, `touchSignerGrant()`, `forgetSignerGrant()`. Only
+  the embedded signer's page has a use for them.
+- **A limit to know:** the sign-in address cannot list or take back what
+  was kept inside other sites. A grant ends at the site, at its date, or
+  with the browser's data.
+
 **The sign-in window and the embedded signer, on BitLogin's own site
 (`docs/sign-in-window.md`).** A site no longer has to embed the widget, and
 so see the password, to have something signed.

@@ -63,6 +63,23 @@ export interface HeadlessSigner {
   acceptHandoff(sealed: { senderPublicKey: string; payload: string }): Promise<{ pubkey: string }>;
   /** Whether the unlocked session arrived by a hand-off and can only sign. */
   isSignerOnly(): Promise<boolean>;
+  /**
+   * For the embedded signer (docs/sign-in-window.md §SW11): keep this
+   * hand-off for one asking site, encrypted at rest, until `until`
+   * (seconds; never past thirty days), so the user is not asked again on
+   * that site's next page load. Only a signer-only session can be kept.
+   * Resolves false where it could not be kept.
+   */
+  keepSignerGrant(grant: { site: string; until: number; name?: string }): Promise<boolean>;
+  /**
+   * Take up what was kept for a site, if it is still in date: this signer
+   * then holds a signer-only session. Null when nothing is kept for it.
+   */
+  restoreSignerGrant(site: string): Promise<{ pubkey: string; until: number; name?: string; signed: number[] } | null>;
+  /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
+  touchSignerGrant(site: string, signed: number[]): Promise<void>;
+  /** Forget a site. */
+  forgetSignerGrant(site: string): Promise<void>;
   /** Clear the cached session for this origin. */
   logout(): Promise<void>;
   /** Tear down the crypto worker. The signer is unusable afterward; create a
@@ -135,6 +152,21 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async isSignerOnly() {
       return Boolean((await client.getSessionStatus()).signerOnly);
+    },
+    async keepSignerGrant(grant) {
+      return (await client.signerKeep(grant)).kept;
+    },
+    async restoreSignerGrant(site) {
+      const res = await client.signerRestore({ site });
+      if (!res.restored || !res.everydayPublicKey || typeof res.until !== "number") return null;
+      pubkey = res.everydayPublicKey;
+      return { pubkey, until: res.until, ...(res.name ? { name: res.name } : {}), signed: res.signed ?? [] };
+    },
+    async touchSignerGrant(site, signed) {
+      await client.signerTouch({ site, signed });
+    },
+    async forgetSignerGrant(site) {
+      await client.signerForget({ site });
     },
     async logout() {
       await client.logout();

@@ -72,6 +72,17 @@ describe("how much is signed for one site", () => {
     for (let t = 0; t < 3_600_000; t += 11_000) if (slow.take(t)) signed++;
     expect(signed).toBe(SIGN_LIMITS.hourly);
   });
+
+  it("carries on counting across a page load", () => {
+    const first = createSignGate();
+    for (let i = 0; i < SIGN_LIMITS.burst; i++) first.take(i * 100);
+    expect(first.times()).toHaveLength(SIGN_LIMITS.burst);
+    // The page is loaded again: what was counted before still counts.
+    const again = createSignGate(SIGN_LIMITS, first.times());
+    expect(again.take(1000)).toBe(false);
+    expect(again.take(SIGN_LIMITS.perMs + 700)).toBe(true);
+    expect(createSignGate(SIGN_LIMITS, [NaN, "x" as never]).take(0)).toBe(true);
+  });
 });
 
 describe("names and addresses, as they may be shown", () => {
@@ -115,14 +126,19 @@ describe("the embedded signer and the window, as written", () => {
   const signer = readFileSync(new URL("./signer.ts", import.meta.url), "utf8");
   const win = readFileSync(new URL("./window.ts", import.meta.url), "utf8");
 
-  it("the signer never restores this origin's session, and touches no storage", () => {
+  it("the signer never restores this origin's own session, and reaches storage only through the worker", () => {
     expect(signer).not.toMatch(/\.restore\(\)|readCachedSession|localStorage|indexedDB|sessionStorage/u);
+    // What it takes up is only what it kept for the site it is in.
+    expect(signer).toContain("restoreSignerGrant(site)");
+    expect(signer).toContain("keepSignerGrant({ site, until");
+    // Locking forgets the site.
+    expect(signer.slice(signer.indexOf("const lock = ()"), signer.indexOf("let remembering"))).toContain("forgetSignerGrant(forSite)");
   });
 
   it("the signer answers the site only at the address the browser gave, and the window only at its own origin", () => {
     // Nothing is ever addressed to "any origin": not even "ready", which says nothing.
     expect(signer).not.toContain('"*"');
-    expect(signer).toContain('if (site) window.parent.postMessage(signerMessage({ t: "ready" }), site)');
+    expect(signer).toContain('window.parent.postMessage(signerMessage({ t: "ready" }), site);');
     expect(win).not.toContain('"*"');
     expect(win.split("postMessage(").length - 1).toBe(win.split(", me)").length - 1);
   });

@@ -68,7 +68,7 @@ $("allow").addEventListener("click", async () => {
     const ok = await found.grant(session, who.name);
     $("ask").hidden = true;
     if (!ok) return status("That didn't work, and nothing was handed over. Close this window and try again from the site that opened it.");
-    status("Done. That site can sign notes as you until you leave it.");
+    status("Done. That site can sign notes as you until you sign out of it.");
     setTimeout(leave, 700);
   } catch {
     $("ask").hidden = true;

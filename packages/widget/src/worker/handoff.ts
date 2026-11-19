@@ -37,7 +37,12 @@ export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "getSessionStatus",
   "logout",
   "handoffBegin",
-  "handoffAccept"
+  "handoffAccept",
+  // Remembering a site, so the user is not asked on every page load (signerGrant.ts).
+  "signerKeep",
+  "signerRestore",
+  "signerTouch",
+  "signerForget"
 ]);
 
 export interface SealedHandoff {

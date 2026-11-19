@@ -22,8 +22,8 @@ export const SIGN_LIMITS = {
   tags: 60,
   tagItems: 8,
   tagChars: 400,
-  /** How long an unlocked signer stays unlocked for a site, at most, in seconds. Closing the site's page ends it sooner. */
-  grantSec: 4 * 3600,
+  /** How long a site stays allowed, in seconds: thirty days from Allow, unless the user signs out of it sooner. */
+  grantSec: 30 * 24 * 3600,
   /** No more than this many signatures for one site in `perMs`. */
   burst: 6,
   perMs: 60_000,
@@ -114,12 +114,19 @@ export function prepareForSite(input: unknown, site: string, nowSeconds: number)
 export interface SignGate {
   /** Whether another signature may be made for this site now. Counts it if so. `now` is in milliseconds. */
   take(now: number): boolean;
+  /** When the counted signatures were made, to keep across a page load. */
+  times(): number[];
 }
 
-/** One site's signatures, counted: a site the user said yes to still can't pour notes out under their name. */
-export function createSignGate(limits: { burst: number; perMs: number; hourly: number } = SIGN_LIMITS): SignGate {
-  let times: number[] = [];
+/**
+ * One site's signatures, counted: a site the user said yes to still can't
+ * pour notes out under their name. `already` is what was counted before this
+ * page was loaded, so that loading the page again is not a way round it.
+ */
+export function createSignGate(limits: { burst: number; perMs: number; hourly: number } = SIGN_LIMITS, already: number[] = []): SignGate {
+  let times: number[] = already.filter((t) => typeof t === "number" && Number.isFinite(t));
   return {
+    times: () => [...times],
     take(now) {
       times = times.filter((t) => now - t < 3_600_000);
       if (times.length >= limits.hourly) return false;

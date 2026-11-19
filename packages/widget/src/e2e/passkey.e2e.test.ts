@@ -489,8 +489,31 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const heard = JSON.stringify(await page.evaluate(() => (window as any).heard));
         expect(heard).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
 
-        // Lock: nothing more is signed.
+        // The site's page is loaded again: it is still allowed, with no window and nothing asked of anyone.
+        const pagesBefore = context.pages().length;
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        const afterReload = await ask({ t: "state" });
+        expect(afterReload).toMatchObject({ t: "state", unlocked: true, pubkey: me });
+        expect(afterReload.until - Date.now() / 1000).toBeGreaterThan(29 * 24 * 3600);
+        expect(context.pages().length).toBe(pagesBefore);
+        const again = await ask({ t: "sign", event: { kind: 1, content: "after a reload", tags: [] } });
+        expect(again.event).toMatchObject({ kind: 1, content: "after a reload", pubkey: me, tags: [["nswp:world", site]] });
+        // Loading the page again is not a way round the count: six a minute, with the one signed before.
+        let more = 0;
+        for (let i = 0; i < 8; i++) if ((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t === "signed") more++;
+        expect(more).toBe(4);
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("refused");
+        // What is kept is not the key in the clear, and the site still can't read any of it.
+        expect(await page.evaluate(() => (window as any).tryToRead().frame)).toBe("refused: SecurityError");
+
+        // Lock: nothing more is signed, and the site is forgotten, across a reload too.
         expect(await ask({ t: "lock" })).toMatchObject({ t: "state", unlocked: false });
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await ask({ t: "state" })).toMatchObject({ t: "state", unlocked: false });
         expect((await ask({ t: "sign", event: { kind: 1, content: "after", tags: [] } })).t).toBe("refused");
         // The sign-in address itself is still signed in, with a full session: handing over took nothing from it.
         expect(await account.evaluate(() => window.bitlogin?.activeSession()?.publicKey)).toBe(me);

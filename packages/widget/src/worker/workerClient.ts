@@ -28,7 +28,10 @@ import type {
   Nip46NostrconnectStartPayload,
   WorkerNotification,
   HandoffExportPayload,
-  HandoffSealed
+  HandoffSealed,
+  SignerKeepPayload,
+  SignerSitePayload,
+  SignerTouchPayload
 } from "./protocol.js";
 
 /**
@@ -215,6 +218,18 @@ export class WorkerClient {
   }
   handoffAccept(payload: HandoffSealed) {
     return this.call("handoffAccept", payload);
+  }
+  signerKeep(payload: SignerKeepPayload) {
+    return this.call("signerKeep", payload);
+  }
+  signerRestore(payload: SignerSitePayload) {
+    return this.call("signerRestore", payload);
+  }
+  signerTouch(payload: SignerTouchPayload) {
+    return this.call("signerTouch", payload);
+  }
+  signerForget(payload: SignerSitePayload) {
+    return this.call("signerForget", payload);
   }
   vaultStatus() {
     return this.call("vaultStatus", {});

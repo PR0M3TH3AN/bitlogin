@@ -50,6 +50,7 @@ import {
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sessionCache.js";
 import { openHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type SealedHandoff } from "./handoff.js";
+import { deleteSignerGrant, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { SerialQueue } from "./serialQueue.js";
 import type { VaultConnectionSummary } from "./protocol.js";
@@ -73,7 +74,10 @@ import type {
   PreviewImportKeyPayload,
   Nip46ConnectPayload,
   Nip46NostrconnectStartPayload,
-  HandoffExportPayload
+  HandoffExportPayload,
+  SignerKeepPayload,
+  SignerSitePayload,
+  SignerTouchPayload
 } from "./protocol.js";
 
 interface SessionState {
@@ -398,6 +402,50 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     // The receiving side, last: open it with the throwaway key, which is
     // then gone. What results is a signer-only session, in memory. It is
     // never written to the session cache or the public record.
+    // ---- What the embedded signer remembers for a site (signerGrant.ts) ----
+
+    // Keep this hand-off for the site that asked, so the user is not asked again on its next page load. Only a
+    // session that arrived by a hand-off is ever kept this way: a full session is never written as a grant.
+    case "signerKeep": {
+      const { everydayPrivateKey } = requireUnlocked();
+      if (!session.signerOnly) throw new Error("Only a signer-only session can be remembered for a site.");
+      const p = payload as SignerKeepPayload;
+      const now = Date.now() / 1000;
+      return { kept: await saveSignerGrant(store, { site: p.site, everydayPrivateKey, until: p.until, ...(p.name ? { name: p.name } : {}), signed: [] }, now) };
+    }
+
+    // The site's page was loaded again: what was kept for that site, if it is still in date, becomes a
+    // signer-only session. It touches nothing a full session uses.
+    case "signerRestore": {
+      const p = payload as SignerSitePayload;
+      const grant = await loadSignerGrant(store, p.site, Date.now() / 1000);
+      if (!grant) return { restored: false };
+      clearSession();
+      session.signer = new NostrSigner(grant.everydayPrivateKey);
+      session.everydayPrivateKey = grant.everydayPrivateKey;
+      session.signerOnly = true;
+      return { restored: true, everydayPublicKey: session.signer.getPublicKey(), until: grant.until, ...(grant.name ? { name: grant.name } : {}), signed: grant.signed };
+    }
+
+    // Count a signature against the site, where reloading the page can't lose the count.
+    case "signerTouch": {
+      const { everydayPrivateKey } = requireUnlocked();
+      if (!session.signerOnly) throw new Error("Only a signer-only session is counted for a site.");
+      const p = payload as SignerTouchPayload;
+      const now = Date.now() / 1000;
+      const kept = await loadSignerGrant(store, p.site, now);
+      // Only a grant that is there, and is this session's, is rewritten.
+      if (kept && getPublicKeyHex(kept.everydayPrivateKey) === getPublicKeyHex(everydayPrivateKey)) {
+        await saveSignerGrant(store, { ...kept, signed: Array.isArray(p.signed) ? p.signed : [] }, now);
+      }
+      return {};
+    }
+
+    case "signerForget": {
+      await deleteSignerGrant(store, (payload as SignerSitePayload).site);
+      return {};
+    }
+
     case "handoffAccept": {
       if (!pendingHandoff) throw new Error("No hand-off was begun here.");
       const mine = pendingHandoff;
@@ -1008,6 +1056,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
+  "signerKeep", "signerRestore", "signerTouch", "signerForget",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",
