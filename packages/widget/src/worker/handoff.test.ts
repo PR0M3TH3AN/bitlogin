@@ -139,10 +139,11 @@ describe("a session that arrived by a hand-off", () => {
 
   it("lets a handed-over session ask for nothing beyond signing, the grant, and what an application was approved for", () => {
     expect([...SIGNER_ONLY_ACTIONS].sort()).toEqual(
-      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "signEvent", "signerForget", "signerKeep", "signerRestore", "signerTouch"]
+      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "roomPass", "signEvent", "signerForget", "signerKeep", "signerRestore", "signerTouch"]
     );
-    // Never: exporting the key, raw decrypting, the vault, the account, or handing the key on again.
-    for (const never of ["exportIdentity", "nip44Decrypt", "nip04Decrypt", "nip44Encrypt", "handoffExport", "vaultRevealNwc", "changePassword", "buildRecoveryExport"]) {
+    // "roomPass" was added with the owner's say (2026-11-19, §SW16): a pass for the one site, built in the worker.
+    // Never: exporting the key, raw decrypting, the vault, the account, asking relays anything, or handing the key on again.
+    for (const never of ["exportIdentity", "nip44Decrypt", "nip04Decrypt", "nip44Encrypt", "handoffExport", "vaultRevealNwc", "changePassword", "buildRecoveryExport", "loadProfile"]) {
       expect(SIGNER_ONLY_ACTIONS.has(never), never).toBe(false);
     }
   });

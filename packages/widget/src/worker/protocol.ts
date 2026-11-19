@@ -2,6 +2,7 @@
 import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
 import type { RebroadcastResult, RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
 import type { AppPermissions } from "../embedded/permissions.js";
+import type { Profile } from "../embedded/profile.js";
 
 export interface WorkerRequest<TAction extends string = string, TPayload = unknown> {
   id: string;
@@ -183,6 +184,8 @@ export interface HandoffExportPayload {
   recipientPublicKey: string;
   /** What an application was approved for, as the window showed it (§SW9). The worker reads it again before sealing. */
   app?: { site: string; permissions: unknown };
+  /** The site the hand-off is for. Sealed with the key, so the worker that opens it knows which site it serves. */
+  site?: string;
 }
 
 export interface HandoffSealed {
@@ -194,6 +197,15 @@ export interface HandoffAcceptResult {
   everydayPublicKey: string;
   /** What the hand-off says an application was approved for, as the worker read it. Absent for a plain one. */
   app?: { site: string; permissions: AppPermissions };
+  /** The site the hand-off was sealed for, where it names one. */
+  site?: string;
+  /** The person's own signed profile, as the sending worker fetched and checked it. */
+  profile?: Profile;
+}
+
+/** A world's session public key. Everything else in a room pass is the worker's own (§SW16). */
+export interface RoomPassPayload {
+  session: string;
 }
 
 // ---- What an approved application may ask beyond signing (docs/sign-in-window.md §SW9.5) ----
@@ -236,6 +248,7 @@ export interface SignerRestoreResult {
   everydayPublicKey?: string;
   until?: number;
   name?: string;
+  profile?: Profile;
   signed?: number[];
   permissions?: AppPermissions;
   signedSensitive?: number[];
@@ -386,6 +399,8 @@ export type WorkerActionMap = {
   appEncrypt: [AppCryptPayload, { text: string }];
   appDecrypt: [AppCryptPayload, { text: string }];
   appDecryptEvent: [AppDecryptEventPayload, { text: string }];
+  loadProfile: [Record<string, never>, { profile?: Profile }];
+  roomPass: [RoomPassPayload, NostrEvent];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];
   vaultList: [Record<string, never>, VaultListResult];

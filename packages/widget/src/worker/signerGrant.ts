@@ -16,6 +16,7 @@
  */
 import type { KeyValueStore } from "@bitlogin/core/storage";
 import { APP_LIMITS, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { readProfile, type Profile } from "../embedded/profile.js";
 
 const GRANT_PREFIX = "bitlogin:signer-grant:v1:";
 const GRANT_DEVICE_KEY = "bitlogin:signer-grant-device-key:v1";
@@ -35,6 +36,8 @@ export interface SignerGrant {
   until: number;
   /** The name the sign-in address knew them by when they allowed it, or none. */
   name?: string;
+  /** Their own signed profile, as it was when they allowed the site (§SW16). */
+  profile?: Profile;
   /** When the last signatures for this site were made, in milliseconds: so reloading a page is not a way round the count. */
   signed: number[];
   /** What an application was approved for (§SW9). Absent for a site that declared nothing: a note and a reaction. */
@@ -93,6 +96,7 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       key: toHex(grant.everydayPrivateKey),
       until,
       ...(grant.name ? { name: grant.name.slice(0, 48) } : {}),
+      ...(readProfile(grant.profile) ? { profile: readProfile(grant.profile) } : {}),
       // An application's public signatures are counted up to its own hourly limit, so more of them are kept.
       signed: grant.signed.filter((t) => Number.isFinite(t)).slice(-(grant.permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept)),
       ...(grant.permissions ? { permissions: grant.permissions } : {}),
@@ -120,7 +124,8 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown };
+    const profile = readProfile(p.profile);
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
     // again, and sees what is asked. It is never restored as a narrower or a wider one.
     const permissions = p.permissions === undefined ? undefined : readPermissions(p.permissions);
@@ -140,6 +145,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       everydayPrivateKey: Uint8Array.from(p.key.match(/.{2}/gu) ?? [], (pair) => Number.parseInt(pair, 16)),
       until: p.until,
       ...(typeof p.name === "string" && p.name ? { name: p.name.slice(0, 48) } : {}),
+      ...(profile ? { profile } : {}),
       signed: times(p.signed, permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept),
       ...(permissions ? { permissions, signedSensitive: times(p.signedSensitive, APP_LIMITS.sensitive.hourly) } : {})
     };

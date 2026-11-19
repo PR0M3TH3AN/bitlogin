@@ -626,7 +626,72 @@ different from browser to browser:
 Not to be built: a list of sites that are connected without asking. That is
 the silent connection above, by another name.
 
-# SW16. Not covered
+# SW16. Who someone is, in a world (built on `beta`)
+
+Asked for by the NSWP session on 2026-11-19 and agreed by the owner the same
+day. A visitor who signed in at a world could post, but was a guest in the
+room and was shown as a key: the world had no name for them, and no pass.
+
+**The profile.** A name, a picture and a line about them come from one
+place: their own signed profile (kind 0).
+
+- BitLogin's worker fetches it at the sign-in address, while the question
+  is being read, and believes it only as far as its signature goes. The
+  newest one their key signed is used, even if it says nothing.
+- It is cleaned as NSWP cleans it: a name of one line and 48 characters; a
+  picture only at an `https` address with no credentials, at most 300
+  characters; a line about them of at most 280.
+- It is sealed into the hand-off with the key, and kept with the site's
+  grant. The embedded signer asks no relay anything, then or later.
+- The world never supplies it and never fetches it. A world still asks no
+  relay about its visitors.
+- If no relay answers within a few seconds, the site is handed the key
+  alone and told the name the sign-in address knew, as before.
+- Only a site that declared no permissions is told. An application is held
+  to the set the user read (§SW9).
+
+The signer's `state` reply now carries `name`, `picture` and `about` where
+there are any.
+
+**The pass.** A new request, apart from `sign`:
+
+```
+site   → signer   { nswp: "nswp-signer", v: 1, id, t: "pass", session: <64 hex> }
+signer → site     { nswp: "nswp-signer", v: 1, id, t: "signed", event }   or   { ..., t: "refused", id }
+```
+
+The event is NSWP's room pass (kind 27300, `protocol/10-identity.md`):
+`["nswp:session", session]`, `["nswp:origin", site]`, `["expiration", …]`,
+then `name`, `picture`, `about` where the profile has them. Content empty.
+
+- **The site supplies the session key and nothing else.** Anything more it
+  sends with the request is not read.
+- **The origin is the one the hand-off was sealed for.** The site's address
+  now travels inside the seal for every hand-off, so the worker that signs
+  knows which site it serves without being told by a page.
+- **Four hours,** from the signer's own clock.
+- **Built and signed in the worker,** by an action that takes a session key
+  and has no other input.
+- **Refused** when the signer is locked, for an application, for a session
+  key that is the identity key, for a hand-off that named no site (one made
+  before this was built), and over the limit. A refusal says nothing.
+- **Counted like a signature:** six a minute and sixty an hour, with notes
+  and reactions, across page loads.
+- **`sign` still refuses kind 27300.** The never-sign list is as it was.
+  A pass for some other site is still BitPortal's alone to make (§SW9.4).
+- **The window says so** before Allow: the site can tell the other people
+  there who you are, at that site only, four hours at a time.
+
+What a pass lets a world do that it could not before: show the others in a
+room this person's name and picture, with proof. What it does not: it is
+good at no other site, the session key signs nothing on Nostr, and it ends
+in four hours whether or not the site is still allowed.
+
+Checked against NSWP's own `verifyRoomPass` at its `main` of 2026-11-19
+(`99f51a4`): a pass built here is accepted for its site and refused for
+another.
+
+# SW17. Not covered
 
 - Safari, and phones, where a window is a tab: not tried.
 - An asking site that cuts its link to windows it opens: the window finds

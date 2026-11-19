@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MockRelay } from "../../../core/src/test-support/mockRelay.js";
 import { generatePrivateKey, getPublicKeyHex } from "../../../core/src/crypto/secp256k1.js";
 import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
+import { verifyNostrEvent } from "../../../core/src/nostr/event.js";
 
 const DIST = fileURLToPath(new URL("../../../demo/dist/", import.meta.url));
 const MIME: Record<string, string> = {
@@ -71,6 +72,10 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
             "<bitlogin-auth id=\"bitlogin-widget\">",
             `<bitlogin-auth id="bitlogin-widget" vault-relays="${relayList}" discovery-relays="${relayList}">`
           );
+      }
+      // The sign-in window asks relays for a profile. It is given the mock ones, as the account page is.
+      if (relative === "/connect/index.html") {
+        body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}">`);
       }
       res.writeHead(200, {
         "content-type": MIME[extname(filePath)] ?? "application/octet-stream",
@@ -449,6 +454,32 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const session = await account.evaluate(() => window.bitlogin?.activeSession());
         const me = session!.publicKey;
 
+        // Their own profile, signed by them and on the relays: where the sign-in window finds who they are. It is
+        // newer than the one sign-up published. With an older one beside it, and one signed by somebody else,
+        // neither of which may be believed.
+        const profileOf = (content: Record<string, string>, created_at: number) =>
+          account.evaluate((e) => (window as any).nostr.signEvent(e), { kind: 0, created_at, tags: [], content: JSON.stringify(content) });
+        const nowSec = Math.floor(Date.now() / 1000);
+        const stranger = generatePrivateKey();
+        const profiles = [
+          await profileOf({ name: "Old Name", picture: "https://pictures.example/old.png" }, nowSec - 500),
+          await profileOf({ name: "Ada\u202e Lovelace  ", picture: "https://pictures.example/ada.png", about: "Line one\nline two" }, nowSec + 2),
+          { ...(await profileOf({ name: "Forged" }, nowSec + 9)), pubkey: getPublicKeyHex(stranger) }
+        ];
+        for (const relay of relays) {
+          await new Promise<void>((resolve, reject) => {
+            const socket = new WebSocket(relay.url);
+            socket.onerror = () => reject(new Error("mock relay refused a connection"));
+            socket.onopen = () => {
+              for (const event of profiles) socket.send(JSON.stringify(["EVENT", event]));
+              setTimeout(() => {
+                socket.close();
+                resolve();
+              }, 300);
+            };
+          });
+        }
+
         // The asking site, in another tab.
         const page = await context.newPage();
         const errors: string[] = [];
@@ -462,12 +493,16 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const locked = await ask({ t: "sign", event: { kind: 1, content: "before", tags: [] } });
         expect(locked.t).toBe("refused");
         expect(Object.keys(locked).sort()).toEqual(["id", "nswp", "t", "v"]);
+        const sessionKey = getPublicKeyHex(generatePrivateKey());
+        expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
 
         // The window: BitLogin's own page, naming the site as the browser reports it.
         const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
         await popup.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
         expect(new URL(popup.url()).origin).toBe(origin);
         expect(await popup.locator("#site").textContent()).toBe(site);
+        // The window says the site can tell others who they are.
+        expect(await popup.locator("#ask").textContent()).toContain("who you are");
         // The address can be read, in a light-themed browser and a dark one. It once could not: dark text on a
         // dark bar, in the light theme, on the one line the user is told to check.
         for (const colorScheme of ["light", "dark"] as const) {
@@ -498,6 +533,27 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         // Unlocked, as the account that is signed in at the sign-in address.
         const state = await ask({ t: "state" });
         expect(state).toMatchObject({ t: "state", unlocked: true, pubkey: me });
+        // Who they are: from the newest profile their own key signed, tidied. Not the older one, not the forged one.
+        expect({ name: state.name, picture: state.picture, about: state.about }).toEqual({
+          name: "Ada Lovelace",
+          picture: "https://pictures.example/ada.png",
+          about: "Line one line two"
+        });
+
+        // A room pass (§SW16): the site names a session key, and the signer makes everything else.
+        const passed = await ask({ t: "pass", session: sessionKey, origin: "https://elsewhere.example", name: "Somebody Else", ttl: 999_999 });
+        expect(passed.t).toBe("signed");
+        const pass = passed.event;
+        expect(verifyNostrEvent(pass)).toBe(true);
+        expect(pass).toMatchObject({ kind: 27300, pubkey: me, content: "" });
+        expect(pass.tags.slice(0, 2)).toEqual([["nswp:session", sessionKey], ["nswp:origin", site]]);
+        expect(pass.tags[2][0]).toBe("expiration");
+        expect(Number(pass.tags[2][1]) - pass.created_at).toBe(4 * 3600);
+        expect(Math.abs(pass.created_at - Date.now() / 1000)).toBeLessThan(120);
+        expect(pass.tags.slice(3)).toEqual([["name", "Ada Lovelace"], ["picture", "https://pictures.example/ada.png"], ["about", "Line one line two"]]);
+        // Not for the identity key itself, not for something that is no key, and never through "sign".
+        expect((await ask({ t: "pass", session: me })).t).toBe("refused");
+        expect((await ask({ t: "pass", session: "not a key" })).t).toBe("no answer");
         const signed = await ask({ t: "sign", event: { kind: 1, content: "from a site that asks", tags: [["t", "x"], ["nswp:world", "https://elsewhere.example"]], created_at: 1 } });
         expect(signed.t).toBe("signed");
         expect(signed.event).toMatchObject({ kind: 1, content: "from a site that asks", pubkey: me, tags: [["t", "x"], ["nswp:world", site]] });
@@ -519,10 +575,13 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(context.pages().length).toBeLessThanOrEqual(pagesBefore);
         const again = await ask({ t: "sign", event: { kind: 1, content: "after a reload", tags: [] } });
         expect(again.event).toMatchObject({ kind: 1, content: "after a reload", pubkey: me, tags: [["nswp:world", site]] });
-        // Loading the page again is not a way round the count: six a minute, with the one signed before.
+        expect(afterReload).toMatchObject({ name: "Ada Lovelace", picture: "https://pictures.example/ada.png", about: "Line one line two" });
+        // Loading the page again is not a way round the count: six a minute, with the pass and the one signed
+        // before. A pass is counted like a signature.
         let more = 0;
         for (let i = 0; i < 8; i++) if ((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t === "signed") more++;
-        expect(more).toBe(4);
+        expect(more).toBe(3);
+        expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
         await page.reload();
         await page.waitForFunction(() => typeof (window as any).ask === "function");
         expect((await ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("refused");

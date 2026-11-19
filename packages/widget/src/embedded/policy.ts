@@ -144,6 +144,8 @@ export type SignerRequest =
   | { t: "state"; id: string }
   | { t: "lock"; id: string }
   | { t: "sign"; id: string; event: unknown }
+  /** A room pass for this site, naming the given session key (§SW16). Everything else in it is the signer's. */
+  | { t: "pass"; id: string; session: string }
   // From an application (§SW9). A world sends none of these.
   /** What the application would like to be approved for. Shown in the window the next time it is opened. */
   | { t: "want"; id: string; permissions: AppPermissions }
@@ -153,7 +155,7 @@ export type SignerRequest =
 
 export type SignerReply =
   | { t: "ready" }
-  | { t: "state"; id?: string; unlocked: boolean; pubkey?: string; name?: string; until?: number; permissions?: AppPermissions }
+  | { t: "state"; id?: string; unlocked: boolean; pubkey?: string; name?: string; picture?: string; about?: string; until?: number; permissions?: AppPermissions }
   | { t: "signed"; id: string; event: NostrEvent }
   | { t: "text"; id: string; text: string }
   | { t: "refused"; id: string };
@@ -171,6 +173,7 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.t === "state") return { t: "state", id: d.id };
   if (d.t === "lock") return { t: "lock", id: d.id };
   if (d.t === "sign" && d.event && typeof d.event === "object") return { t: "sign", id: d.id, event: d.event };
+  if (d.t === "pass" && typeof d.session === "string" && HEX64.test(d.session)) return { t: "pass", id: d.id, session: d.session };
   if (d.t === "want") {
     const permissions = readPermissions(d.permissions);
     return permissions ? { t: "want", id: d.id, permissions } : null;

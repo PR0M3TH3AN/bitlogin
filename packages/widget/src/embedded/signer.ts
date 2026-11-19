@@ -24,6 +24,7 @@
  */
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
 import { APP_LIMITS, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
+import type { Profile } from "./profile.js";
 import {
   cleanOrigin,
   createSignGate,
@@ -52,6 +53,8 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
   let headless: HeadlessSigner | null = null;
   let pubkey: string | null = null;
   let name: string | null = null;
+  /** Their own signed profile, as BitLogin's worker read it out of the sealed hand-off or the kept grant (§SW16). */
+  let profile: Profile | null = null;
   /** When what the user allowed stops, in seconds. */
   let until = 0;
   let gate: SignGate = createSignGate();
@@ -81,6 +84,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
     headless = null;
     pubkey = null;
     name = null;
+    profile = null;
     until = 0;
     app = null;
     if (held) void (forSite ? held.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => held.destroy());
@@ -99,6 +103,7 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
         if (!kept) return;
         pubkey = kept.pubkey;
         name = kept.name ?? null;
+        profile = kept.profile ?? null;
         until = kept.until;
         app = kept.permissions ?? null;
         if (app) gates = appGates(kept.signed, kept.signedSensitive);
@@ -117,7 +122,10 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       ...(id ? { id } : {}),
       unlocked: !!pubkey,
       ...(pubkey ? { pubkey, until } : {}),
-      ...(pubkey && name ? { name } : {}),
+      // The name in their own signed profile, where they have one; else the name the sign-in address knew them by.
+      ...(pubkey && (profile?.name || name) ? { name: profile?.name || name! } : {}),
+      ...(pubkey && profile?.picture ? { picture: profile.picture } : {}),
+      ...(pubkey && profile?.about ? { about: profile.about } : {}),
       // An application is told what it was approved for, so it can tell that from what it now wants.
       ...(pubkey && app ? { permissions: app } : {})
     };
@@ -164,6 +172,21 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       }
     }
 
+    if (ask.t === "pass") {
+      // Not for an application: it is held to the set the user read. Counted like a signature, and the worker
+      // builds all of it, for the site the hand-off was sealed for.
+      if (app || ask.session === pubkey || !gate.take(Date.now())) return refuse();
+      try {
+        const pass = await headless.roomPass(ask.session);
+        if (pass.pubkey !== pubkey) return refuse();
+        say({ t: "signed", id: ask.id, event: pass });
+        void headless.touchSignerGrant(site, gate.times()).catch(() => {});
+      } catch {
+        refuse();
+      }
+      return;
+    }
+
     // "sign".
     const now = Date.now();
     const prepared = app ? prepareForApp(app, ask.event, site, now / 1000) : prepareForSite(ask.event, site, now / 1000);
@@ -208,7 +231,8 @@ export function startEmbeddedSigner(): EmbeddedSignerHandle {
       const signer = await load();
       const got = await signer.acceptHandoff(msg.sealed);
       // A hand-off sealed for an application names the site it was approved for. For another site it is refused.
-      if (got.app && got.app.site !== site) throw new Error("for another site");
+      if ((got.app && got.app.site !== site) || (got.site && got.site !== site)) throw new Error("for another site");
+      profile = got.profile ?? null;
       app = got.app?.permissions ?? null;
       gates = appGates();
       pubkey = got.pubkey;

@@ -53,6 +53,7 @@ import { saveCachedSession, loadCachedSession, clearCachedSession } from "./sess
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeerFor } from "../embedded/permissions.js";
 import { signClass } from "../embedded/policy.js";
+import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { deleteSignerGrant, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { SerialQueue } from "./serialQueue.js";
@@ -80,6 +81,7 @@ import type {
   HandoffExportPayload,
   AppCryptPayload,
   AppDecryptEventPayload,
+  RoomPassPayload,
   SignerKeepPayload,
   SignerSitePayload,
   SignerTouchPayload
@@ -112,6 +114,12 @@ interface SessionState {
    *  the grant kept from one. Null for a site that declared nothing. Everything such a session is asked is held
    *  to this here, in the worker, whatever the page that asks says. */
   app: HandoffApp | null;
+  /** For a signer-only session: the site it serves, from inside the sealed hand-off or the grant kept from one.
+   *  Null where an older hand-off named none: then no room pass is made (§SW16). */
+  site: string | null;
+  /** The person's own signed profile (kind 0), fetched and checked here. In a full session it is what
+   *  `loadProfile` found; in a signer-only one it is what the hand-off or the grant carried. */
+  profile: Profile | null;
 }
 
 const session: SessionState = {
@@ -127,7 +135,9 @@ const session: SessionState = {
   vaultKnown: false,
   vault: null,
   signerOnly: false,
-  app: null
+  app: null,
+  site: null,
+  profile: null
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
@@ -178,6 +188,8 @@ function clearSession(): void {
   session.vaultKnown = false;
   session.signerOnly = false;
   session.app = null;
+  session.site = null;
+  session.profile = null;
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
@@ -410,7 +422,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const sender = generatePrivateKey();
       const p = payload as HandoffExportPayload;
       try {
-        return sealHandoff(everydayPrivateKey, p.recipientPublicKey, sender, p.app);
+        // The profile is this worker's own finding (loadProfile), never a page's word.
+        return sealHandoff(everydayPrivateKey, p.recipientPublicKey, sender, p.app, {
+          ...(p.site !== undefined ? { site: p.site } : {}),
+          ...(session.profile ? { profile: session.profile } : {})
+        });
       } finally {
         wipe(sender);
       }
@@ -429,7 +445,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const p = payload as SignerKeepPayload;
       const now = Date.now() / 1000;
       // An application's grant is for the site its hand-off was sealed for, and no other.
-      if (session.app && session.app.site !== p.site) throw new Error("This hand-off was for another site.");
+      if ((session.app && session.app.site !== p.site) || (session.site && session.site !== p.site)) throw new Error("This hand-off was for another site.");
       return {
         kept: await saveSignerGrant(
           store,
@@ -438,6 +454,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
             everydayPrivateKey,
             until: p.until,
             ...(p.name ? { name: p.name } : {}),
+            ...(session.profile ? { profile: session.profile } : {}),
             signed: [],
             ...(session.app ? { permissions: session.app.permissions, signedSensitive: [] } : {})
           },
@@ -457,11 +474,14 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.everydayPrivateKey = grant.everydayPrivateKey;
       session.signerOnly = true;
       session.app = grant.permissions ? { site: grant.site, permissions: grant.permissions } : null;
+      session.site = grant.site;
+      session.profile = grant.profile ?? null;
       return {
         restored: true,
         everydayPublicKey: session.signer.getPublicKey(),
         until: grant.until,
         ...(grant.name ? { name: grant.name } : {}),
+        ...(grant.profile ? { profile: grant.profile } : {}),
         signed: grant.signed,
         ...(grant.permissions ? { permissions: grant.permissions, signedSensitive: grant.signedSensitive ?? [] } : {})
       };
@@ -494,7 +514,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!pendingHandoff) throw new Error("No hand-off was begun here.");
       const mine = pendingHandoff;
       pendingHandoff = null;
-      let opened: { key: Uint8Array; app: HandoffApp | null };
+      let opened: ReturnType<typeof openAppHandoff>;
       try {
         opened = openAppHandoff(payload as SealedHandoff, mine);
       } finally {
@@ -505,7 +525,53 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.everydayPrivateKey = opened.key;
       session.signerOnly = true;
       session.app = opened.app;
-      return { everydayPublicKey: session.signer.getPublicKey(), ...(opened.app ? { app: opened.app } : {}) };
+      session.site = opened.site;
+      session.profile = opened.profile;
+      return {
+        everydayPublicKey: session.signer.getPublicKey(),
+        ...(opened.app ? { app: opened.app } : {}),
+        ...(opened.site ? { site: opened.site } : {}),
+        ...(opened.profile ? { profile: opened.profile } : {})
+      };
+    }
+
+    // ---- Who someone is, to a world they allowed (§SW16).
+
+    // A full session, at the sign-in address: the person's own profile, asked of relays and believed only as
+    // far as its signature goes. It is sealed into the next hand-off. A session that arrived by a hand-off
+    // never asks a relay anything: this action is not on its list.
+    case "loadProfile": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      const relayUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
+      if (relayUrls.length === 0) return {};
+      const pool = new RelayPool(relayUrls);
+      try {
+        const result = await pool.queryQuorum({ kinds: [0], authors: [me], limit: 2 }, 4000);
+        // Still the same session: a sign-out while relays were answering must not leave a profile behind.
+        if (session.signer !== signer) return {};
+        session.profile = newestProfile(result.outcomes.flatMap((outcome) => outcome.events), me);
+      } finally {
+        pool.closeAll();
+      }
+      return session.profile ? { profile: session.profile } : {};
+    }
+
+    // A room pass (NSWP kind 27300) for the site this session serves, and for no other. The site, the time, how
+    // long it lasts and the profile are all this worker's own: what is asked for is a session public key. Not
+    // for an application: an application is held to the set the user read, and a pass is not in one.
+    case "roomPass": {
+      const { signer } = requireUnlocked();
+      if (!session.signerOnly || session.app || !session.site) throw new Error("refused");
+      const pass = buildRoomPass({
+        session: (payload as RoomPassPayload).session,
+        site: session.site,
+        identity: signer.getPublicKey(),
+        nowSeconds: Date.now() / 1000,
+        profile: session.profile
+      });
+      if (!pass) throw new Error("refused");
+      return signer.signEvent(pass);
     }
 
     // ---- What an approved application may ask beyond signing (§SW9.5). Refused without a permission set.
@@ -1155,7 +1221,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
-  "appEncrypt", "appDecrypt", "appDecryptEvent",
+  "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

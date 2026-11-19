@@ -157,32 +157,21 @@ that moved.
     If either fails, the fix is a save step that loads a page, or the
     fields moved out of the shadow root.
 
-- [ ] **12. Who a visitor is, in a world** (passed on from the BitPortal /
-  NSWP session at the owner's request, 2026-11-19; NSWP kit 0.27.0,
-  `protocol/10-identity.md`). A visitor who signs in at a world with a key
-  their client sent no pass for can post, but stays a guest in the room and
-  is shown as an npub. Two parts:
-  - [ ] **Name, picture and "about" in the signer's `state` reply.** Today
-    `name` is the cached session name, which most accounts lack. Wanted:
-    `name`, and `picture` (https only, at most 300 characters) and `about`
-    (at most 280 characters, one line), from the key's own signed kind 0,
-    fetched and verified in the sign-in window (the signer's page reaches
-    no relay, §SW6) and kept with the site's grant. Never fetched by the
-    world. No decision needed; the kit already reads `name`.
-  - [ ] **OWNER'S DECISION: may the signer make a room pass for a world?**
-    A room pass is kind 27300, which is in `NEVER_KINDS` (`policy.ts`) and
-    reserved to BitPortal's own address (`RESERVED_KINDS`). That list is
-    not shrunk without the owner's say, and this would not shrink it:
-    `sign` keeps refusing 27300. Proposed by the NSWP session: a separate
-    request, `{ t: "pass", id, session }`. The world supplies a session
-    public key and nothing else. The signer builds the whole pass: origin
-    from the browser, expiry at most four hours, name, picture and about
-    from the key's own kind 0. Covered by the same per-site Allow. Reply
-    `{ t: "signed", id, event }`. To settle before building: whether the
-    window says so when a world is allowed ("can say who you are to others
-    in this world"), and whether a pass counts against the signing limits.
-    On a yes, give the NSWP session the final message shape; the kit side
-    is theirs.
+- [x] **12. Who a visitor is, in a world (§SW16).** **Built on `beta`
+  2026-11-19.** Passed on from the BitPortal / NSWP session; the owner said
+  yes to both parts the same day.
+  - [x] The signer's `state` reply carries `name`, `picture` and `about`
+    from the person's own signed profile, fetched and checked by BitLogin's
+    worker in the sign-in window and sealed into the hand-off.
+  - [x] A room pass through a request of its own, `{ t: "pass", id,
+    session }`. The site supplies a session key; the worker builds the rest.
+    `sign` still refuses kind 27300. Accepted by NSWP's `verifyRoomPass`.
+  - [ ] The kit side is the NSWP session's: ask for a pass after unlock,
+    check it, join by name, and read `picture` and `about`.
+  - [ ] Not available to an application that declared permissions. Add a
+    declared permission for it if one ever needs it.
+  - [ ] A profile is as it was when the site was allowed: it is not fetched
+    again until the user is next asked. Decide whether that is fresh enough.
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound

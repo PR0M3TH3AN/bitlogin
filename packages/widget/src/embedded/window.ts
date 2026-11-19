@@ -91,7 +91,7 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
         wants,
         async grant(session, name) {
           // What is sealed is exactly what this page was given to show: the set, for the site the browser named.
-          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined);
+          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world);
           const answered = new Promise<boolean>((done) => {
             onDone = done;
             setTimeout(() => done(false), 8000);

@@ -21,6 +21,35 @@ let who = null;
 let askedAt = 0;
 let finished = false;
 
+/** Relays other than BitLogin's own list, where the page names them. The live page names none. */
+const relayList = (value) => (value || "").split(",").map((url) => url.trim()).filter(Boolean);
+const relays = {
+  vaultRelays: relayList(document.documentElement.dataset.vaultRelays),
+  discoveryRelays: relayList(document.documentElement.dataset.discoveryRelays)
+};
+
+/**
+ * The session whose key will be handed over, made ready while the question is being read: and, for a site that
+ * declared nothing, the person's own signed profile, which BitLogin's worker fetches, checks and seals into the
+ * hand-off (§SW16). This page never sees the key, and is not asked for the profile.
+ */
+let preparing = null;
+let profileLoaded = Promise.resolve();
+const prepare = () =>
+  (preparing ??= (async () => {
+    const session = await createHeadlessSigner(relays);
+    const restored = await session.restore();
+    if (!restored || restored.pubkey !== who.pubkey) {
+      session.destroy();
+      throw new Error("no session");
+    }
+    // Only a world is told who someone is. An application is held to what it asked, and this is not in it.
+    if (!found.wants) profileLoaded = session.loadProfile().catch(() => null);
+    return session;
+  })());
+/** How long Allow waits for relays to answer about the profile. Without one, the site is told the key alone. */
+const PROFILE_WAIT_MS = 2500;
+
 const leave = () => {
   finished = true;
   window.close();
@@ -68,6 +97,7 @@ const askApp = () => {
 const ask = () => {
   if (!found || !who || finished) return;
   $("signin").hidden = true;
+  void prepare().catch(() => {});
   if (found.wants) return askApp();
   $("site").textContent = found.site;
   $("who").textContent = who.name || shortKey(who.npub);
@@ -98,9 +128,8 @@ const allow = async (button) => {
   status(found.wants ? "Handing over a key that can do only what you just read." : "Handing over a key that can only sign.");
   let session = null;
   try {
-    session = await createHeadlessSigner();
-    const restored = await session.restore();
-    if (!restored || restored.pubkey !== who.pubkey) throw new Error("no session");
+    session = await prepare();
+    await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
     const ok = await found.grant(session, who.name);
     $("ask").hidden = true;
     $("ask-app").hidden = true;

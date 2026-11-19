@@ -23,6 +23,7 @@
 import { NostrSigner } from "@bitlogin/core/account";
 import { getPublicKeyHex } from "@bitlogin/core/crypto";
 import { mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { readProfile, type Profile } from "../embedded/profile.js";
 import { grantSite } from "./signerGrant.js";
 
 /**
@@ -56,6 +57,8 @@ export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "appEncrypt",
   "appDecrypt",
   "appDecryptEvent",
+  // A room pass for the site the hand-off was sealed for, built whole in the worker (§SW16).
+  "roomPass",
   // Remembering a site, so the user is not asked on every page load (signerGrant.ts).
   "signerKeep",
   "signerRestore",
@@ -85,7 +88,9 @@ export function sealHandoff(
   everydayPrivateKey: Uint8Array,
   recipientPublicKey: string,
   senderPrivateKey: Uint8Array,
-  app?: { site: unknown; permissions: unknown }
+  app?: { site: unknown; permissions: unknown },
+  /** The site the hand-off is for, as the window was told by the signer, and the person's own profile. */
+  also: { site?: unknown; profile?: unknown } = {}
 ): SealedHandoff {
   if (!HEX64.test(recipientPublicKey)) throw new Error("The hand-off has no usable recipient key.");
   if (everydayPrivateKey.length !== 32) throw new Error("No identity is unlocked in this session.");
@@ -98,10 +103,14 @@ export function sealHandoff(
     if (!site || !permissions || !mayHold(site, permissions)) throw new Error("That is not a permission set an application may be given.");
     sealedApp = { site, permissions };
   }
+  // The site a plain hand-off is for is sealed too, so the worker that opens it knows which site it serves.
+  const forSite = also.site === undefined ? "" : grantSite(also.site);
+  if (also.site !== undefined && (!forSite || (sealedApp && sealedApp.site !== forSite))) throw new Error("The hand-off names no usable site.");
+  const profile = readProfile(also.profile);
   // A signer wipes the key it was given when it is destroyed. It is given a copy: the caller's is the caller's to wipe.
   const sender = new NostrSigner(senderPrivateKey.slice());
   try {
-    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}) });
+    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}), ...(forSite ? { site: forSite } : {}), ...(profile ? { profile } : {}) });
     return { senderPublicKey: sender.getPublicKey(), payload: sender.nip44Encrypt(recipientPublicKey, plaintext) };
   } finally {
     sender.destroy();
@@ -123,7 +132,10 @@ export function openHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Arr
  * sign a note and a reaction and nothing else. A hand-off that carries a set
  * which does not read as one is refused whole.
  */
-export function openAppHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Array): { key: Uint8Array; app: HandoffApp | null } {
+export function openAppHandoff(
+  sealed: SealedHandoff,
+  recipientPrivateKey: Uint8Array
+): { key: Uint8Array; app: HandoffApp | null; /** The site it was sealed for, or null where it names none. */ site: string | null; profile: Profile | null } {
   if (!sealed || !HEX64.test(sealed.senderPublicKey) || typeof sealed.payload !== "string") {
     throw new Error("That is not a signer hand-off.");
   }
@@ -136,7 +148,7 @@ export function openAppHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8
   } finally {
     recipient.destroy();
   }
-  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown };
+  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown; site?: unknown; profile?: unknown };
   try {
     parsed = JSON.parse(plaintext) as typeof parsed;
   } catch {
@@ -153,13 +165,20 @@ export function openAppHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8
     key.fill(0);
     throw new Error("The hand-off carried an unusable key.");
   }
-  if (parsed.app === undefined) return { key, app: null };
+  // A site that does not read as one is refused whole, like a set that does not.
+  const named = parsed.site === undefined ? null : grantSite(parsed.site);
+  if (named === "") {
+    key.fill(0);
+    throw new Error("The hand-off names no usable site.");
+  }
+  const profile = readProfile(parsed.profile);
+  if (parsed.app === undefined) return { key, app: null, site: named, profile };
   const a = parsed.app as { site?: unknown; permissions?: unknown } | null;
   const site = a && typeof a === "object" ? grantSite(a.site) : "";
   const permissions = a && typeof a === "object" ? readPermissions(a.permissions) : null;
-  if (!site || !permissions || !mayHold(site, permissions)) {
+  if (!site || !permissions || !mayHold(site, permissions) || (named && named !== site)) {
     key.fill(0);
     throw new Error("The hand-off carried a permission set that cannot be read.");
   }
-  return { key, app: { site, permissions } };
+  return { key, app: { site, permissions }, site, profile };
 }

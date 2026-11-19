@@ -19,6 +19,7 @@
  * exactly as for `bitlogin.js` — the worker is where the keys live.
  */
 import type { AppPermissions } from "./embedded/permissions.js";
+import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
 import type { SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
@@ -55,13 +56,33 @@ export interface HeadlessSigner {
    * if this session itself arrived by a hand-off. The caller must deliver the
    * result only to a frame of this origin.
    */
-  exportHandoff(recipientPublicKey: string, app?: { site: string; permissions: unknown }): Promise<{ senderPublicKey: string; payload: string }>;
+  exportHandoff(
+    recipientPublicKey: string,
+    app?: { site: string; permissions: unknown },
+    /** The site the hand-off is for, as the signer reported it. Sealed with the key. */
+    site?: string
+  ): Promise<{ senderPublicKey: string; payload: string }>;
+  /**
+   * At the sign-in address, before a hand-off: fetch this account's own
+   * signed profile (kind 0) and check it. What is found is sealed into the
+   * next hand-off by the worker. Resolves null when there is none, or no
+   * relay answered. Refused in a session that arrived by a hand-off.
+   */
+  loadProfile(): Promise<Profile | null>;
+  /**
+   * In a session that arrived by a hand-off for a site that declared no
+   * permissions: a room pass (NSWP kind 27300) for that site, naming the
+   * given session key. Everything else in it is the worker's own.
+   */
+  roomPass(session: string): Promise<NostrEvent>;
   /**
    * Receiving side, last step: open the hand-off. This signer then holds a
    * signer-only session, in memory: it can sign and say who it is, and
    * nothing else, and nothing is cached.
    */
-  acceptHandoff(sealed: { senderPublicKey: string; payload: string }): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions } }>;
+  acceptHandoff(
+    sealed: { senderPublicKey: string; payload: string }
+  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile }>;
   /**
    * For a session an application was approved for (docs/sign-in-window.md
    * §SW9.5). Each rejects unless the session carries a permission set that
@@ -88,7 +109,7 @@ export interface HeadlessSigner {
    */
   restoreSignerGrant(
     site: string
-  ): Promise<{ pubkey: string; until: number; name?: string; signed: number[]; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
+  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[]): Promise<void>;
   /** Forget a site. */
@@ -154,14 +175,21 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async beginHandoff() {
       return (await client.handoffBegin()).recipientPublicKey;
     },
-    async exportHandoff(recipientPublicKey, app) {
+    async exportHandoff(recipientPublicKey, app, site) {
       await requirePubkey();
-      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}) });
+      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}), ...(site ? { site } : {}) });
+    },
+    async loadProfile() {
+      await requirePubkey();
+      return (await client.loadProfile()).profile ?? null;
+    },
+    async roomPass(sessionKey) {
+      return client.roomPass({ session: sessionKey });
     },
     async acceptHandoff(sealed) {
       const res = await client.handoffAccept(sealed);
       pubkey = res.everydayPublicKey;
-      return { pubkey, ...(res.app ? { app: res.app } : {}) };
+      return { pubkey, ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}) };
     },
     async appEncrypt(peerPublicKey, text, scheme = "nip44") {
       return (await client.appEncrypt({ peerPublicKey, text, scheme })).text;
@@ -186,6 +214,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         pubkey,
         until: res.until,
         ...(res.name ? { name: res.name } : {}),
+        ...(res.profile ? { profile: res.profile } : {}),
         signed: res.signed ?? [],
         ...(res.permissions ? { permissions: res.permissions, signedSensitive: res.signedSensitive ?? [] } : {})
       };

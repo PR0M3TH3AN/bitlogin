@@ -8,6 +8,22 @@ would plausibly want. Newest first.
 
 ## 2026-11-19
 
+**A world can know its visitor by name (`docs/sign-in-window.md` §SW16).**
+For a site that signs in through the window and declared no permissions.
+
+- **`state` carries `name`, `picture` and `about`,** from the person's own
+  signed profile. BitLogin's worker fetches and checks it at the sign-in
+  address and seals it into the hand-off; the site never supplies it.
+- **New request `{ t: "pass", id, session }`.** The reply is NSWP's room
+  pass (kind 27300) for the asking site, four hours long, naming that
+  session key. The site sends a session public key and nothing else.
+- **`sign` still refuses kind 27300.**
+- **New on the headless signer:** `loadProfile()`, `roomPass()`, and a
+  third argument to `exportHandoff()`: the site the hand-off is for.
+- **A site allowed before this build** keeps working, with no picture and
+  no profile name until the user is next asked there: its kept grant holds
+  no profile.
+
 **The browser can save a new password (`docs/TODO.md` item 11).** The
 generated password was shown as text only, so a browser or password manager
 had nothing to save from at sign-up, after recovery, or after a rotation,

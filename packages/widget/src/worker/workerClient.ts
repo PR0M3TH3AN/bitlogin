@@ -29,6 +29,7 @@ import type {
   WorkerNotification,
   HandoffExportPayload,
   HandoffSealed,
+  RoomPassPayload,
   SignerKeepPayload,
   SignerSitePayload,
   AppCryptPayload,
@@ -220,6 +221,12 @@ export class WorkerClient {
   }
   handoffAccept(payload: HandoffSealed) {
     return this.call("handoffAccept", payload);
+  }
+  loadProfile() {
+    return this.call("loadProfile", {});
+  }
+  roomPass(payload: RoomPassPayload) {
+    return this.call("roomPass", payload);
   }
   signerKeep(payload: SignerKeepPayload) {
     return this.call("signerKeep", payload);
