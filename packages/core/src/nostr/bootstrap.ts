@@ -83,6 +83,19 @@ export const BUILTIN_VAULT_RELAYS: readonly string[] = [
   "wss://nostr-01.yakihonne.com",
   "wss://relay.nostr.wirednet.jp",
   "wss://nostr.sathoarder.com",
+  // Measured again 2026-11-20, from one machine, re-read 15 to 17 minutes after publishing. NOTHING IS CHANGED BY
+  // IT: one run adds no relay and removes none.
+  //   Held 8 of 8: nos.lol, nostr.bitcoiner.social, relay.primal.net, nostr-01.yakihonne.com,
+  //     relay.nostr.wirednet.jp, nostr.sathoarder.com.
+  //   Accepted 8, held about half: offchain.pub (4), nostr.mom (4, then 3).
+  //   Accepted 8, held 0 in one run and 4 in another: relay.snort.social.
+  //   One of eight stored: relay.damus.io. Never connected: relay.mostr.pub, nostr-pub.wellorder.net,
+  //     relay.nostr.net.
+  // So six of these thirteen kept an account, against the floor of two acknowledgements.
+  // Of 60 relays that NIP-66 monitors listed as open, 49 refused a capsule from a key they did not know. Five not
+  // on this list held 8 of 8 through the re-read, once: nostr.hanshan.io, relay.nearhood.co.uk, relay.jmoose.rocks,
+  // relay-fra.zombi.cloudrodion.com, relay.solomonstr.com. They are candidates for the next run, and are added
+  // only if they hold again on another day (CONTRIBUTING.md, "Before a promotion: the relay probe").
 ];
 
 /**
