@@ -1753,9 +1753,19 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect((await pub.ask({ t: "sign", event: { kind: 1, content: "a note", tags: [] } })).t).toBe("signed");
         for (const kind of [27300, 27302, 27303]) expect((await pub.ask({ t: "sign", event: { kind, content: "", tags: [] } })).t, String(kind)).toBe("refused");
 
-        // A site that asked for nothing more is shown no such line.
+        // It falls back on the same page: a smaller set, asked after the one that was turned down, is taken and
+        // takes its place. The window then shows that set as an application's, with no word of the first.
         if (!turned.isClosed()) await turned.waitForEvent("close", { timeout: 10_000 }).catch(() => turned.close());
         await pub.ask({ t: "lock" });
+        expect(await pub.ask({ t: "want", permissions: lots })).toMatchObject({ taken: false });
+        expect(await pub.ask({ t: "want", permissions: plain })).toMatchObject({ taken: true });
+        const fellBack = await pub.open();
+        await fellBack.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await fellBack.locator("#ask").isVisible()).toBe(false);
+        expect(await fellBack.locator("#turned-down").isVisible()).toBe(false);
+        await fellBack.close();
+
+        // A site that asked for nothing more is shown the plain question and no such line.
         await pub.page.reload();
         await pub.page.waitForFunction(() => typeof (window as any).ask === "function");
         const plainWindow = await pub.open();
