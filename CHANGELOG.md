@@ -23,6 +23,11 @@ would plausibly want. Newest first.
   board and a number. The signer builds the kind 37306 note and marks it
   with the site that asked. For any site the user allowed; six a minute
   and sixty an hour.
+- **`scripts/vendor.mjs`: one way to vendor BitLogin into any site.** It
+  builds from a clean checkout, copies the files a site needs (all of them,
+  or `--set widget`), removes only BitLogin's own stale files, and writes
+  the integrity record the sites already check; `--check` verifies a folder
+  without changing it. README, "Updating your integration".
 - **The import screen leads with the fresh-account choice.** On a phone,
   "Create a fresh account instead" was five paragraphs down. It now comes
   first, with the full warning right beneath it, unchanged.

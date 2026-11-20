@@ -101,3 +101,49 @@ Notes from the run:
   `npm run release:artifacts` in BitLogin first.
 - Not done: an interactive sign-in on any app. Feature worktrees keep the
   old build until they merge their base.
+
+---
+
+# Vendoring BitLogin `03af915` into every app (2026-11-20)
+
+**Source:** BitLogin `main` at `c89cf7f` (PR #44), live on bitlogin.network;
+`03af915` on `beta` is the same tree and is the commit each record names.
+`bitlogin.js` sha256 begins `768bb898acdc`. Asked for by the owner: "work in
+each of our projects one at a time to revendor them with the latest and
+greatest bitlogin". Each app was done from a clean worktree off its live
+branch, so nobody's work in progress was touched.
+
+| App | Branch | Commit | Deployed by | Live |
+|---|---|---|---|---|
+| COMBATRIG | `chore/bitlogin-revendor-1120b` → `main` | `69d6b250e9` | its AI Session Manager | in its landing queue; main SHA to follow |
+| BitPortal | `main` | `efb0ac3` | its own session | vendored; deploy is the owner's, with that session |
+| Satisfied | `beta` | `3f99d5e` | push | beta.imsatisfied.app ✓ |
+| Satisfied | `master` | `f921853` (promotion merge, tree = beta) | `npx vercel --prod` | imsatisfied.app ✓ |
+| Tessera | `main` | `f87ce7d` | push | tessera.bitblocks.network ✓ |
+| Bitvid | `unstable` | `8d21b195` | push | unstable.bitvid.network ✓ |
+| Bitvid | `beta` | `b0cbcd85` (promotion, tree = unstable) | `vercel deploy --prod` (bitvid-beta) | beta.bitvid.network ✓ |
+| Bitvid | `main` | `12e10dd9` (promotion, tree = unstable) | `vercel deploy --prod` (bitvid) | bitvid.network ✓ |
+| BitUnlock | `main` | `9b37952`, ops log `2a7758d` | — (Worker unchanged) | — |
+| BitUnlock | `site/bitlogin-03af915` | `9d82741` = live site + the re-vendor | `vercel deploy --prod` | bitunlock.network ✓, all 45 files match the build |
+| BitRoad | `main` | `72a3f48` | push | bitroad.network ✓ |
+| AdZap | `main` | `18e1826`, reproduced byte for byte | `npm run deploy` (Wrangler) | adzaps.net ✓ |
+
+Notes from the run:
+
+- **BitUnlock's site must be built with its own locked dependencies.** A first
+  build that borrowed `node_modules` from BitUnlock's main checkout put a
+  newer `nostr-tools` into four of the site's own bundles. It was caught by
+  comparing the build with the live site, and not deployed. `npm ci` in the
+  worktree fixed it.
+- **Tessera, for whoever merges `agent/harden-security-and-user-readiness`:**
+  that branch adds `scripts/check-bitlogin-vendor.mjs` and a
+  `PROVENANCE.json` recording the hash of every BitLogin file. Its record
+  describes older files than `main` now carries, so the check will fail
+  after the merge until the record is rebuilt (for example with BitLogin's
+  `scripts/vendor.mjs --set widget`, adjusted to that file's name).
+- **Satisfied's own checkout** has six files of someone's unfinished work on
+  `beta`; it was left alone.
+- **Found for BitLogin, and done:** the import warning was long on a phone
+  before reaching "Create a fresh account instead" (now first); every app
+  copied BitLogin its own way, and two by hand (now `scripts/vendor.mjs`).
+- Not done: an interactive sign-in on any app.
