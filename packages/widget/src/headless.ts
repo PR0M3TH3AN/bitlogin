@@ -24,6 +24,7 @@ import { WorkerClient } from "./worker/workerClient.js";
 import type { KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import type { WorldMore } from "./embedded/follows.js";
+import type { ReadMessage, WrittenMessage } from "./embedded/messages.js";
 
 export interface HeadlessSignerOptions {
   /** Relays for the Connection Vault (only needed for wallet features). */
@@ -129,6 +130,14 @@ export interface HeadlessSigner {
    * signed. `list` is their newest as the world found it, or null.
    */
   worldFollow(list: unknown, change: { add?: string; remove?: string }): Promise<NostrEvent>;
+  /**
+   * In the same kind of session, for a world the user let send and read
+   * their private messages (NSWP-14): a message written and sealed twice; a
+   * wrap opened; and the list of where their messages reach them, signed.
+   */
+  worldSeal(to: string, text: string): Promise<{ message: WrittenMessage; seals: [NostrEvent, NostrEvent] }>;
+  worldUnwrap(event: unknown): Promise<ReadMessage>;
+  worldReach(relays: string[]): Promise<NostrEvent>;
   /**
    * Receiving side, last step: open the hand-off. This signer then holds a
    * signer-only session, in memory: it can sign and say who it is, and
@@ -281,6 +290,15 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async worldFollow(list, change) {
       return client.worldFollow({ list, ...change });
+    },
+    async worldSeal(to, text) {
+      return client.worldSeal({ to, text });
+    },
+    async worldUnwrap(event) {
+      return (await client.worldUnwrap({ event })).message;
+    },
+    async worldReach(relays) {
+      return client.worldReach({ relays });
     },
     async acceptHandoff(sealed) {
       const res = await client.handoffAccept(sealed);

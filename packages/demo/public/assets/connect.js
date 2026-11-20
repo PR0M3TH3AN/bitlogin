@@ -142,16 +142,30 @@ const lasting = (what, row, box, label, line, after) => {
  * The family question, at the second site of a family (docs/site-family.md SF4): two buttons in place of Allow,
  * neither of them the default. Only while "remember" is ticked: a family is never allowed for one visit.
  */
+/** What a world may ask to be let do, as it is put on the button. */
+const MORE_WORDS = { follows: "change who I follow", messages: "send and read my private messages" };
 const familyShown = () => !!offer && !lockOn && $("remember").checked;
 const showFamily = () => {
   const shown = familyShown();
   $("family").hidden = !shown;
   $("allow-family").hidden = !shown;
   // A world that asked to change who they follow: two buttons, neither the default, as for a family.
-  const asksFollows = !!found && found.more.includes("follows");
-  $("more-follows").hidden = !asksFollows;
-  $("allow-more").hidden = !asksFollows;
-  $("allow").textContent = shown ? "Just this one" : asksFollows ? "Allow without that" : "Allow";
+  // And so for private messages. What the site already had is kept either way; the question is about what is new.
+  const asked = found ? found.more : [];
+  $("more-follows").hidden = !asked.includes("follows");
+  $("more-messages").hidden = !asked.includes("messages");
+  $("allow-more").hidden = asked.length === 0;
+  // The plain grant's "it can't" is not said flatly beside a question that would let it, or beside what it has.
+  const had = found ? found.has : [];
+  const yours = (name) => MORE_WORDS[name].replace(/\bI\b/gu, "you").replace(/\bmy\b/gu, "your");
+  $("has-line").hidden = had.length === 0;
+  $("has-line").textContent = had.length ? `You already let it ${had.map(yours).join(" and ")}. That stays as it is whichever you choose.` : "";
+  $("cant").textContent =
+    had.length || asked.length
+      ? "Apart from what is said above, it can't read your messages, change your profile or who you follow, or touch your account or anything in it."
+      : "It can't read your messages, change your profile or who you follow, or touch your account or anything in it.";
+  $("allow-more").textContent = `Allow, and let it ${asked.map((name) => MORE_WORDS[name]).join(" and ")}`;
+  $("allow").textContent = shown ? "Just this one" : asked.length ? "Allow without that" : "Allow";
   if (!offer) return;
   const domain = familyDomain(found.family);
   $("family-earlier").textContent = offer.site;
@@ -394,9 +408,11 @@ const allow = async (button, forFamily = false, withMore = false) => {
       setTimeout(leave, 700);
       return;
     }
-    recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (remember ? (found.known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec), remembered: remember, ...(found.wants ? { wants: found.wants } : {}) });
+    // A site let read private messages is kept seven days at most, as the signer keeps it.
+    const messages = [...found.has, ...(withMore ? found.more : [])].includes("messages");
+    recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (remember ? (found.known && !messages ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec), remembered: remember, ...(found.wants ? { wants: found.wants } : {}) });
     const how = remember ? "until you sign out of it" : "for this visit";
-    status(found.wants ? `Done. That application can act as you, as you allowed, ${how}.` : withMore ? `Done. That site can sign notes as you, and change who you follow, ${how}.` : `Done. That site can sign notes as you ${how}.`);
+    status(found.wants ? `Done. That application can act as you, as you allowed, ${how}.` : withMore ? `Done. That site can sign notes as you, and do what you just allowed, ${how}.` : `Done. That site can sign notes as you ${how}.`);
     setTimeout(leave, 700);
   } catch {
     $("ask").hidden = true;

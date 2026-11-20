@@ -35,8 +35,11 @@ export const FOLLOW_LIST_LIMITS = {
  * What a world may ask to be let do beyond a note and a reaction, by name:
  * a short closed list, each one thing a person can be asked in a few plain
  * words. None is "sign whatever I hand you".
+ *
+ * - "follows": follow and unfollow people for them, one at a time (this file).
+ * - "messages": send and read their private messages (messages.ts).
  */
-export const WORLD_MORE = ["follows"] as const;
+export const WORLD_MORE = ["follows", "messages"] as const;
 export type WorldMore = (typeof WORLD_MORE)[number];
 
 /** The names that are on the list, each once, in the list's order. Empty for anything else. */

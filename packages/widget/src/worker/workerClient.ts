@@ -38,6 +38,9 @@ import type {
   WorldFindPayload,
   WorldOpenPayload,
   WorldFollowPayload,
+  WorldSealPayload,
+  WorldUnwrapPayload,
+  WorldReachPayload,
   SignerKeepPayload,
   TakeBackPayload,
   SignerSitePayload,
@@ -287,6 +290,15 @@ export class WorkerClient {
   }
   worldFollow(payload: WorldFollowPayload) {
     return this.call("worldFollow", payload);
+  }
+  worldSeal(payload: WorldSealPayload) {
+    return this.call("worldSeal", payload);
+  }
+  worldUnwrap(payload: WorldUnwrapPayload) {
+    return this.call("worldUnwrap", payload);
+  }
+  worldReach(payload: WorldReachPayload) {
+    return this.call("worldReach", payload);
   }
   signerKeep(payload: SignerKeepPayload) {
     return this.call("signerKeep", payload);

@@ -1,0 +1,223 @@
+{
+ "description": "From NSWP's vectors/people.json at 4cde6bf: `sealedForAWorld` and `messages`, as they are there. The test keys are named by their labels only: each key is sha256(utf8(label)), test-only, and anyone can sign as them.",
+ "testKeys": {
+  "key1": {
+   "label": "nswp test vector key 1",
+   "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6"
+  },
+  "key2": {
+   "label": "nswp test vector key 2",
+   "pubkey": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+  },
+  "session": {
+   "label": "nswp test vector session key",
+   "pubkey": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f"
+  },
+  "throwaway": {
+   "label": "nswp test vector throwaway key",
+   "pubkey": "2692848155e5385d733a56fcaf528e6dfd998c5d7b1c991c7b6389cd95b9df14"
+  }
+ },
+ "sealedForAWorld": {
+  "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+  "text": "Sent from a world.",
+  "now": 1794430800,
+  "nonces": [
+   "0791646afbefa7623a8726beb9e7c9a7f1ff12ac5633511c661c4b6778b5f706",
+   "d0bf22da164044371b9517a156405fd8a74c7db7669382d7217d88bf07004bab"
+  ],
+  "expect": {
+   "message": {
+    "kind": 14,
+    "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+    "created_at": 1794430800,
+    "tags": [
+     [
+      "p",
+      "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+     ]
+    ],
+    "content": "Sent from a world.",
+    "id": "360ebeef8c053fb325c073ad378fad163bfdf059c6b3623fb253ade0ebd0c954"
+   },
+   "seals": [
+    {
+     "kind": 13,
+     "created_at": 1794430800,
+     "tags": [],
+     "content": "AgeRZGr776diOocmvrnnyafx/xKsVjNRHGYcS2d4tfcG4OjRDTIbK/VQ0r/L2gHnNxgPI607Nrovm8HNakcLMdywMgZ7ObbvVF3BqpmYryYJvbgcvChp0ip6NMnTflUPtTkS0wSn8DOLEmy0sqm4B0YEAol0hjlYzYNy1qpfpKfh0hgmLdBBZRAJI4TDCotqjlrQpIRM3Ac2W+HIQHE42kmRxtrZ2ITDoSCwJDYMA43sKobdBXu3+LZGJmTUdDtyDZ53wvzq58NJANn6En9tFJ0BjfhPg6kpGt4e2b9UsxClWPporztbEOrP+juhH7rxd2u6bKi8vlcnDIDklqBSji7zQsKw5K6D7JHop6qDek3/jX8zo5qaf9LHw59CnbMtfeQAetiw4rFWHjOLJ31cP2+axtgh+FG2ct5Z6J6LV5KZ2VTzGG4PLrvZ79k+1ZYtkaY8zj6hJEmBxBZIgxPgMgmZQiRC0QIULDJ1F0VVF1du/R9+E0ka8swSzWYuDqSezluK",
+     "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+     "id": "3f6b8186e3e9ce46a529a719f09afeb3069f1af4987a87d8e120cbf0d39236f7",
+     "sig": "47d333512d2958cfba6ce2b385b71d3a914ce988d365dd842f9b5615d224788fd4a939bfef79218119d153838a141f8d2d11ec9ebbebc74b7651561451960a9d"
+    },
+    {
+     "kind": 13,
+     "created_at": 1794430800,
+     "tags": [],
+     "content": "AtC/ItoWQEQ3G5UXoVZAX9inTH23ZpOC1yF9iL8HAEurZfBjD9pz7mvHEcTGZ9lEUnCyVWQqzP0r9qCIlQ6UHL4KAoZJN5MVEr9iPCcwc0r0eQohBRbJk1cBWILcc5BU6YvYo5AFPThwlrjEUmxjB6UtL61uqKfefGTxgr7dgzklBOIqd2tigacCCWm6LmS3h7EAm+8SZ0qabVNlRfF/iX+pzADsIiCWWBPe6aUByizEqNf1mCxZVvBROfbTnDy16y/yRlGUzEEoU+iuayKAu+ZcLhEMtXmX/6UM3pi/NcU67sFT1Qq07IXdzDmbam4RHIGaehAU1ho80ywSo2GXV7BtGPu8FS5DE7ol4qpngTD14BCGFcGhHOgCKe6dx5FGjUH/kzznsPUOomSkMlp5AKOoFmVE9FORxTbBmIZXbuOVvN0fHaToSv//6peEDSJsL8KoX+YpcYB53j7Q7P1lQ30jJGohSEkr9+QVUPV9vyvwuGywfwy9mus/n6wxlEEzfA6d",
+     "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+     "id": "07222d686323f4e83d897c869444177ff5110ba0fdc9c163f3d684fa0a2768a6",
+     "sig": "7fff7fa6a5d0803b65f38b26c14b7764b0d66e1d2e80e9c61f37ce18222a124ce13685cc1f03edb0be88969693dbdb9fc3c91246beab76af8e8c00f0de958688"
+    }
+   ]
+  }
+ },
+ "messages": [
+  {
+   "name": "to_its_reader",
+   "description": "The second key opens a message from the first.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1794387600,
+    "tags": [
+     [
+      "p",
+      "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+     ]
+    ],
+    "content": "AtC/ItoWQEQ3G5UXoVZAX9inTH23ZpOC1yF9iL8HAEurJrNe3XupRaPGABk4nf2uoCb52q03d2VmymVbhDmH0opsSq0JUqcRh9UU4knKelo7Vk8CDvVc7KiniT9C0WKH28Cp4SCe4JhrAH/UvlJu07l8zkdmGO4ODl+YO+gWJ7ECLmv60ij3mNFWGatK6weoZFpfgHREkubn/sInV3dMIfDAZvmFj3/0yNgHAl3i7s6p1q29l6DW1SwtEQYw3/4VAJYnZYzIkdXS/tTFvshe98+UhdgkhshLVpZdzHrOohn2Yh3OdxKdlCcWeGFuNq5ZXz6lngYllkzsXC8h6ZyMz2K50JBEwZ/HVBMXzQLdYnV3Rej0K8hnjk7wmCqSIJnmjMstu6CpocGMUulMilRNgZbFTFeShR/A3hyx/gbMmr8g2GTt+f0Q22JKCqMr9bTSmp7g2prN52R+azdl5N45IeKnShrTKC0jt918ZN8IP7TlaYB7LX2WqiGMzppMXZnMJ2O/xu8Oy0UqmHQeRmEiZJo++JOYBQX6bCNftuAa775P9jIjToEkK2fAv2fGBjLOPxZiPZfyUxV4G3sk+ln/9W5Cqh6VmqKypu501sTnn0EWHwnra2o1Ea22sc8J/fvQ8tkJVeDZ7HcpqwjDkMFXc5JZ8gJEkjtiPevLIjBMtpoeaHtp/uRU7ETho0RW81FmuxWegPQaa/ALziNdO5ZuUbGpPfC9shN/2HPSGQUIcePVZ7UehuTFVDxE2JihcNNC+Fq8OIPXebsKX8GDdkE5e1cNKOqVJ6erNWcrqXXO0JzC8+ZEQol+Gqz0td7uNF2cOim0yXUw6gEAxU4MPKZwJzcZCxvS650U+BSw4uqTsp1vRDGgbgo5DJyNLuGkdUjLpfeoPEVhVctsGHXNmY8YsBDQtrp90iwN56g5/Ahw6fDNnDwHeBzc55gCMKSi5MSXBOjOeZ9Jug7XVsTWNpjQgjQj1FHeJrCbetNQmasiJq7RTW0vALIJ3/4Vs9t9OSna1SN9VesH9xWlZ2mcSsoXTaWLBoTI1IZGCLz89U2g4L8W87btpYHjr5wg2ANl3a/BLzaqdmd9k2qGzdOOYgtVWDZrHo5K3C5HMIC6ir3zmVUZLhZe1oPJfvaABpRgUkdxN2o9yg2IaeFPG6VCELfizNg/hAB+cz09Re0IJ/8wLhDo9mpMFwClMuW5Y7GnO61qiUgP9a6YzEJ2TLIdgXbCJN/TKOROGRx8XlbsDWmlLHOW9B/WDpj6zOX/q5N5ESHAyhisabtKb7IK+7ZsGxPTQlLLtVyoxIndafJR023SflhR0c06qn+7IIG2PlK5hmCmy/lCxS/pd7dILlI/GvJnggrD4J7RGeFdbo8RojgvkSeZY9lw+bpyxH6c2MkouUs2dIhDrfnMa/ykjURYFjnzVZgKskdL79AZX7yKSY6KruedNhw=",
+    "pubkey": "2692848155e5385d733a56fcaf528e6dfd998c5d7b1c991c7b6389cd95b9df14",
+    "id": "e7510698c2f1de13481bf89f6bd6dbe83865a13e78c5e6c6463a7e723404493a",
+    "sig": "6579a3f57fc76d0ee4f154532529662edeaa5265d7f517ef9762bac7709bdf4fdc48bbbcb71f201779993bfc05728112afdf56eef980ce4e08b7e0d3f2bc36ad"
+   },
+   "reader": "key2",
+   "expect": {
+    "id": "189273ac127360edcb3cb2877ca03727fbe2540b47016f6155c37b48a7457c4e",
+    "from": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+    "to": [
+     "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+    ],
+    "text": "See you at the Arcade?\nI'll be by the door.",
+    "at": 1794430800
+   }
+  },
+  {
+   "name": "its_writers_copy",
+   "description": "The same message, sealed and wrapped for its writer, who reads back what they sent.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1794387600,
+    "tags": [
+     [
+      "p",
+      "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6"
+     ]
+    ],
+    "content": "AtC/ItoWQEQ3G5UXoVZAX9inTH23ZpOC1yF9iL8HAEurqNVRYEg3Vx9dpFSMGiAlV68JFmHveRcwXKE5jzSUmTqULlcqENsHD4cJGhV6yVv/roARPe9RA7rsTclTeyayJi+Z98r2PIixCe/oMZje4rGpyITOamA+lsFXtIvReefz81shxtyvw/EGSp35LafAXIssBFClluWqf4X14lQ4+uVfnYiWC0v9gnhzCqMR+6aZiZb6+Uj8hSDhDrNZRiuSjhmzH3NQeEOaJD0FcICpHWgM42q21lBhIEu6S968PCDdfFJWf3btbfiK21GyM8YB+4k+/6lo/8D6juYWfPNIC3iHRxhtClzANWWp71WCePxclQVsb8ocKaowaBUQ5zVt/gXZZaqHPkJ5JEPzx50BdYsJeDLCSpW6SneseDv8xM3et7R9aMDJFH1MKRJsZWhUONYhHG9cQd6JnNxxzwJytxGkzUbjKYRxlHxdNWj9iFSXfHOeH7hr8u4tgQOAvsQcXUV6hxLbJJ1IEALhGln5wHA9G70TOaU3UL6Pvu06Y/gbyDq9AXrbJ2YqdJAzxgRS2w3b/eS31YhyfYhvIVfUYF8g7O6j28DpcQkXnEU7PXXMlAkKq1EXPE391GkDGf6jU5qTPEwWCIan0G7CmB11XA+CgEUok533PVMx/6MP0Td8VBi2Oku7MLG299o9esz8qoq5rsH6Bn3vwSEautPcUnA5wE5Hj4sHsvA/M0msRZgv7PhWiKmlZnq2cIgonssuFuI0e+cjvYaAzalFZRvUEb7Q3YqviO5x72aQMrW8OdxlIE/PyPA6EAz4ojtsBajV0qDkGShClZyN6N8/CuHVpg0HDLpNX7QJJWg+AJ8p266PUt9uV1koQ9CpBH3A4l5kCy8u9Z/Qx3xykN/utUKOO2hrUbVI0G+Ubu3dOAD6OpTmR79XpDtdofo+LclQA1uSzHa2mMhZBi/BLy2FSg6GK2Q4PDbdDn/ye8OvWc/hNhDuySP2fCk/jaUEDTfozAPT0tNF/T4gym5a4OjRrGmeOj3iu3ygkosXGOORuvKkuSTyRu2or5liTV+a4s7Z0xxrvG2nMRaoZ3T3yE3Wb2nAr87ZfOXsYhrdPcvPPEqPE+iBmfkyb5FuOdixhFUg/loE9GtdPKIJpyttlmSmSpz2AeL4Y3tBOUVH6GU9s2bZldhJx0CUG48bw8k7Rcnf+BPvR8Zs0QgvxJcnl/2c8VOqANjTuC/m4s2RKcZvJsxPhRAETz5/FctqKvG9xloVbZVLTfnDR1DTTHjuM5/sosJ2s2gbflKjEKmdZsSCfD9OgF3slCfpTPHn2F+E1+Yp4/T5WCcTQFWRz0YPZQtJIZqCteGQcItZrHKT/bsRpa1aDnVjBQGIKo/1fOqWwkrBfi1gi8tLGO9fSlaxM1H2KvsvigM2/tfQMrXMeF1FaOe1OHxMRmo=",
+    "pubkey": "2692848155e5385d733a56fcaf528e6dfd998c5d7b1c991c7b6389cd95b9df14",
+    "id": "dd4d15eecd874d16cb37c24442a6e3cc13723208ec51032ac726ef08c378cebf",
+    "sig": "bc45bc54fd8bd8a264ae034a84a152067bf4d6cebf4abd3226cfbd9cea59a47c64cbe0cecb9151a6a52f2438a9241d03bdb471f8bdd3cf9f222f2e9c20fc588d"
+   },
+   "reader": "key1",
+   "expect": {
+    "id": "189273ac127360edcb3cb2877ca03727fbe2540b47016f6155c37b48a7457c4e",
+    "from": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+    "to": [
+     "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+    ],
+    "text": "See you at the Arcade?\nI'll be by the door.",
+    "at": 1794430800
+   }
+  },
+  {
+   "name": "not_for_this_reader",
+   "description": "The session key is handed the second key's wrap: it can't be opened.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1794387600,
+    "tags": [
+     [
+      "p",
+      "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+     ]
+    ],
+    "content": "AtC/ItoWQEQ3G5UXoVZAX9inTH23ZpOC1yF9iL8HAEurJrNe3XupRaPGABk4nf2uoCb52q03d2VmymVbhDmH0opsSq0JUqcRh9UU4knKelo7Vk8CDvVc7KiniT9C0WKH28Cp4SCe4JhrAH/UvlJu07l8zkdmGO4ODl+YO+gWJ7ECLmv60ij3mNFWGatK6weoZFpfgHREkubn/sInV3dMIfDAZvmFj3/0yNgHAl3i7s6p1q29l6DW1SwtEQYw3/4VAJYnZYzIkdXS/tTFvshe98+UhdgkhshLVpZdzHrOohn2Yh3OdxKdlCcWeGFuNq5ZXz6lngYllkzsXC8h6ZyMz2K50JBEwZ/HVBMXzQLdYnV3Rej0K8hnjk7wmCqSIJnmjMstu6CpocGMUulMilRNgZbFTFeShR/A3hyx/gbMmr8g2GTt+f0Q22JKCqMr9bTSmp7g2prN52R+azdl5N45IeKnShrTKC0jt918ZN8IP7TlaYB7LX2WqiGMzppMXZnMJ2O/xu8Oy0UqmHQeRmEiZJo++JOYBQX6bCNftuAa775P9jIjToEkK2fAv2fGBjLOPxZiPZfyUxV4G3sk+ln/9W5Cqh6VmqKypu501sTnn0EWHwnra2o1Ea22sc8J/fvQ8tkJVeDZ7HcpqwjDkMFXc5JZ8gJEkjtiPevLIjBMtpoeaHtp/uRU7ETho0RW81FmuxWegPQaa/ALziNdO5ZuUbGpPfC9shN/2HPSGQUIcePVZ7UehuTFVDxE2JihcNNC+Fq8OIPXebsKX8GDdkE5e1cNKOqVJ6erNWcrqXXO0JzC8+ZEQol+Gqz0td7uNF2cOim0yXUw6gEAxU4MPKZwJzcZCxvS650U+BSw4uqTsp1vRDGgbgo5DJyNLuGkdUjLpfeoPEVhVctsGHXNmY8YsBDQtrp90iwN56g5/Ahw6fDNnDwHeBzc55gCMKSi5MSXBOjOeZ9Jug7XVsTWNpjQgjQj1FHeJrCbetNQmasiJq7RTW0vALIJ3/4Vs9t9OSna1SN9VesH9xWlZ2mcSsoXTaWLBoTI1IZGCLz89U2g4L8W87btpYHjr5wg2ANl3a/BLzaqdmd9k2qGzdOOYgtVWDZrHo5K3C5HMIC6ir3zmVUZLhZe1oPJfvaABpRgUkdxN2o9yg2IaeFPG6VCELfizNg/hAB+cz09Re0IJ/8wLhDo9mpMFwClMuW5Y7GnO61qiUgP9a6YzEJ2TLIdgXbCJN/TKOROGRx8XlbsDWmlLHOW9B/WDpj6zOX/q5N5ESHAyhisabtKb7IK+7ZsGxPTQlLLtVyoxIndafJR023SflhR0c06qn+7IIG2PlK5hmCmy/lCxS/pd7dILlI/GvJnggrD4J7RGeFdbo8RojgvkSeZY9lw+bpyxH6c2MkouUs2dIhDrfnMa/ykjURYFjnzVZgKskdL79AZX7yKSY6KruedNhw=",
+    "pubkey": "2692848155e5385d733a56fcaf528e6dfd998c5d7b1c991c7b6389cd95b9df14",
+    "id": "e7510698c2f1de13481bf89f6bd6dbe83865a13e78c5e6c6463a7e723404493a",
+    "sig": "6579a3f57fc76d0ee4f154532529662edeaa5265d7f517ef9762bac7709bdf4fdc48bbbcb71f201779993bfc05728112afdf56eef980ce4e08b7e0d3f2bc36ad"
+   },
+   "reader": "session",
+   "expect": null
+  },
+  {
+   "name": "passed_off",
+   "description": "Says it is from the first key, sealed by the session key: dropped.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1794387600,
+    "tags": [
+     [
+      "p",
+      "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+     ]
+    ],
+    "content": "AtC/ItoWQEQ3G5UXoVZAX9inTH23ZpOC1yF9iL8HAEurJlte3XupRaPGABk4nf2uoCb52q03d2VmymVbhDmH0opsSq0JUqcRh9UU4knKelo7Vk8CDvVc7KiniT9C0WKH28Cp4SCe4JhrAH/UvlJu07l8zkdmGO4ODl+YO+gWJ7ECLmv60ij3mddxOqNR2lSACmR//UUgrbPM0uZeaSJzOb+VYOO4sEjcgqcRE1/C5u+n7e+ayLmlyggbLhZBuNATRsg2erDjt+zTy4HLj9lms9WKhq4Hps9YYo95+1/JqG+1RD3HfwuVnXsgGXZNAuJJX1OMqlwK8W3ORSIw+OPAzHq62NJp05yNBCEYsALuTXpiUdWPdP9PgnXngimUO+egld4C4bmMy8WIU+hytiMj0oXBdWaCpwOZ8yrGphrX2LA0027Fi6xX+3xBB5Q+sLCDvqX92Jqr3G9pWwZRjY4+IfiTA2TZFQhUzfQeZfVJJIb3M/t2fHCS/H6jlZxPMIS7FGyo8uMZxXBKu3Q+aVY3duQp5PKmG0LdGSJ9gqAR1skWxXVqXswaJ2Gl50bEHl7FLyhkO7DkdUNEOkdf6hjOxhs1uyTN3KeGt7MyuqDOqEkfAhu6FzoULsnlkeFzvJ7lktwMVZvH01kDvQCSqcgCF5F+6zo40T15H93IHjornJ5YG1VqjYNf73H/73RXzG5tnQjm1PNcFrYL5gwhPeV1PImzS4bn8jQB1ALNKRZabe3JUbct5PLDBSlJy+KjfsFyw17kE7rTE9lIEfr0aX5oQFsPL8XBA5nMSVACpXPCoY+ItfxwVa4uV8Kd5Lq6ITiRZGvO4ngaunhY911te/5EFEZDUViIz8x5+SXpmJHh0elGHU3OaC5mDsf/a7TfH0LAprjyQAgRH4Y7T3mN0cdBoki406la1yBNr7sou1wv7u+OkiYDK03bsJgGYqKptsiVALyceMpN7wjSAczVMpuAh2F01wTYIuSdfIEDkP53dK7SRz5oH6IZ0vgA6spzP3iH03J5FfBEphS+biqbT88WTfbcV9WZ1otBCb/790+ltOgW8+W89dew+s8h0lA+3vSWfzyqdTsulGGBmYDaOAQBD2c4TN0c3iJCM4e2nfPh3wRKPEof1Y/PL6GIBZZrCBEnZjpskA+LM+AbS6ZKF7vlzd9o0wJxcT48ReteJr98TyHexF4vIznGAYbfUtOQDJ1cu344w5iqqiRCKoIqthPxRu/mEcFwX9zAw4Sn0urFnMWnCNnJvDzNBKudLiiHnkQudK+2",
+    "pubkey": "2692848155e5385d733a56fcaf528e6dfd998c5d7b1c991c7b6389cd95b9df14",
+    "id": "7a42c42458f837481c83d028530762d1269a9650fe71a945c0e735ffafa77cc3",
+    "sig": "4aa1cc6731d4c0aaefabf1c5e52f5d6eebd9fb2ba705099feabbf597bfbb9852d69ddc155e11a2f21cde2291f18c774904514ad7d46251b224cf44bf0a0b3337"
+   },
+   "reader": "key2",
+   "expect": null
+  },
+  {
+   "name": "to_someone_else",
+   "description": "A real message from the first key to the session key, sealed and wrapped for the second: dropped.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1794387600,
+    "tags": [
+     [
+      "p",
+      "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+     ]
+    ],
+    "content": "AtC/ItoWQEQ3G5UXoVZAX9inTH23ZpOC1yF9iL8HAEurJlte3XupRaPGABk4nf2uoCb52q03d2VmymVbhDmH0opsSq0JUqcRh9UU4knKelo7Vk8CDvVc7KiniT9C0WKH28Cp4SCe4JhrAH/UvlJu07l8zkdmGO4ODl+YO+gWJ7ECLmv60ij3mNdwGatK6weoZFpfgHREkubn/sInV3dMIfDAZvmFj3/0yNgHAl3i7s6p1q29l6DW1SwtEQYw3/4VAJYnZYzIkdXS/tTFvshe98+UhdgkhshLVpZdzHrOohn2Yh3OdxKdlCcWeGFuNq5ZXz6lngYllkzsXC8h6ZyMz2K50JBEwZ/HVBMXzQLdYnV3Rej0K8hnjk7wmCqSIJnmjMstu6CpocGMUulMilRNgZbkW0OCsyGb2QC3/h3m3pYe5U/5orwR9mlwCrQ75f7So5bm2qO25WN+Jjl09IM/LruaDVuYAigmnYE5Z/lBILTcNo97fSGipWaiy4lhPJqXcmqrgPwOy0UqmHQeRmEiZJo++JOYBQX6bCNMtIo4779l0HcjTcAoPU3Yuzv0IH/IAW5vL4vhSRN8YUgl1Aqy8XcWtijO3/PviL9q1rqljGlAfQOhVm4UFpCL6sttj/jW8sELUpvv6XcptCTqqvNTbK9o3hdulSY/Xd3LIhZpn5knCXhrtdF873KeokNv41VmhUyIj4JBCvQw9DUPb44YAKzpFvzL6Ds/2R3rCj4+QOzle5sF2vfnOjtyq+GWT/d051GTCsuTQc8tCMnaVWYwfUxTauHLBL79Hx0nqirv4Y+ItfxwVa4uV8Kd5Li4Ij6XZmiYtCBI43RdpQ04fa0UQUQXVl2NmsZ4+Ca7wpPo0L8QH0rIaHo2DpH2arTZH0DA9regRgYSHYo4HSmN0cdBoki40/BYjSke8rt/uFki6urXkXoOex3R5JZRYqKp5MnCB+jPfpQZvFvVAcXQZ82A1jp1hVDcLuHALYkFnfkhcfqCRGZoH6IZ0vgA6sp/Oi/T03l4QPMVrkK3OXzMHZ4cGaOOAtGbh4RGDr2roU+l4uQar+C79ILnrMopiQcx2KeVfG3yc214mznSnoqKa1AMDmRsHIxI2ClLMNG9mPTljg1IPEkYgoCTeKeAUMFjCRRzOGpumAzcYOJPSK9HRb2zntpu1VAqL2w1HL4MJr98TyHexF4vIznGAYbfUtOQDJ1cu344w5iqqiRCKoIqthPxRu/mEUWzhUh6+5CjZ2bm0DzlPXJ1JnFJboFpXg2h8e7zvM6v",
+    "pubkey": "2692848155e5385d733a56fcaf528e6dfd998c5d7b1c991c7b6389cd95b9df14",
+    "id": "cec1d07f3cc93cfd35a6e3b658fec5991401dc660be579b2787c20e3e29e1cff",
+    "sig": "eae886a208bbbf13f339fcb7ee2d309d0635d6d389e3a732919a260ee021e2502750ccba583b0f60da2e096f3b5c868e7401cc91974a1ec1f588e9e4cc8b7e74"
+   },
+   "reader": "key2",
+   "expect": null
+  },
+  {
+   "name": "a_seal_with_tags",
+   "description": "A seal carries no tags. One that does is not a seal.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1794430800,
+    "tags": [
+     [
+      "p",
+      "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+     ]
+    ],
+    "content": "AtC/ItoWQEQ3G5UXoVZAX9inTH23ZpOC1yF9iL8HAEurJvte3XupRaPGABk4nf2uoCb52q03d2VmymVbhDmH0opsSq0JUqcRh9UU4knKfFRpFwxOQ/YAobv4zU9BjVLrpdetsCeY7LQwWiGXqgxmye0p1Fp7Z6ppXCL6Rp92JYZTLGe/hnOAm64ue9l8wVCBfW5qhiQ2g/ii1cMHW3VyHOTKc/aQhVvDt+J+VADly8yizLeGgpSP4y8pH38Op88yGrUsX7LIuPCC/YPHm8Np8++o4dI9of5mFZVciFyKvRvmeR24SzqBmHxff1xtNOx2Vy+uvgIq6mniSQEW14jCsXGrwLZJlLWGTBkj8x/GallHY8HLXPRT/Uj03w6zPJzwqcww/LWhwKbQSc4lhl419pDRLlyXmnGwpxGw0Drj3Z0O7XDWlIAaoXxYCJE45u/JvqPK3JPb8FpoXgRoir9OFfupSkWHFDYSsOEHEvBSeaWEEYtAA1Dy/3yK7KVMG6bMDA6u2sQO0Fg+sVYtCCYzarouzPqqBV6ZFwtgmL8Kz5RqxXxfQsBtCHXu+TyuAlfiNjcjO5aTSmB9Z054/wfW5m4bnwnR3KDsk79TnYjJqnUpWS6rXysyPa2vjqtIuMX78ckeRZ75zW0MoFyYlc1Ld7FspgBatGMgK+DSKzBGuJ8iEkAepYFI8hWbnkcL5nNGnguggI9HeKYFmwlWQOJFE4m0EfmltS8kryXNGQoKc/XGWqI34t/2Mw1DkMaLatc+33m7MZb1SLUMUOLwOmU6WlorYPvOEKrUFFwA11SK35jF9O48AoQFBZfRhc66d2GcEmyN81oZjQI55EgReYtyQgUTTV7a3IcduCSw49mot+RQRRPLKDwyIM6gaJPcfWuXxM2kM15RaoNrGnXuiKkd8ibRgsdbm0cXoPsAxwZUvciB9mxgOxC+huteOOD3kpX5AY+WWOVn3nuqDLm+N+mP0zoFwAOgTu6XfccN4epXPrKFEzUoV+pazeVwl8MKMybAzGI7AqVO+wilZ2nNH5oRHaKPU9WV1IpHXrj7oR/wt+kU9bO4ooG0+J19iFM32aPHK2z9c2sowD3QlIDaaQBXWjE/HNxO3ShLNNC4ir3zg1hcNg5K0YKedPqAUJg0CEQmNDlmyVzeNeIYHaZLQOuwy9QzhQBxJWtpR74JJqg2LEO7/TxJFQr2Nb/qN+b2aq9tikcL4bSI2U0lCLgIg3eVc9iHJuoTThN7CwXiXGv3LHOSoByGXZSpyub6qJJ+FyOXyhv7OO5OM7cMr7dlRkDVE1rItFTu27m/WsFk4FzqSGgy4P5cmUvaQ7jQDWKA4FmTqcx7pk3YFIZ5GmUJLsVQsGnx16bkKIc/Deklww4ZphD6Vb0Uyt4WoB+tvvsKxEs2dIhDXgBrCwPwAvIL08pqBswAkRRBadiq+/LE/DZkNlhw/DY=",
+    "pubkey": "2692848155e5385d733a56fcaf528e6dfd998c5d7b1c991c7b6389cd95b9df14",
+    "id": "5f5c0491cdf5957b28bb1c431b3db12357bd6c88f34a20c020f4fce919b01939",
+    "sig": "f5a8757ae599cf151f810396a79d9cbfa390a03f2f6f6509d7453c883a6628c4413fd253fab7113c9527bc879dec3413467b40d9c9613c2ba2c22a5490ee4653"
+   },
+   "reader": "key2",
+   "expect": null
+  },
+  {
+   "name": "not_a_message",
+   "description": "What was sealed is a note, not a message: dropped.",
+   "wrap": {
+    "kind": 1059,
+    "created_at": 1794387600,
+    "tags": [
+     [
+      "p",
+      "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+     ]
+    ],
+    "content": "AtC/ItoWQEQ3G5UXoVZAX9inTH23ZpOC1yF9iL8HAEurJrNe3XupRaPGABk4nf2uoCb52q03d2VmymVbhDmH0opsSq0JUqcRh9UU4knKelo7Vk8CDvVc7KiniT9C0WKH28Cp4SCe4JhrAH/UvlJu07l8zkdmGO4ODl+YO+gWJ7ECLmv60ij3mNFSGatK6weoZFpfgHREiuXG5sUgbVVeOOmpO/uGh3zguvIFAV3Dx9n0zvGgoYrZ1TwqXhI3meQWKokwOKbyl9XC9u7FtdRb98iMhdszw9pme4JEy2rdsxjHYgLdXgm1lDBdMmYwdOlNXyqmnV0HkxTBSDsshOKPhiT41JNtxZDBby0A5F73a3ZdMOf0K8xijE7KmCuSAY/lnNM54rPzy8GSc8FYrClLxK/KWFWCvAvArgeivh35hr5W8Uj6ub9M3FRrJaI7x/+I/YX22Y3V4UptbCJ59NpyL7u7SxuYPCY1t8lzZ8h3ILSaOoh4PXmIpSHeh5oMAbaUIC65gcYZxkUznHZbVnEhYqM67Yy1QljwYydvtqsJqbkZx3BoXcEwOGD+ujvMAlDKLx4kPcGBeBFEAGl96lituDkCrSjzr/CpqdRrmoO4kkEJeSPoax0BD8mPq8kNmOrWqd0MUs7w+ncAow3EgNFQbL939QUzmSQ/PeiWJBZqttoeJFZpi/RT7xLt6kNvrFBm/kiIyM4ebvAh7w0UO7RqUfftLfP38Eho0yONGT8Mf/TWJfkN/ojgVDxE2JihcNNC+Fq8OIPXebsKX8GDdkE5e1cNKOqVJ6erNWcrqXXO0JzC8+ZEQol+Gqz0td7uNF2cOim0yXUw6gEAxU4MPKZwJzcZCxvS650U+Bbh+PWBvIpBBjjJZTsiH/b7OemCG2bu7sr3DFVLVp1vCX6ZyZFwhS3JuOhL0iwN56g5/Ahw6fDNnDwHeBzc55gCMKSi5MSXBOjOeZ9Jug7XVsTWNpjQgjQj1FHeJrCbetNQmasiJq7RTW0vALIJ3/4Vs9t9OSna1SN9VesH9xWlZ2nJTZ5ASKHdAIea1IcVXbCv9B32tehG9OK+qNPnq8582gk+36KVe2n8IW4qxmrcnoGJOwAEC2c6SN1AjnhFONK5ir3zmVUZLhZe1IOZL6GEBJZrUBFxNG47zAuJM7FMHaFLQLzgmt47hVB4Izw0EbhbcPtgfRLspj9NRQvxObPsNuOnO/tliEcMoa6dn0FxHOcfjybIco3XcOJORk9+XgPjCDz3fHDEokuFW5StnOb8/sQkQiaRyUqnarZJYrdZ+rZuTU7WE1HKvAaoxIndafJR023SflhR0c06qn+7IIG2PlK5hmCmy/lCxS/pd7dILlI/GvJnggrD4J7RGeFdbo8RojgvkSeZY9lw+bpyxH6c2MkouUs2dIhDaaFiTZf23GPGfKB6MiIw4GsOGCqUPkOfD9IH57M2zL8=",
+    "pubkey": "2692848155e5385d733a56fcaf528e6dfd998c5d7b1c991c7b6389cd95b9df14",
+    "id": "4b468bdb1039bc8ecef2692e08869ecdcced52482cb835074204b3d8c28aa645",
+    "sig": "902eeb66b310dc3ffdf9a32f81f675eb13aa01f704d3b790ae0d2155daca070070a4dc326e53b0edc9ab5513751fefa87113a47238553144be08f6e258e53aad"
+   },
+   "reader": "key2",
+   "expect": null
+  }
+ ]
+}

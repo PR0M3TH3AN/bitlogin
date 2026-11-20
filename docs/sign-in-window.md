@@ -870,6 +870,11 @@ Asked for by the BitPortal session on 2026-11-20 (NSWP-10 "Asking for
 more", NSWP-14, kit 0.40.0), on the owner's decision of the same day:
 "worlds no differently than a Nostr client. Some trust is required."
 
+**What can be asked.** Every `state` the signer sends a world, locked or
+unlocked, carries `offers`: the names it can be asked for (today
+`["follows", "messages"]`). A world asks for nothing that is not there
+(asked for by the BitPortal session, 2026-11-20).
+
 **Asking.** A world sends `{ t: "want", more: ["follows"] }`. It approves
 nothing. The signer remembers it and the window shows it, in BitLogin's own
 words, with two buttons: **Allow, and let it change who I follow** and
@@ -928,6 +933,74 @@ Where it stops short:
 - **The list of sites allowed** (§SW18) does not yet say which sites may
   change who the person follows.
 - **Tried in Chromium only,** with made-up addresses and mock relays.
+
+# SW16c. Private messages from inside a world (built on `beta`)
+
+Asked for by the BitPortal session on 2026-11-20 (NSWP-10 "Asking for
+more", NSWP-14 "Messages from inside a world", kit 0.42.1), on the owner's
+words that day: "Yes more like a nostr client." The owner said "Yes, build
+it" to this design the same day.
+
+**This is the most a world can be let do.** A world let do this can read
+every private message sent to the person that it can find, and write as
+them to anyone. It shows the messages on their screen, and nothing here can
+stop a world that means to send what it read somewhere else. A message that
+was read can't be unread.
+
+**Asking.** A world sends `want` with `more` naming `messages` (with
+`follows` too, where it has that already: NSWP's kit sends everything it
+holds plus the new one). The window asks about what is new, in BitLogin's
+words, with the two buttons of §SW16b: **Allow, and let it send and read my
+private messages**, and **Allow without that**. What the site already had
+is said on the page and kept either way.
+
+- **For one site, by its own address.** Never with a family, never for an
+  application: the same rules as `follows`, and the same refusal whole.
+- **Asked again after seven days,** however well BitLogin knows the site: a
+  grant that carries `messages` is kept seven days, not thirty (owner,
+  2026-11-20).
+- **Ended by `lock`,** with everything else.
+
+**Three requests,** each refused unless `more` has `messages`:
+
+```
+site → signer   { ..., t: "seal", to, text }       signer → site   { ..., t: "sealed", message, seals }
+site → signer   { ..., t: "unwrap", event }        signer → site   { ..., t: "message", message }
+site → signer   { ..., t: "reach", relays }        signer → site   { ..., t: "signed", event }
+```
+
+- **`seal`.** The signer writes the message itself (kind 14, never signed):
+  from the visitor, one `p` tag naming `to`, the words cleaned, the time
+  now. It seals it (kind 13, no tags, NIP-44) to the reader and again to
+  the visitor, signs both, and hands back the message and
+  `seals: [forReader, forWriter]`. The world wraps each with a key of its
+  own, used once, and sends them. Nothing else a world sends with the
+  request is read. Writing to oneself is refused.
+- **`unwrap`.** A kind 1059 wrap, for the visitor, with a real signature.
+  The signer opens both layers and answers `{ id, from, to, text, at }`.
+  `from` is the key that signed the seal: a message that says it is from
+  anyone else is dropped. So is a seal with tags, anything that is not a
+  message, and a message the visitor neither wrote nor is a reader of.
+- **`reach`.** A kind 10050 list of where the visitor's messages reach
+  them: up to four `wss` relays at public names, each once. No mark of the
+  site is put on it.
+- **A world is never given a key,** and can't have anything else encrypted
+  or decrypted. `sign` still refuses kinds 13, 14, 1059 and 10050.
+- **Limits, for one world:** ten sealed a minute and two hundred an hour,
+  kept across page loads; six hundred opened a minute and twelve thousand
+  an hour (a first look opens some hundreds in a row; this count starts
+  again with the page); three `reach` a minute and twelve an hour.
+
+Checked against NSWP's vectors (`vectors/people.json` at `4cde6bf`): all
+seven `messages` cases, and the message and seals of `sealedForAWorld`.
+
+Where it stops short:
+
+- **The count on opening is not a wall.** A world let read messages can
+  read them: the count bounds a runaway script, not a world that means to.
+- **Taking it back** is taking the site back (§SW18): the list of sites
+  allowed does not yet show or end `messages` by itself.
+- **Tried in Chromium only,** with made-up addresses.
 
 # SW17. Not covered
 
