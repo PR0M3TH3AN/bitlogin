@@ -279,6 +279,20 @@ export interface WorldUnwrapPayload {
 export interface WorldReachPayload {
   relays: string[];
 }
+/** A score on one of a world's boards (NSWP-15). The site it is marked with is the worker's own: the one the session serves. */
+export interface WorldScorePayload {
+  world: string;
+  board: string;
+  score: number;
+  title?: string;
+  format?: "time";
+}
+/** An achievement held in a world (NSWP-16). The site it is marked with is the worker's own. */
+export interface WorldAchievePayload {
+  world: string;
+  achievement: string;
+  title: string;
+}
 export interface WorldOpenResult {
   slot: string;
   data: string;
@@ -559,6 +573,8 @@ export type WorkerActionMap = {
   worldFind: [WorldFindPayload, { d: string }];
   worldOpen: [WorldOpenPayload, WorldOpenResult];
   worldFollow: [WorldFollowPayload, NostrEvent];
+  worldScore: [WorldScorePayload, NostrEvent];
+  worldAchieve: [WorldAchievePayload, NostrEvent];
   worldSeal: [WorldSealPayload, WorldSealResult];
   worldUnwrap: [WorldUnwrapPayload, { message: ReadMessage }];
   worldReach: [WorldReachPayload, NostrEvent];

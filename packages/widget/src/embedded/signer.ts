@@ -271,6 +271,19 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       }
     }
 
+    if (ask.t === "score" || ask.t === "achieve") {
+      // For any world its visitor allowed, and not for an application. Built whole in the worker, for the site the
+      // hand-off was sealed for.
+      if (app) return refuse();
+      try {
+        const score = ask.t === "score" ? await headless.worldScore(ask.world, ask.board, ask.score, { ...(ask.title ? { title: ask.title } : {}), ...(ask.format ? { format: ask.format } : {}) }) : await headless.worldAchieve(ask.world, ask.achievement, ask.title);
+        if (score.pubkey !== pubkey) return refuse();
+        return say({ t: "signed", id: ask.id, event: score });
+      } catch {
+        return refuse();
+      }
+    }
+
     if (ask.t === "seal" || ask.t === "unwrap" || ask.t === "reach") {
       // Only a world the user let send and read their private messages, by name, in the window.
       if (app || !more.includes("messages")) return refuse();

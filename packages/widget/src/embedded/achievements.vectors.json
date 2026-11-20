@@ -1,0 +1,41 @@
+{
+ "description": "From NSWP's vectors/achievements.json at cdb91a4: `world` and `signed`, as they are there.",
+ "world": "37300:9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6:arcade",
+ "signed": {
+  "id": "all-twelve",
+  "title": "All twelve",
+  "origin": "https://arcade.example",
+  "now": 1794430800,
+  "expect": {
+   "kind": 37307,
+   "created_at": 1794430800,
+   "tags": [
+    [
+     "d",
+     "37300:9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6:arcade/all-twelve"
+    ],
+    [
+     "a",
+     "37300:9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6:arcade"
+    ],
+    [
+     "achievement",
+     "all-twelve"
+    ],
+    [
+     "title",
+     "All twelve"
+    ],
+    [
+     "alt",
+     "An achievement in a world: All twelve"
+    ],
+    [
+     "nswp:world",
+     "https://arcade.example"
+    ]
+   ],
+   "content": ""
+  }
+ }
+}

@@ -123,6 +123,28 @@ to it reaches everyone who uses it, at once. So there are two channels.
   merged with a merge commit so both histories are kept. Do it when a piece
   of work is solid, not on a schedule, and say in the pull request what was
   tried on beta. It is the owner's to merge.
+- **Before a promotion: the relay probe.** An account lives on the relays
+  in `BUILTIN_VAULT_RELAYS`, and a relay that is online is not thereby one
+  that keeps an account (`docs/spec.md` §19.1). So before each promotion,
+  by hand, on a home connection and not a datacenter or VPN address:
+
+  ```
+  npm run build
+  node scripts/relay-probe.mjs --json probe.json              # the shipped lists
+  node scripts/relay-probe.mjs --discover --json found.json   # candidates from NIP-66 monitors
+  # fifteen minutes or more later:
+  node scripts/relay-probe.mjs --recheck probe.json
+  node scripts/relay-probe.mjs --recheck found.json
+  ```
+
+  It publishes throwaway notes of random bytes to public relays, which is
+  why it is run by a person and never by CI. It informs and does not
+  decide: say in the pull request what it found. A relay is added only
+  after it held everything through the re-check on two different days, by
+  a reviewed change that records the measurement beside the list. No relay
+  is ever removed from the list: older accounts may live only there, and a
+  client that stopped asking could not find them. A promotion is not held
+  back because a relay was slow that day.
 - **After a promotion,** merge `main` back into `beta` if `main` gained
   anything `beta` lacks (a hotfix, a Dependabot update).
 - **A fix that cannot wait** may go to `main` directly, by pull request,
