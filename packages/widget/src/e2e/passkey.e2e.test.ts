@@ -755,6 +755,204 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
+    "one Allow covers every site of a family, asked at its second site (site-family.md)",
+    async () => {
+      // Sites at https addresses under two made-up domains. Nothing is listening at them: the browser's requests
+      // for their pages are answered here, so each is a real page of that address with BitLogin's signer in it.
+      const sitePage = `<!doctype html><meta charset="utf-8"><title>a site of a family</title><button id="open">Sign in with BitLogin</button>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  document.getElementById("open").onclick = () => { window.popup = window.open(SIGNIN + "/connect/index.html", "bitlogin-connect", "popup,width=460,height=660"); };
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const ONE = "https://one.worlds-test.example";
+      const TWO = "https://two.worlds-test.example";
+      const THREE = "https://three.worlds-test.example";
+      const FOUR = "https://four.worlds-test.example";
+      const ELSEWHERE = "https://one.other-test.example";
+      const FAMILY = "https://*.worlds-test.example";
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        await context.route(/^https:\/\/[a-z]+\.(worlds|other)-test\.example\//u, (route) =>
+          route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: sitePage })
+        );
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        const errors: string[] = [];
+        const visit = async (site: string) => {
+          const page = await context.newPage();
+          page.on("pageerror", (err) => errors.push(String(err)));
+          await page.goto(`${site}/`);
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+          const window_ = async () => {
+            const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+            await popup.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+            // A press sooner than the question could be read is ignored.
+            await popup.waitForTimeout(1000);
+            return popup;
+          };
+          const unlocked = () => page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+          return { page, ask, window: window_, unlocked };
+        };
+        const sessionKey = getPublicKeyHex(generatePrivateKey());
+
+        // The first site of the family: the question is the ordinary one. Nothing says there is a family.
+        const one = await visit(ONE);
+        expect(await one.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        const first = await one.window();
+        expect(await first.locator("#site").textContent()).toBe(ONE);
+        expect(await first.locator("#family").isVisible()).toBe(false);
+        expect(await first.locator("#allow-family").isVisible()).toBe(false);
+        expect(await first.locator("#allow").textContent()).toBe("Allow");
+        await first.locator("#allow").click();
+        await one.unlocked();
+        expect(await one.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me, remembered: true });
+
+        // The second: one site's Allow is not another's. It is asked, and now offered the family, as two buttons.
+        const two = await visit(TWO);
+        expect(await two.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        expect((await two.ask({ t: "sign", event: { kind: 1, content: "not allowed here", tags: [] } })).t).toBe("refused");
+        const second = await two.window();
+        expect(await second.locator("#site").textContent()).toBe(TWO);
+        expect(await second.locator("#family").isVisible()).toBe(true);
+        expect(await second.locator("#family-earlier").textContent()).toBe(ONE);
+        expect(await second.locator("#family-domain").textContent()).toBe("worlds-test.example");
+        expect(await second.locator("#family-lasts").textContent()).toContain("7 days");
+        expect(await second.locator("#allow-family").textContent()).toBe("Allow every worlds-test.example site");
+        expect(await second.locator("#allow").textContent()).toBe("Just this one");
+        // A family is never for one visit: unticking "remember" takes the offer away, and ticking it brings it back.
+        await second.locator("#remember").uncheck();
+        expect(await second.locator("#allow-family").isVisible()).toBe(false);
+        expect(await second.locator("#allow").textContent()).toBe("Allow");
+        await second.locator("#remember").check();
+        expect(await second.locator("#allow-family").isVisible()).toBe(true);
+        await second.locator("#allow-family").click();
+        await two.unlocked();
+        const twoState = await two.ask({ t: "state" });
+        expect(twoState).toMatchObject({ unlocked: true, pubkey: me, remembered: true });
+        // Seven days, for a family BitLogin does not know.
+        expect(twoState.until - Date.now() / 1000).toBeGreaterThan(6 * 24 * 3600);
+        expect(twoState.until - Date.now() / 1000).toBeLessThanOrEqual(7 * 24 * 3600);
+        if (!second.isClosed()) await second.waitForEvent("close", { timeout: 10_000 }).catch(() => second.close());
+
+        // A third site of the family, never seen before: signed in with no window and nothing pressed.
+        const pagesBefore = context.pages().length;
+        const three = await visit(THREE);
+        await three.unlocked();
+        expect(await three.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me, remembered: true });
+        expect(context.pages().length).toBe(pagesBefore + 1);
+        // What it signs is marked with its own address, and its pass is for its own address: not the family's,
+        // and not the site the family was allowed from.
+        const note = await three.ask({ t: "sign", event: { kind: 1, content: "from a third site", tags: [] } });
+        expect(note.event).toMatchObject({ kind: 1, pubkey: me, tags: [["nswp:world", THREE]] });
+        const passed = await three.ask({ t: "pass", session: sessionKey });
+        expect(passed.t).toBe("signed");
+        expect(verifyNostrEvent(passed.event)).toBe(true);
+        expect(passed.event.tags.slice(0, 2)).toEqual([["nswp:session", sessionKey], ["nswp:origin", THREE]]);
+        // Still only a note, a reaction and a pass: nothing an application would have to be approved for.
+        for (const kind of [0, 3, 4, 27235, 27300, 30078]) expect((await three.ask({ t: "sign", event: { kind, content: "{}", tags: [] } })).t, String(kind)).toBe("refused");
+        expect((await three.ask({ t: "encrypt", peer: sessionKey, text: "x" })).t).toBe("refused");
+
+        // The counts are the family's. Two passes a minute: the third site made one, the second makes one, and
+        // then neither gets another. Three notes a minute, the same way.
+        await two.page.reload();
+        await two.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect((await two.ask({ t: "pass", session: sessionKey })).t).toBe("signed");
+        expect((await two.ask({ t: "pass", session: sessionKey })).t).toBe("refused");
+        expect((await two.ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("signed");
+        expect((await two.ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("signed");
+        expect((await two.ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("refused");
+        await three.page.reload();
+        await three.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await three.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me });
+        expect((await three.ask({ t: "pass", session: sessionKey })).t).toBe("refused");
+        expect((await three.ask({ t: "sign", event: { kind: 7, content: "+", tags: [] } })).t).toBe("refused");
+
+        // A site on another domain is not in the family, whatever it is called.
+        const elsewhere = await visit(ELSEWHERE);
+        expect(await elsewhere.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        expect((await elsewhere.ask({ t: "sign", event: { kind: 1, content: "elsewhere", tags: [] } })).t).toBe("refused");
+        await elsewhere.page.close();
+
+        // The sign-in address's list has the family as one row, with the sites it was allowed from.
+        const listing = await context.newPage();
+        await listing.goto(`${origin}/sites/index.html`);
+        const familyRow = listing.locator(`#sites li[data-site="${FAMILY}"]`);
+        await familyRow.waitFor({ timeout: 30_000 });
+        expect(await familyRow.locator(".connect-site").textContent()).toBe("Every site at worlds-test.example");
+        expect(await familyRow.textContent()).toContain(`Allowed from ${TWO}, ${ONE}`);
+        expect(await listing.locator("#sites li[data-site]").count()).toBe(2);
+        await listing.close();
+
+        // Signing out of one site that the family signed in signs out of the family: the others stop too.
+        expect(await three.ask({ t: "lock" })).toMatchObject({ unlocked: false });
+        await two.page.reload();
+        await two.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await two.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        await three.page.reload();
+        await three.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await three.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        // The first site was allowed by itself, before there was a family. That grant is its own, and stays.
+        await one.page.reload();
+        await one.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await one.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me, remembered: true });
+
+        // Asked again at the third site, and this time: just this one. Then no other site of the family is signed
+        // in by it, and the question is not put again at the next one.
+        const third = await three.window();
+        expect(await third.locator("#allow-family").isVisible()).toBe(true);
+        await third.locator("#allow").click();
+        await three.unlocked();
+        const four = await visit(FOUR);
+        expect(await four.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        const fourth = await four.window();
+        expect(await fourth.locator("#family").isVisible()).toBe(false);
+        expect(await fourth.locator("#allow-family").isVisible()).toBe(false);
+        expect(await fourth.locator("#allow").textContent()).toBe("Allow");
+        await fourth.close();
+        await two.page.reload();
+        await two.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await two.ask({ t: "state" })).toMatchObject({ unlocked: false });
+
+        // No site heard the key, in any message.
+        for (const site of [one, two, three, four]) expect(JSON.stringify(await site.page.evaluate(() => (window as any).heard))).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    },
+    240_000
+  );
+
+  it(
     "a different passkey derives a DIFFERENT account (PRF is per-credential)",
     async () => {
       const browser = await playwright!.chromium.launch();

@@ -1504,6 +1504,12 @@ storage the sign-in address cannot reach. It is taken back with a record
    once three days have passed with no relay answering.
 6. **No asking site** may have an event signed under a `d` tag beginning
    `bitlogin:`.
+7. **A family of sites** (`docs/site-family.md`) is listed as
+   `https://*.<registrable domain>`. A key kept for a site of that family,
+   or for the family, at time *t* shall be discarded if the family is
+   listed with `before >= t`. A key kept for a family shall also be
+   discarded if any site of that family is listed with `before >= t`. A
+   reader that keeps no keys for families may ignore such an entry.
 
 ---
 

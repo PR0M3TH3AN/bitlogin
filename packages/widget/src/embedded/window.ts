@@ -13,9 +13,12 @@
 import type { HeadlessSigner } from "../headless.js";
 import { handoffMessage, readHandoffMessage } from "./policy.js";
 import { describePermissions, knownAppName, mayHold, type AppPermissions, type PermissionWords } from "./permissions.js";
+import { familyDomain, inFamily, knownFamily } from "./family.js";
+import { familyOf } from "./publicSuffix.js";
 
 export { describePermissions, knownAppName, type AppPermissions, type PermissionWords };
-export { describeAllowed, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
+export { declineFamily, describeAllowed, familyDeclined, familyOffer, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
+export { familyDomain, familyOf, inFamily, knownFamily };
 export { SIGN_LIMITS } from "./policy.js";
 export { askLockDevice } from "../lockDevice.js";
 
@@ -34,9 +37,17 @@ export interface FoundSigner {
    * is whether they left it ticked. Resolves
    * true once the signer says it is unlocked.
    */
-  grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string, remember?: boolean): Promise<boolean>;
+  grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string, remember?: boolean, forFamily?: boolean): Promise<boolean>;
   /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
   readonly known: boolean;
+  /**
+   * The family of sites this one is in, `https://*.domain`, where one may be
+   * offered (docs/site-family.md SF3), or "". Never for an application. The
+   * embedded signer works it out again, and refuses a hand-off for another.
+   */
+  readonly family: string;
+  /** Whether BitLogin knows that family: then it is kept thirty days, and otherwise seven. */
+  readonly knownFamily: boolean;
 }
 
 export interface FindSignerOptions {
@@ -92,13 +103,18 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       const { world, recipient } = msg;
       // Checked again here, on the page that shows it: a set this site may not hold is no request at all.
       const wants = msg.wants && mayHold(world, msg.wants) ? msg.wants : null;
+      const family = wants ? "" : familyOf(world);
       resolve({
         site: world,
         wants,
         known: knownAppName(world) !== null,
-        async grant(session, name, remember) {
-          // What is sealed is exactly what this page was given to show: the set, for the site the browser named.
-          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world, remember === true);
+        family,
+        knownFamily: family ? knownFamily(family) : false,
+        async grant(session, name, remember, forFamily) {
+          // What is sealed is exactly what this page was given to show: the set, for the site the browser named,
+          // and its family only where the user chose that, with "remember" left on.
+          const asFamily = forFamily === true && remember === true && !!family;
+          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world, remember === true, asFamily ? family : undefined);
           const answered = new Promise<boolean>((done) => {
             onDone = done;
             setTimeout(() => done(false), 8000);

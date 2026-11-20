@@ -44,8 +44,14 @@
       <li id="lasts">It lasts until you sign out of that site, or 30 days, on this device.</li>
     </ul>
     <label id="remember-row" class="connect-remember" hidden><input id="remember" type="checkbox" checked /> <span id="remember-label">Remember this site on this device</span></label>
+    <div id="family" class="connect-known" hidden>
+      <p>You allowed <strong id="family-earlier"></strong> <span id="family-when"></span>.</p>
+      <p>Every site whose address ends in <strong id="family-domain"></strong> can know who you are and ask you to sign notes, without asking you first. Choose this only if one person or team runs all of them.</p>
+      <p id="family-lasts" class="connect-small"></p>
+    </div>
     <p class="connect-small">Your key stays with BitLogin. The site never sees it, and nothing is typed there.</p>
     <div class="cta-row">
+      <button id="allow-family" class="btn primary" type="button" hidden>Allow every site</button>
       <button id="allow" class="btn primary" type="button">Allow</button>
       <button id="deny" class="btn secondary" type="button">Don't allow</button>
     </div>

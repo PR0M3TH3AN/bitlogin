@@ -8,6 +8,22 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **One Allow can cover every site under one domain
+  (`docs/site-family.md`).** At the second site of a family the sign-in
+  window offers "Allow every example.com site" beside "Just this one".
+  After that, any site under that domain is signed in with nothing
+  pressed, for notes, reactions and room passes. An application's own
+  permissions still need its own Allow. Never offered on shared hosting
+  names (`x.vercel.app`, `alice.github.io`).
+- **New files to deploy with the sign-in window and signer:** one more
+  `bitlogin-shared-*.js` chunk, holding the Public Suffix List (45 KB
+  compressed). A site that vendors only `bitlogin.js` and the worker is
+  not affected.
+- **New on the headless signer:** `exportHandoff()` takes a family;
+  `restoreSignerGrant()` takes the site's family. `FoundSigner` gains
+  `family` and `knownFamily`, and `grant()` a fourth argument.
+- **The take-back record may list a family** (`https://*.example.com`). An
+  older signer ignores such an entry; it holds no family grants.
 - **The name a site is told is the one a person shows** (§SW16): their
   profile's `display_name`, then `displayName`, then `name`, the order
   BitPortal and other Nostr clients use. It was `name` first. A room pass

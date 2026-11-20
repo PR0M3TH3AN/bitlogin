@@ -21,8 +21,15 @@
  * treated like any other.
  *
  * Who is asking is what the browser says, never what the site says.
+ *
+ * A site may also be signed in by its family's grant (docs/site-family.md),
+ * where the user allowed every site under one domain. Which family a site is
+ * in is worked out here, from the address the browser gave, by the Public
+ * Suffix List: never by the site, and never by the window.
  */
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
+import { knownFamily } from "./family.js";
+import { familyOf } from "./publicSuffix.js";
 import { APP_LIMITS, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import type { Profile } from "./profile.js";
 import {
@@ -137,7 +144,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     (remembering ??= (async () => {
       if (!site) return;
       try {
-        const kept = await (await load()).restoreSignerGrant(site);
+        const kept = await (await load()).restoreSignerGrant(site, familyOf(site) || undefined);
         if (!kept) return;
         pubkey = kept.pubkey;
         name = kept.name ?? null;
@@ -275,6 +282,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       const got = await signer.acceptHandoff(msg.sealed);
       // A hand-off sealed for an application names the site it was approved for. For another site it is refused.
       if ((got.app && got.app.site !== site) || (got.site && got.site !== site)) throw new Error("for another site");
+      // A hand-off for a family is for this site's own family, as this page works it out, and no other.
+      if (got.family && got.family !== familyOf(site)) throw new Error("for another family");
       profile = got.profile ?? null;
       app = got.app?.permissions ?? null;
       gates = appGates();
@@ -286,7 +295,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       // loaded: thirty days for one BitLogin knows, seven for any other. A site they unticked it for is allowed
       // for this visit: it lasts as long as the page does, and nothing is written down. So does one that can't
       // be kept (a browser that gives an embedded page no storage), and every site while the lock is on.
-      until = Math.floor(Date.now() / 1000) + (got.remember ? (knownAppName(site) !== null ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec);
+      // A family is kept by the family's own name: thirty days for one BitLogin knows, seven for any other.
+      const known = got.family ? knownFamily(got.family) : knownAppName(site) !== null;
+      until = Math.floor(Date.now() / 1000) + (got.remember ? (known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec);
       remembered = got.remember === true && (await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false));
       if (!remembered) until = Math.min(until, Math.floor(Date.now() / 1000) + SIGN_LIMITS.visitSec);
       back({ t: "done", nonce: msg.nonce, ok: true });

@@ -4,7 +4,19 @@
 // BitLogin's workers, as a key that can only sign.
 //
 // This page never holds the key, and speaks only to pages of its own origin.
-import { askLockDevice, describePermissions, findEmbeddedSigner, knownAppName, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
+import {
+  askLockDevice,
+  declineFamily,
+  describePermissions,
+  familyDeclined,
+  familyDomain,
+  familyOffer,
+  findEmbeddedSigner,
+  knownAppName,
+  loadAllowed,
+  recordAllowed,
+  SIGN_LIMITS
+} from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -22,6 +34,8 @@ let who = null;
 let lockOn = false;
 let askedAt = 0;
 let finished = false;
+/** Where every site of this one's family may be allowed at once (docs/site-family.md SF4): the earlier site of it. */
+let offer = null;
 
 /** Relays other than BitLogin's own list, where the page names them. The live page names none. */
 const relayList = (value) => (value || "").split(",").map((url) => url.trim()).filter(Boolean);
@@ -68,7 +82,7 @@ const leave = () => {
  * any other. Unticked, it is for this visit. With the lock on, every site is for one visit, and there is no box.
  */
 const days = () => (found.known ? 30 : 7);
-const lasting = (what, row, box, label, line) => {
+const lasting = (what, row, box, label, line, after) => {
   const say = () => {
     $(line).textContent = lockOn
       ? `It lasts for this visit: until that ${what}'s page is closed or loaded again. Your lock is on, so nothing is kept for any site.`
@@ -79,8 +93,30 @@ const lasting = (what, row, box, label, line) => {
   $(row).hidden = lockOn;
   $(label).textContent = `Remember this ${what} on this device for ${days()} days`;
   $(box).checked = !lockOn;
-  $(box).onchange = say;
+  $(box).onchange = () => {
+    say();
+    after?.();
+  };
   say();
+};
+
+/**
+ * The family question, at the second site of a family (docs/site-family.md SF4): two buttons in place of Allow,
+ * neither of them the default. Only while "remember" is ticked: a family is never allowed for one visit.
+ */
+const familyShown = () => !!offer && !lockOn && $("remember").checked;
+const showFamily = () => {
+  const shown = familyShown();
+  $("family").hidden = !shown;
+  $("allow-family").hidden = !shown;
+  $("allow").textContent = shown ? "Just this one" : "Allow";
+  if (!offer) return;
+  const domain = familyDomain(found.family);
+  $("family-earlier").textContent = offer.site;
+  $("family-when").textContent = `on ${new Date(offer.at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long" })}`;
+  $("family-domain").textContent = domain;
+  $("family-lasts").textContent = `It lasts ${found.knownFamily ? 30 : 7} days on this device, or until you sign out of any one of them, which signs you out of them all.`;
+  $("allow-family").textContent = `Allow every ${domain} site`;
 };
 
 /** A list, written as text: nothing a site sent is ever put on this page as markup. */
@@ -126,7 +162,10 @@ const ask = () => {
   $("site").textContent = found.site;
   $("who").textContent = who.name || shortKey(who.npub);
   $("who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
-  lasting("site", "remember-row", "remember", "remember-label", "lasts");
+  // Offered only where an earlier site of the same family was allowed, as this account, and not turned down lately.
+  offer = !lockOn && found.family && !familyDeclined(found.family) ? familyOffer(loadAllowed(), found.site, found.family, who.pubkey) : null;
+  lasting("site", "remember-row", "remember", "remember-label", "lasts", showFamily);
+  showFamily();
   status("A site is asking to sign notes as you. Check the address.");
   $("ask").hidden = false;
   // Allow is never given the keys unasked: a key meant for the site, pressed as this window came up, must not land on it.
@@ -184,21 +223,30 @@ const signIn = () => {
   $("widget-slot").append(widget);
 };
 
-const allow = async (button) => {
+const allow = async (button, forFamily = false) => {
   if (!found || !who || performance.now() - askedAt < TOO_SOON_MS) return;
   button.disabled = true;
+  // Both answers to the family question are kept: "Just this one" stops it being asked again for thirty days.
+  const asFamily = forFamily && familyShown();
+  if (!forFamily && familyShown()) declineFamily(found.family);
   status(found.wants ? "Handing over a key that can do only what you just read." : "Handing over a key that can only sign.");
   let session = null;
   try {
     session = await prepare();
     await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
     const remember = !lockOn && $(found.wants ? "remember-app" : "remember").checked;
-    const ok = await found.grant(session, who.name, remember);
+    const ok = await found.grant(session, who.name, remember, asFamily);
     $("ask").hidden = true;
     $("ask-app").hidden = true;
     if (!ok) return status("That didn't work, and nothing was handed over. Close this window and try again from the site that opened it.");
     // Written down at the sign-in address, for the list of sites allowed. A record only: it lets nothing sign.
     const at = Math.floor(Date.now() / 1000);
+    if (asFamily) {
+      recordAllowed({ site: found.family, members: [found.site, offer.site], pubkey: who.pubkey, at, until: at + (found.knownFamily ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec), remembered: true });
+      status(`Done. Every ${familyDomain(found.family)} site can sign notes as you until you sign out of one of them.`);
+      setTimeout(leave, 700);
+      return;
+    }
     recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (remember ? (found.known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec), remembered: remember, ...(found.wants ? { wants: found.wants } : {}) });
     const how = remember ? "until you sign out of it" : "for this visit";
     status(found.wants ? `Done. That application can act as you, as you allowed, ${how}.` : `Done. That site can sign notes as you ${how}.`);
@@ -212,6 +260,7 @@ const allow = async (button) => {
   }
 };
 $("allow").addEventListener("click", () => allow($("allow")));
+$("allow-family").addEventListener("click", () => allow($("allow-family"), true));
 $("allow-app").addEventListener("click", () => allow($("allow-app")));
 $("deny-app").addEventListener("click", leave);
 $("deny").addEventListener("click", leave);

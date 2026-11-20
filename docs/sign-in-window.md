@@ -454,6 +454,11 @@ asking site's page began locked, and the window had to be opened again. The
 owner asked for that to stop (2026-11-19): being asked once for a site is
 the point, and a window on every page load is not that.
 
+A grant is for one site. Where the user chose "Allow every … site" in the
+window, it is for a **family**: every site under one registrable domain,
+with less allowed than a site's own grant. That is `docs/site-family.md`;
+the rest of this section is true of both.
+
 So the signer remembers. When a hand-off is accepted, the worker keeps a
 **grant** for the asking site (`worker/signerGrant.ts`):
 

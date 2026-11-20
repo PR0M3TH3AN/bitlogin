@@ -212,14 +212,19 @@ that moved.
     the NSWP kit to show the frame.
   - [ ] **Try the lock on real devices:** a fingerprint or face reader,
     Safari, a phone.
-- [ ] **14. One Allow for a family of sites** (asked for by the owner
+- [x] **14. One Allow for a family of sites** (asked for by the owner
   through the BitPortal session, 2026-11-19). Design: `docs/site-family.md`.
-  One tick at Allow covers every site under one registrable domain, such as
-  every world at `bitblocks.network`, for notes, reactions and room passes
-  only, with counts shared across the family. Not started. All four
-  decisions made by the owner (§SF9): any domain; asked at the second site
-  of a family, as two buttons; `bitblocks.network` a known family (30
-  days); taking back one site ends the family grant.
+  **Built on `beta` 2026-11-19.** At the second site of a family the window
+  asks once, "Allow every bitblocks.network site" or "Just this one"; after
+  the first, every site under that domain is signed in with nothing
+  pressed, for notes, reactions and room passes only, with counts shared
+  across the family. The owner's four decisions are in §SF9.
+  - [ ] **Try it at the real worlds,** once it is on `main` and BitPortal
+    has it vendored. Nothing has been tried at `bitblocks.network`.
+  - [ ] **Run the family test in Firefox and WebKit** (§SF10): it runs in
+    Chromium only.
+  - [ ] **Keep the Public Suffix List current:** a step in the release
+    checklist to run `scripts/update-public-suffix.mjs`.
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound

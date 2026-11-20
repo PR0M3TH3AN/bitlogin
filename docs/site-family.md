@@ -2,8 +2,8 @@
 
 **Document version:** 0.1
 **Date:** 2026-11-19
-**Status:** Design only, with the owner's answers in SF9. Nothing here is
-built. Written on `beta`.
+**Status:** Built on `beta` (2026-11-19), with the owner's answers in SF9.
+Not on `main`. What is built and where it stops short: SF10.
 **Depends on:** `docs/sign-in-window.md` §SW5, §SW6, §SW9, §SW11, §SW16,
 §SW18; `docs/take-back.md`; `docs/spec.md` §21.6.
 
@@ -58,9 +58,10 @@ name under it, at any depth.
 - **The family comes from the asking site's address**, as the browser
   reported it (§SW6), never from anything a site says.
 - **The registrable domain is computed with the Public Suffix List**,
-  shipped inside BitLogin and changed only by a reviewed release. A size
-  check is wanted before building: the whole list is about 230 KB, a few
-  tens of KB compressed. Only the suffix rules are needed, not the comments.
+  shipped inside BitLogin and changed only by a reviewed release
+  (`scripts/update-public-suffix.mjs`). As built: 10,467 rules, 45 KB
+  compressed, in a file of its own that only the sign-in window and the
+  embedded signer load.
 - **No family is offered where it would be unsafe or meaningless.** That
   means:
   - an address that is not `https`;
@@ -132,9 +133,12 @@ Less than a site's own grant, where the two differ:
 # SF6. Seeing it, and taking it back
 
 - **The sites list (§SW18)** shows the family as one row, "Every site at
-  bitblocks.network", with the sites that have used it under it. Each time
-  a new origin first uses the family grant, the signer adds it to that
-  row.
+  bitblocks.network", with the sites it was allowed from. It cannot list
+  the sites the family later signed in: the signer that does that sits in
+  storage no page of the sign-in address can read (SF10).
+- **Signing out at any site the family signed in** signs out of the
+  family. Otherwise that site's next page load would take the family's
+  grant up again, and the sign-out would not have happened.
 - **Take it back** works on the family as on a site (`take-back.md`). The
   record gains entries of the form `{site: "https://*.bitblocks.network",
   before}`. A grant is ended if its own site, **or its family**, has a
@@ -207,3 +211,45 @@ Less than a site's own grant, where the two differ:
 The owner chose these as "the best user experience", on the reasons given
 in SF4 and SF6: one clear question asked once, a family that is not asked
 again every week, and a site taken back that is really gone.
+
+# SF10. What is built, and where it stops short
+
+Built on `beta`, 2026-11-19:
+
+- **The rule** (`embedded/publicSuffix.ts`, `embedded/family.ts`): the
+  Public Suffix List of 2026-11-19, compiled by
+  `scripts/update-public-suffix.mjs`, and `familyOf(site)`. Checked against
+  the list's own test cases.
+- **The grant** (`worker/signerGrant.ts`, `worker/cryptoWorker.ts`): kept
+  under the family's name; taken up only where a site has no grant of its
+  own; one count of notes and one of passes for the whole family; never
+  with an application's permissions.
+- **The hand-off** (`worker/handoff.ts`) carries the family, and is refused
+  whole where the family is not the site's, is not remembered, or is for
+  an application. The embedded signer works the family out again from the
+  address the browser gave it, and refuses a hand-off for any other.
+- **The window** (`/connect/`): the question and its two buttons at the
+  second site of a family; "Just this one" is remembered for thirty days.
+- **Take-back** (`embedded/takeBack.ts`, `spec.md` §21.6) and the sites
+  list (`/sites/`), as in SF6.
+- **A browser test** with three sites of one domain and one of another:
+  the third is signed in with nothing pressed, signs as its own address,
+  shares the family's counts, and is signed out with the rest.
+
+Where it stops short:
+
+- **A site allowed by itself keeps its own grant.** The first site of a
+  family was allowed before there was a family. Signing out at another
+  site ends the family's grant and leaves that one. Taking the family
+  back from `/sites/` ends both.
+- **The sites list does not show who used a family** (SF6).
+- **Tried in Chromium only.** The other tests of the sign-in window run in
+  three engines; this one runs in one. Firefox and Safari keep an embedded
+  page's storage apart by site as Chromium does, and that is not yet
+  tested here.
+- **Not tried at the real addresses.** The test's sites are made-up names
+  answered by the test. Nothing has been tried at `bitblocks.network`.
+- **"Just this one" is remembered in this browser only,** at the sign-in
+  address. Another browser asks once of its own.
+- **The list goes stale.** Nothing reminds anyone to update it. An old list
+  can miss a new hosting suffix (SF7). Wanted: a check in the release steps.
