@@ -338,6 +338,22 @@ describe("limits", () => {
 });
 
 describe("describePermissions", () => {
+  it("has plain words for everything BitPortal asks at home, and warns only about what deserves it", () => {
+    // BitPortal's whole set, everything it asks on first use included (its src/shared/session.ts, 2026-11-20).
+    const words = describePermissions(readPermissions({ name: "BitPortal", sign: [1, 3, 13, 10050, 27300, 27302, 27303, 30004, 30078, 37300, 37305, 37308], appData: ["bitportal/"], read: [30078, 13, 1059] })!, "https://portal.bitblocks.network");
+    expect(JSON.stringify(words)).not.toMatch(/no words for|own kind of data|kind \d/u);
+    expect(words.ordinary).toContain("change what is in your bag: the items you carry between worlds");
+    // A bag is public, like a rating: it is not put under the warning.
+    expect(words.sensitive.join(" ")).not.toContain("bag");
+    expect(words.sensitive).toContain("read your private messages");
+  });
+
+  it("has words for a score and an achievement, should an application ask to sign them", () => {
+    const words = describePermissions(set({ sign: [1, 37306, 37307], appData: [], proofs: [], read: [], peers: [] }), SITE);
+    expect(words.ordinary).toEqual(expect.arrayContaining(["post your scores on worlds' boards", "show which achievements you hold in worlds"]));
+    expect(JSON.stringify(words)).not.toMatch(/own kind of data/u);
+  });
+
   it("has words for a rating of a world, as an ordinary thing to sign", () => {
     const words = describePermissions(set({ sign: [1, 37305], appData: [], proofs: [], read: [], peers: [] }), SITE);
     expect(words.ordinary).toContain("rate worlds, from one to five stars");
