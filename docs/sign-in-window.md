@@ -334,6 +334,31 @@ half of what it asked for fails in ways its user cannot see.
 - **A world is unchanged.** A site that declares nothing gets what §SW5
   gives: a note and a reaction, under the old limits.
 
+## SW9.3a When a site asks for more than it may have
+
+A set a site may not hold at its address (it names a kind reserved to
+another address) is never shown: the window asks the plain question, for a
+note and a reaction. Two things say so (owner, 2026-11-20: "prioritize the
+user experience"):
+
+- **The window says it to the user.** "This site asked for more than it
+  may have at this address. If you allow it, it can only do what is listed
+  below." Without that line the user was shown a smaller question than the
+  one the site asked, with no word of it, and then found things missing.
+- **The answer to `want` says it to the site:** `taken: true` or `false`.
+  It approves nothing either way. It lets an application fall back, or say
+  so, before it opens the window. `createBitLoginClient` gives it as
+  `state().canAsk`. A plain `state` answer never carries it.
+
+**A local copy of BitLogin.** Where BitLogin itself is running at a local
+address (localhost, a loopback address, or a private range) a site that is
+also at a local address may hold the reserved kinds. Otherwise an
+application that uses them could not be tried before it is live. The
+window says so, and says to use a test account. At BitLogin's real address
+nothing changes: the kinds are the named site's and nobody else's, local
+or not. A named site is given exactly what it is named for, wherever
+BitLogin runs.
+
 ## SW9.4 What the signer does to an event
 
 - **Kind** must be in the approved set, and not Never.

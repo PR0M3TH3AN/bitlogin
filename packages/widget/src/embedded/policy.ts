@@ -163,7 +163,21 @@ export type SignerRequest =
 
 export type SignerReply =
   | { t: "ready" }
-  | { t: "state"; id?: string; unlocked: boolean; pubkey?: string; name?: string; picture?: string; about?: string; until?: number; remembered?: boolean; permissions?: AppPermissions }
+  | {
+      t: "state";
+      id?: string;
+      unlocked: boolean;
+      pubkey?: string;
+      name?: string;
+      picture?: string;
+      about?: string;
+      until?: number;
+      remembered?: boolean;
+      permissions?: AppPermissions;
+      /** In answer to `want` only: whether that set may be shown to the user at this address. False approves
+       *  nothing and true approves nothing: it says whether asking is worth it. */
+      taken?: boolean;
+    }
   | { t: "signed"; id: string; event: NostrEvent }
   | { t: "text"; id: string; text: string }
   | { t: "refused"; id: string };
@@ -201,7 +215,7 @@ export type HandoffMessage =
   | { t: "hello"; nonce: string }
   /** Signer to window: which site embeds it (as the browser says), a throwaway key to seal the hand-off to, and
    *  what that site said it wants, if it is an application (§SW9). */
-  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions }
+  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean }
   /** Window to signer, after the user pressed Allow: the sealed hand-off, for that site. */
   | { t: "grant"; nonce: string; world: string; sealed: { senderPublicKey: string; payload: string }; name?: string }
   /** Signer to window: it is unlocked, or it could not be. */
@@ -219,7 +233,7 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
     // A set that does not read as one is no frame at all: the window must not show part of what was asked.
     const wants = d.wants === undefined ? undefined : readPermissions(d.wants);
     if (wants === null) return null;
-    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}) };
+    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}) };
   }
   if (d.t === "grant" && cleanOrigin(d.world) && d.sealed && typeof d.sealed === "object") {
     const s = d.sealed as Record<string, unknown>;

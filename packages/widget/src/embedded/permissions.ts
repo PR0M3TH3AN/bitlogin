@@ -80,7 +80,54 @@ export function knownAppName(site: string): string | null {
   return Object.hasOwn(KNOWN_APPS, site) ? KNOWN_APPS[site]!.name : null;
 }
 
-const reservedFor = (site: string): readonly number[] => (Object.hasOwn(KNOWN_APPS, site) ? (KNOWN_APPS[site]!.reserved ?? []) : []);
+/**
+ * Whether an origin is this machine or this network: localhost, a loopback address, or a private range. Never a
+ * public name, whatever it is called.
+ */
+export function isLocalAddress(origin: unknown): boolean {
+  if (typeof origin !== "string" || origin.length > 300) return false;
+  let host: string;
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+    host = u.hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host === "localhost" || host.endsWith(".localhost") || host === "[::1]") return true;
+  const parts = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(host)?.slice(1).map(Number);
+  if (!parts || parts.some((n) => n > 255)) return false;
+  const [a, b] = parts as [number, number, number, number];
+  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+}
+
+/**
+ * The reserved kinds a site may hold, given the address BitLogin itself is running at.
+ *
+ * At BitLogin's real address they are a named address's and nobody else's. Where BitLogin is itself a local
+ * copy (a developer's own machine or network), a site that is also local may hold them: otherwise an
+ * application that uses them could not be tried before it is live, and what was tried would not be what
+ * ships. A local copy of BitLogin cannot be reached from a page on the internet, and the user is still shown
+ * all of it and still has to allow it. Nothing here changes what the real address does.
+ */
+export function reservedKindsFor(site: string, signInAddress: string): readonly number[] {
+  if (Object.hasOwn(KNOWN_APPS, site)) return KNOWN_APPS[site]!.reserved ?? [];
+  return isLocalAddress(signInAddress) && isLocalAddress(site) ? RESERVED_KINDS : [];
+}
+
+/** Where this code is running: a page's or a worker's own origin. "" where there is none (a test, a script). */
+const here = (): string => {
+  try {
+    return (globalThis as { location?: { origin?: string } }).location?.origin ?? "";
+  } catch {
+    return "";
+  }
+};
+
+const reservedFor = (site: string): readonly number[] => reservedKindsFor(site, here());
+
+/** Whether a site holds reserved kinds only because BitLogin and the site are both local copies. For the window to say so. */
+export const heldAsLocal = (site: string): boolean => !Object.hasOwn(KNOWN_APPS, site) && reservedFor(site).length > 0;
 
 /**
  * Whether this site may be given this set at all. A set is read without

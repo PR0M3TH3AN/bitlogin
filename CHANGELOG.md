@@ -8,6 +8,15 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **A site that asks for more than it may have is told so, and so is the
+  user** (`docs/sign-in-window.md` §SW9.3a). The window's plain question
+  now carries a line saying more was asked and will not be given. The
+  answer to `want` carries `taken`; `createBitLoginClient` gives it as
+  `state().canAsk`.
+- **At a local copy of BitLogin, a local site may hold the reserved
+  kinds** (27300, 27302, 27303), so an application that uses them can be
+  tried before it is live. The window says so. BitLogin's real address is
+  unchanged.
 - **A recovery phrase typed with a capital letter is accepted.** It was
   refused as "not a valid phrase", and a phone capitalises the first word
   of a field. Every word in the list is in small letters, so no account

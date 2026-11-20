@@ -260,8 +260,10 @@ that moved.
     Chromium only, against the mock relays.
   - [ ] **The password-form test in WebKit fails about one run in several**
     and passes alone. Cause not found.
-  - [ ] **From the BitPortal session, undecided:** reserved kinds at a
-    local development address; a "taken or not" answer to `want`.
+  - [x] **From the BitPortal session, decided by the owner 2026-11-20:**
+    reserved kinds at a local address where BitLogin is itself local; a
+    "taken or not" answer to `want`; and a line in the window when a site
+    asked for more than it may have (§SW9.3a). On `beta`.
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound

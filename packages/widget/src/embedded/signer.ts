@@ -81,6 +81,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
   let app: AppPermissions | null = null;
   /** What the site has said it wants, for the window to show the next time it is opened. Approves nothing. */
   let wanted: AppPermissions | null = null;
+  /** The site asked for a set it may not hold at this address. The window says so, so the user is not shown the
+   *  plain question with no word that more was asked. */
+  let turnedDown = false;
   /** An application's counts, apart from a world's (§SW9.6). Only the public and the sensitive are kept across
    *  page loads: they are what a reload could be used to get round. */
   let gates = { quiet: createSignGate(APP_LIMITS.quiet), public: createSignGate(APP_LIMITS.public), sensitive: createSignGate(APP_LIMITS.sensitive), read: createSignGate(APP_LIMITS.read) };
@@ -198,8 +201,11 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (ask.t === "want") {
       // Remembered for the window to show. It approves nothing: only Allow, in the window, does. A set this site
       // may not hold at all (a kind reserved to another address) is not remembered, so the window never shows it.
-      wanted = mayHold(site, ask.permissions) ? ask.permissions : null;
-      return say(state(ask.id));
+      const taken = mayHold(site, ask.permissions);
+      wanted = taken ? ask.permissions : null;
+      turnedDown = !taken;
+      // The site is told whether the set can be shown at all, so it need not open the window to find out.
+      return say({ ...(state(ask.id) as Extract<SignerReply, { t: "state" }>), taken });
     }
     // Everything else is asked of an unlocked signer. Every way it can fail says the same thing: refused.
     const refuse = () => say({ t: "refused", id: ask.id });
@@ -267,7 +273,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}) });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }

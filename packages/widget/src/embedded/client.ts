@@ -47,6 +47,14 @@ export interface BitLoginClientState {
   until?: number;
   /** True when they allowed this site before, but for less than it now wants: they have to be asked again. */
   needsMore?: boolean;
+  /**
+   * False when BitLogin will not show this permission set to a user at this
+   * address (it names a kind reserved to another address, say): signing in
+   * would give a note and a reaction and nothing the application asked
+   * for. Known once `ready()` has resolved; absent from a signer too old
+   * to say. Fall back, or say so, before opening the window.
+   */
+  canAsk?: boolean;
 }
 
 export interface UnsignedEvent {
@@ -122,6 +130,8 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
 
   let current: BitLoginClientState = { signedIn: false };
   let raw: { unlocked: boolean; pubkey?: string } = { unlocked: false };
+  /** Whether the signer said this set may be shown here. Undefined until it has, or where it is too old to. */
+  let canAsk: boolean | undefined;
   const listeners = new Set<(state: BitLoginClientState) => void>();
   const waiting = new Map<string, { resolve(value: Record<string, unknown>): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   let stopped = false;
@@ -130,6 +140,7 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
 
   const take = (d: Record<string, unknown>) => {
     const unlocked = d.unlocked === true && typeof d.pubkey === "string";
+    if (typeof d.taken === "boolean") canAsk = d.taken;
     const granted = unlocked ? (readPermissions(d.permissions) ?? undefined) : undefined;
     const enough = unlocked && covers(granted, wanted);
     raw = { unlocked, ...(unlocked ? { pubkey: d.pubkey as string } : {}) };
@@ -138,7 +149,8 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
       ...(enough ? { pubkey: d.pubkey as string } : {}),
       ...(enough && typeof d.name === "string" ? { name: d.name } : {}),
       ...(enough && typeof d.until === "number" ? { until: d.until } : {}),
-      ...(unlocked && !enough ? { needsMore: true } : {})
+      ...(unlocked && !enough ? { needsMore: true } : {}),
+      ...(canAsk !== undefined ? { canAsk } : {})
     };
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     current = next;

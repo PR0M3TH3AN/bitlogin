@@ -181,6 +181,7 @@ const askApp = () => {
   $("app-name").textContent = found.wants.name || "";
   // Its own name is shown only where BitLogin has none for it: beside a known name it would only confuse.
   $("app-name-line").hidden = !found.wants.name || !!known;
+  $("app-local").hidden = !found.local;
   paintWho();
   lasting("application", "remember-app-row", "remember-app", "remember-app-label", "app-lasts");
   fill("app-ordinary", words.ordinary);
@@ -197,6 +198,8 @@ const ask = () => {
   void prepare().catch(() => {});
   if (found.wants) return askApp();
   $("site").textContent = found.site;
+  // It asked for more than it may have here: said plainly, so the smaller question is not mistaken for all of it.
+  $("turned-down").hidden = !found.turnedDown;
   paintWho();
   // Offered only where an earlier site of the same family was allowed, as this account, and not turned down lately.
   offer = !lockOn && found.family && !familyDeclined(found.family) ? familyOffer(loadAllowed(), found.site, found.family, who.pubkey) : null;

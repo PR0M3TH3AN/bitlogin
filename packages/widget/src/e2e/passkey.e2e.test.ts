@@ -1665,6 +1665,131 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
+    "a site that asks for more than it may have is told so at once, and so is the user in the window",
+    async () => {
+      const sitePage = `<!doctype html><meta charset="utf-8"><title>a site that asks for a lot</title><button id="open">Sign in</button>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  document.getElementById("open").onclick = () => { window.open(SIGNIN + "/connect/index.html", "bitlogin-connect", "popup,width=460,height=660"); };
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      // One site at a public address, answered here; one at a local address, served here.
+      const PUBLIC = "https://app.asks-test.example";
+      const asking = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(sitePage);
+      });
+      await new Promise<void>((resolve) => asking.listen(0, "127.0.0.1", () => resolve()));
+      const askingAddress = asking.address();
+      const LOCAL = `http://127.0.0.1:${typeof askingAddress === "object" && askingAddress ? askingAddress.port : 0}`;
+      // A pass, a terminal and a world grant: kinds kept, at BitLogin's real address, for one named site.
+      const lots = { name: "Asks A Lot", sign: [1, 27300, 27302, 27303] };
+      const plain = { name: "Asks A Little", sign: [1, 7] };
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        await context.route(`${PUBLIC}/`, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: sitePage }));
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".who .pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        const visit = async (site: string) => {
+          const page = await context.newPage();
+          await page.goto(`${site}/`);
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+          const open = async () => {
+            const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+            return popup;
+          };
+          return { page, ask, open };
+        };
+
+        // At a public address: the kinds are not this site's to ask for. It is told so in the answer to `want`,
+        // before any window. A set it may have is taken.
+        const pub = await visit(PUBLIC);
+        expect(await pub.ask({ t: "want", permissions: plain })).toMatchObject({ t: "state", unlocked: false, taken: true });
+        expect(await pub.ask({ t: "want", permissions: lots })).toMatchObject({ t: "state", unlocked: false, taken: false });
+        // A plain question about state says nothing of it.
+        expect("taken" in (await pub.ask({ t: "state" }))).toBe(false);
+        // The window shows the plain question, and says in words that more was asked and will not be given.
+        const turned = await pub.open();
+        await turned.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await turned.locator("#ask").isVisible()).toBe(true);
+        expect(await turned.locator("#ask-app").isVisible()).toBe(false);
+        expect(await turned.locator("#turned-down").isVisible()).toBe(true);
+        expect(await turned.locator("#turned-down").textContent()).toContain("asked for more than it may have");
+        await turned.waitForTimeout(1000);
+        await turned.locator("#allow").click();
+        await pub.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        // What it got is the plain grant: a note, and none of what it asked for.
+        const got = await pub.ask({ t: "state" });
+        expect(got).toMatchObject({ unlocked: true, pubkey: me });
+        expect(got.permissions).toBeUndefined();
+        expect((await pub.ask({ t: "sign", event: { kind: 1, content: "a note", tags: [] } })).t).toBe("signed");
+        for (const kind of [27300, 27302, 27303]) expect((await pub.ask({ t: "sign", event: { kind, content: "", tags: [] } })).t, String(kind)).toBe("refused");
+
+        // A site that asked for nothing more is shown no such line.
+        if (!turned.isClosed()) await turned.waitForEvent("close", { timeout: 10_000 }).catch(() => turned.close());
+        await pub.ask({ t: "lock" });
+        await pub.page.reload();
+        await pub.page.waitForFunction(() => typeof (window as any).ask === "function");
+        const plainWindow = await pub.open();
+        await plainWindow.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await plainWindow.locator("#turned-down").isVisible()).toBe(false);
+        await plainWindow.close();
+
+        // At a local address, with BitLogin itself a local copy (as it is in this test): the same set is taken,
+        // shown in full as an application's, and the window says why it may be asked for here.
+        const local = await visit(LOCAL);
+        expect(await local.ask({ t: "want", permissions: lots })).toMatchObject({ t: "state", taken: true });
+        const dev = await local.open();
+        await dev.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await dev.locator("#ask").isVisible()).toBe(false);
+        expect(await dev.locator("#app-local").isVisible()).toBe(true);
+        expect(await dev.locator("#app-local").textContent()).toContain("local copy of BitLogin");
+        // The three are listed among what deserves a second look.
+        expect(await dev.locator("#app-sensitive li").count()).toBe(3);
+        await dev.waitForTimeout(1000);
+        await dev.locator("#allow-app").click();
+        await local.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        const pass = await local.ask({ t: "sign", event: { kind: 27300, content: "", tags: [["nswp:session", "b".repeat(64)], ["nswp:origin", LOCAL], ["expiration", "9999999999"]] } });
+        expect(pass.t).toBe("signed");
+        expect(pass.event).toMatchObject({ kind: 27300, pubkey: me });
+        expect(verifyNostrEvent(pass.event)).toBe(true);
+      } finally {
+        await browser.close();
+        asking.close();
+      }
+    },
+    240_000
+  );
+
+  it(
     "a different passkey derives a DIFFERENT account (PRF is per-credential)",
     async () => {
       const browser = await playwright!.chromium.launch();
@@ -1879,7 +2004,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const sign = (event: Record<string, unknown>) => attempt("signEvent", event);
 
         // Not allowed yet: nobody is signed in to it, and nothing is signed.
-        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false });
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, canAsk: true });
         expect(await sign({ kind: 1, content: "before", tags: [] })).toEqual({ ok: false, name: "BitLoginRefused" });
 
         // The window shows the address, the name it gave itself, and everything it asked, the sensitive apart.
@@ -1977,7 +2102,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 
         // The application now wants more than was approved: it is not signed in until the user is asked again.
         await page.goto(`${site}/?more`);
-        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, needsMore: true });
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, needsMore: true, canAsk: true });
         expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
 
         // Nothing the application heard was a key.
@@ -1988,7 +2113,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await page.evaluate(() => (window as any).isReady);
         expect((await attempt("signOut")).ok).toBe(true);
         await page.reload();
-        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false });
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, canAsk: true });
         expect((await sign({ kind: 1, content: "after", tags: [] })).ok).toBe(false);
         expect(errors).toEqual([]);
       } finally {
