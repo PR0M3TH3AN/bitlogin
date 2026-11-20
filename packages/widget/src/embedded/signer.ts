@@ -45,7 +45,7 @@ import {
   type SignGate,
   type SignerReply
 } from "./policy.js";
-import type { WorldMore } from "./follows.js";
+import { WORLD_MORE, type WorldMore } from "./follows.js";
 
 export interface EmbeddedSignerHandle {
   /** Whether it is running embedded. False when the page was opened on its own: then it does nothing. */
@@ -188,7 +188,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       // An application is told what it was approved for, so it can tell that from what it now wants.
       ...(pubkey && app ? { permissions: app } : {}),
       // A world is told what more it was let do, so it asks for nothing that isn't there.
-      ...(pubkey && !app && more.length ? { more } : {})
+      ...(pubkey && !app && more.length ? { more } : {}),
+      // What can be asked for here at all, said locked or unlocked. Not to an application: it is held to its set.
+      ...(!app ? { offers: [...WORLD_MORE] } : {})
     };
   };
 
@@ -269,6 +271,24 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       }
     }
 
+    if (ask.t === "seal" || ask.t === "unwrap" || ask.t === "reach") {
+      // Only a world the user let send and read their private messages, by name, in the window.
+      if (app || !more.includes("messages")) return refuse();
+      try {
+        if (ask.t === "unwrap") return say({ t: "message", id: ask.id, message: await headless.worldUnwrap(ask.event) });
+        if (ask.t === "reach") {
+          const list = await headless.worldReach(ask.relays);
+          if (list.pubkey !== pubkey) return refuse();
+          return say({ t: "signed", id: ask.id, event: list });
+        }
+        const sealed = await headless.worldSeal(ask.to, ask.text);
+        if (sealed.message.pubkey !== pubkey || sealed.seals.some((seal) => seal.pubkey !== pubkey)) return refuse();
+        return say({ t: "sealed", id: ask.id, message: sealed.message, seals: sealed.seals });
+      } catch {
+        return refuse();
+      }
+    }
+
     if (ask.t === "pass") {
       // Not for an application: it is held to the set the user read. Counted apart from notes, so that signing
       // in does not use up a post. The worker builds all of it, for the site the hand-off was sealed for.
@@ -314,7 +334,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}) });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }
@@ -345,7 +365,10 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       // be kept (a browser that gives an embedded page no storage), and every site while the lock is on.
       // A family is kept by the family's own name: thirty days for one BitLogin knows, seven for any other.
       const known = got.family ? knownFamily(got.family) : knownAppName(site) !== null;
-      until = Math.floor(Date.now() / 1000) + (got.remember ? (known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec);
+      // A site let read private messages is asked again after seven days, however well BitLogin knows it: what
+      // was read can't be unread, so the say is not left standing for a month.
+      const longest = known && !more.includes("messages") ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec;
+      until = Math.floor(Date.now() / 1000) + (got.remember ? longest : SIGN_LIMITS.visitSec);
       remembered = got.remember === true && (await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false));
       if (!remembered) until = Math.min(until, Math.floor(Date.now() / 1000) + SIGN_LIMITS.visitSec);
       back({ t: "done", nonce: msg.nonce, ok: true });

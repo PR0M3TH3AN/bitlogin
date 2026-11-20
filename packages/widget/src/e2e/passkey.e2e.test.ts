@@ -25,7 +25,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MockRelay } from "../../../core/src/test-support/mockRelay.js";
 import { generatePrivateKey, getPublicKeyHex } from "../../../core/src/crypto/secp256k1.js";
 import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
-import { verifyNostrEvent } from "../../../core/src/nostr/event.js";
+import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "../../../core/src/nostr/event.js";
+import { NostrSigner } from "../../../core/src/account/signer.js";
+import { sealMessage } from "../embedded/messages.js";
 import { RelayPool } from "../../../core/src/nostr/pool.js";
 
 const DIST = fileURLToPath(new URL("../../../demo/dist/", import.meta.url));
@@ -1000,7 +1002,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
-    "a world keeps saves with its visitor's account, and follows for them only where they said so (NSWP-12, NSWP-14)",
+    "a world keeps saves with its visitor's account, and follows and sends messages for them only where they said so (NSWP-12, NSWP-14)",
     async () => {
       const sitePage = `<!doctype html><meta charset="utf-8"><title>a world</title><button id="open">Sign in with BitLogin</button>
 <iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
@@ -1074,6 +1076,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 
         // ---- Saves. Nothing is kept for a world that was not allowed.
         const arcade = await visit(ARCADE);
+        // Locked, it still says what it can be asked for, so a world opens the window only for a question it has.
+        expect(await arcade.ask({ t: "state" })).toMatchObject({ unlocked: false, offers: ["follows", "messages"] });
         expect((await arcade.ask({ t: "save", slot: "main", data: '{"level":1}' })).t).toBe("refused");
         expect((await arcade.ask({ t: "find", slot: "main" })).t).toBe("refused");
         const first = await arcade.window();
@@ -1199,13 +1203,84 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(list3.event.tags).toEqual([["p", another]]);
         expect(JSON.stringify(list3.event)).not.toMatch(/saves-[ab]/u);
 
+        // ---- Private messages. Not without being let, by name: having "follows" is not having "messages".
+        expect((await arcade.ask({ t: "seal", to: friend, text: "hello" })).t).toBe("refused");
+        await arcade.ask({ t: "want", more: ["follows", "messages", "keys"] });
+        const noMessages = await arcade.window();
+        // The question is about what is new. What it already had is said, and stays either way.
+        expect(await noMessages.locator("#more-messages").isVisible()).toBe(true);
+        expect(await noMessages.locator("#more-messages").textContent()).toContain("can't be unread");
+        expect(await noMessages.locator("#more-follows").isVisible()).toBe(false);
+        expect(await noMessages.locator("#has-line").textContent()).toContain("change who you follow");
+        expect(await noMessages.locator("#allow-more").textContent()).toBe("Allow, and let it send and read my private messages");
+        expect(await noMessages.locator("#allow-family").isVisible()).toBe(false);
+        await noMessages.locator("#allow").click();
+        await noMessages.waitForEvent("close", { timeout: 30_000 }).catch(() => {});
+        expect((await arcade.until((s) => s.unlocked === true && Array.isArray(s.more))).more).toEqual(["follows"]);
+        expect((await arcade.ask({ t: "seal", to: friend, text: "hello" })).t).toBe("refused");
+        const withMessages = await arcade.window();
+        await withMessages.locator("#allow-more").click();
+        const let_ = await arcade.until((s) => Array.isArray(s.more) && s.more.includes("messages"));
+        expect(let_.more).toEqual(["follows", "messages"]);
+        // Asked again after seven days, however long the site itself would be kept.
+        expect(let_.until - Date.now() / 1000).toBeLessThanOrEqual(7 * 86400 + 5);
+
+        // A message: written by the signer, from the visitor, to the one reader named, and sealed twice. The world
+        // is handed two seals and the unsigned message, and never a key.
+        const sealed = await arcade.ask({ t: "seal", to: friend, text: "  See you at the Arcade?  ", from: third, kind: 1, tags: [["p", third]] });
+        expect(sealed.t).toBe("sealed");
+        expect(sealed.message).toMatchObject({ kind: 14, pubkey: me, tags: [["p", friend]], content: "See you at the Arcade?" });
+        expect(sealed.message.sig).toBeUndefined();
+        expect(sealed.seals).toHaveLength(2);
+        for (const seal of sealed.seals) {
+          expect(verifyNostrEvent(seal)).toBe(true);
+          expect(seal).toMatchObject({ kind: 13, pubkey: me, tags: [] });
+          expect(seal.content).not.toContain("Arcade");
+        }
+        // What a world does next: wrap each seal with a key used once. The writer's copy opens for the writer.
+        const wrapFor = (seal: NostrEvent, to: string): NostrEvent => {
+          const once = generatePrivateKey();
+          const key = new NostrSigner(once.slice());
+          return signNostrEvent({ kind: 1059, pubkey: getPublicKeyHex(once), created_at: Math.floor(Date.now() / 1000) - 3600, tags: [["p", to]], content: key.nip44Encrypt(to, JSON.stringify(seal)) }, once);
+        };
+        const mine = await arcade.ask({ t: "unwrap", event: wrapFor(sealed.seals[1], me) });
+        expect(mine).toMatchObject({ t: "message", message: { id: sealed.message.id, from: me, to: [friend], text: "See you at the Arcade?" } });
+        // The reader's copy is not the visitor's to open.
+        expect((await arcade.ask({ t: "unwrap", event: wrapFor(sealed.seals[0], me) })).t).toBe("refused");
+        // A message from someone else, to the visitor: who it is from is the key that signed the seal.
+        const stranger = new NostrSigner(generatePrivateKey());
+        const incoming = sealMessage(stranger, { to: me, text: "Hello from outside", nowSeconds: Date.now() / 1000 })!;
+        expect(await arcade.ask({ t: "unwrap", event: wrapFor(incoming.seals[0], me) })).toMatchObject({ t: "message", message: { from: stranger.getPublicKey(), to: [me], text: "Hello from outside" } });
+        // Somebody passing themselves off: a message that says it is from one key, sealed by another. Dropped.
+        const forged = stranger.signEvent({ kind: 13, created_at: Math.floor(Date.now() / 1000), tags: [], content: stranger.nip44Encrypt(me, JSON.stringify({ ...incoming.message, pubkey: friend })) });
+        expect((await arcade.ask({ t: "unwrap", event: wrapFor(forged, me) })).t).toBe("refused");
+        expect((await arcade.ask({ t: "unwrap", event: sealed.seals[1] })).t).toBe("refused");
+        // Where their messages reach them: signed, naming only relays that may be listed, with no mark of the world.
+        const reach = await arcade.ask({ t: "reach", relays: ["wss://inbox.example/", `${"ws"}://plain.example`, "wss://localhost"] });
+        expect(reach.t).toBe("signed");
+        expect(verifyNostrEvent(reach.event)).toBe(true);
+        expect(reach.event).toMatchObject({ kind: 10050, pubkey: me, tags: [["relay", "wss://inbox.example"]], content: "" });
+        expect((await arcade.ask({ t: "reach", relays: [`${"ws"}://plain.example`] })).t).toBe("refused");
+        // `sign` still refuses every kind a message is made of, and writing to oneself is nothing.
+        for (const kind of [13, 14, 1059, 10050]) expect((await arcade.ask({ t: "sign", event: { kind, content: "", tags: [] } })).t, String(kind)).toBe("refused");
+        expect((await arcade.ask({ t: "seal", to: me, text: "to myself" })).t).toBe("refused");
+        // Another world, let follow and nothing more, can do none of it.
+        expect((await other.ask({ t: "seal", to: friend, text: "hello" })).t).toBe("refused");
+        expect((await other.ask({ t: "unwrap", event: wrapFor(sealed.seals[1], me) })).t).toBe("refused");
+        expect((await other.ask({ t: "reach", relays: ["wss://inbox.example"] })).t).toBe("refused");
+        // Ten sealed a minute for one world.
+        for (let i = 0; i < 9; i++) expect((await arcade.ask({ t: "seal", to: friend, text: `again ${i}` })).t, `seal ${i + 2}`).toBe("sealed");
+        expect((await arcade.ask({ t: "seal", to: friend, text: "one too many" })).t).toBe("refused");
+
         // Kept across a page load, and ended by signing out.
         await arcade.page.reload();
         await arcade.page.waitForFunction(() => typeof (window as any).ask === "function");
-        expect((await arcade.until((s) => s.unlocked === true)).more).toEqual(["follows"]);
+        expect((await arcade.until((s) => s.unlocked === true)).more).toEqual(["follows", "messages"]);
+        expect((await arcade.ask({ t: "seal", to: friend, text: "after a reload" })).t).toBe("refused");
         expect(await arcade.ask({ t: "lock" })).toMatchObject({ unlocked: false });
         expect((await arcade.ask({ t: "follow", list: list2.event, add: third })).t).toBe("refused");
         expect((await arcade.ask({ t: "save", slot: "main", data: "x" })).t).toBe("refused");
+        expect((await arcade.ask({ t: "unwrap", event: wrapFor(sealed.seals[1], me) })).t).toBe("refused");
 
         for (const site of [arcade, other]) expect(JSON.stringify(await site.page.evaluate(() => (window as any).heard))).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
         expect(errors).toEqual([]);

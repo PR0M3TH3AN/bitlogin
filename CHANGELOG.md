@@ -20,8 +20,17 @@ would plausibly want. Newest first.
   user's newest follow list and one change. BitLogin checks the list is
   theirs and looks at their relays itself before it signs. Never with a
   family grant, never for an application.
-- **`FoundSigner.more`, and a fifth argument to `grant`** (`withMore`), for
-  a site that draws its own sign-in window.
+- **A world can be let send and read private messages** (NSWP-14; §SW16c):
+  `want` with `more` naming `messages`, then `seal`, `unwrap` and `reach`.
+  The largest thing a world can be let do, and the window says so. One
+  site at a time, never a family or an application, and asked again after
+  seven days.
+- **`state` carries `offers`** for a world: the names it can ask to be let
+  do (`["follows", "messages"]`), said locked or unlocked.
+- **`FoundSigner.more` and `.has`, and a fifth argument to `grant`**
+  (`withMore`), for a site that draws its own sign-in window. `more` is
+  what is newly asked; `has` is what the site already held, kept either
+  way.
 - **A follow list of more than 2,500 people can be signed** by an
   application that may sign kind 3: up to 20,000 tags for that kind.
 - **Words for kind 37305** in the window: "rate worlds, from one to five

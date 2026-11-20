@@ -58,6 +58,7 @@ import { inFamily, readFamily } from "../embedded/family.js";
 import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
 import { createSignGate, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
+import { buildMessageRelays, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS, sealMessage, UNWRAP_WORLD_LIMITS } from "../embedded/messages.js";
 import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { deleteSignerGrant, grantedAt, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
@@ -87,6 +88,9 @@ import type {
   WorldFindPayload,
   WorldOpenPayload,
   WorldFollowPayload,
+  WorldSealPayload,
+  WorldUnwrapPayload,
+  WorldReachPayload,
   WorkerResponse,
   ConfigurePayload,
   RegisterPayload,
@@ -291,13 +295,13 @@ const WORLD_COUNTS = "bitlogin:world-counts:v1:";
 /** The time of the newest follow list of an account that this signer has signed, been handed or found: by public key. */
 const FOLLOWS_SEEN = "bitlogin:follows-seen:v1:";
 const worldCounts = new Map<string, number[]>();
-async function takeWorldCount(what: string, site: string, limits: { burst: number; perMs: number; hourly: number }): Promise<boolean> {
+async function takeWorldCount(what: string, site: string, limits: { burst: number; perMs: number; hourly: number }, /** False for a count too busy to write down each time: it starts again with the page, and is generous either way. */ kept = true): Promise<boolean> {
   const key = `${WORLD_COUNTS}${what}:${site}`;
   let already = worldCounts.get(key);
   if (!already) {
     try {
-      const kept: unknown = JSON.parse((await store.get(key)) ?? "[]");
-      already = Array.isArray(kept) ? kept.filter((t): t is number => typeof t === "number" && Number.isFinite(t)).slice(-limits.hourly) : [];
+      const before: unknown = kept ? JSON.parse((await store.get(key)) ?? "[]") : [];
+      already = Array.isArray(before) ? before.filter((t): t is number => typeof t === "number" && Number.isFinite(t)).slice(-limits.hourly) : [];
     } catch {
       already = [];
     }
@@ -307,7 +311,7 @@ async function takeWorldCount(what: string, site: string, limits: { burst: numbe
   const nowMs = Date.now();
   const ok = gate.take(nowMs);
   worldCounts.set(key, gate.times());
-  if (ok) await store.set(key, JSON.stringify(gate.times())).catch(() => {});
+  if (ok && kept) await store.set(key, JSON.stringify(gate.times())).catch(() => {});
   return ok;
 }
 
@@ -870,7 +874,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       await deleteSignerGrant(store, site);
       if (session.family && inFamily(site, session.family)) await deleteSignerGrant(store, session.family);
       // Its counts go with it: nothing is left here that says the site was ever used.
-      for (const what of ["save", "follow"]) {
+      for (const what of ["save", "follow", "seal", "unwrap", "reach"]) {
         worldCounts.delete(`${WORLD_COUNTS}${what}:${site}`);
         await store.delete(`${WORLD_COUNTS}${what}:${site}`).catch(() => {});
       }
@@ -1160,6 +1164,37 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const signed = signer.signEvent(next);
       await store.set(seenKey, String(Math.max(seen, signed.created_at))).catch(() => {});
       return signed;
+    }
+
+    // ---- Private messages from inside a world (NSWP-14; embedded/messages.ts). Only for a world the user let do
+    // this, by name, in the window. The world names a reader and the words, or hands over a wrap; it is never given
+    // a key, and nothing else is encrypted or decrypted for it.
+
+    case "worldSeal": {
+      const { signer, site } = requireWorld();
+      if (!session.more.includes("messages")) throw new Error("refused");
+      const p = payload as WorldSealPayload;
+      const sealed = sealMessage(signer, { to: p.to, text: p.text, nowSeconds: Date.now() / 1000 });
+      if (!sealed || !(await takeWorldCount("seal", site, MESSAGE_WORLD_LIMITS))) throw new Error("refused");
+      return sealed;
+    }
+
+    case "worldUnwrap": {
+      const { signer, site } = requireWorld();
+      if (!session.more.includes("messages")) throw new Error("refused");
+      if (!(await takeWorldCount("unwrap", site, UNWRAP_WORLD_LIMITS, false))) throw new Error("refused");
+      const message = openWrap(signer, (payload as WorldUnwrapPayload).event);
+      if (!message) throw new Error("refused");
+      return { message };
+    }
+
+    case "worldReach": {
+      const { signer, site } = requireWorld();
+      if (!session.more.includes("messages")) throw new Error("refused");
+      const list = buildMessageRelays((payload as WorldReachPayload).relays, Date.now() / 1000);
+      if (!list || !(await takeWorldCount("reach", site, REACH_WORLD_LIMITS))) throw new Error("refused");
+      // No mark of the site on it: where messages reach someone should not say where they have been.
+      return signer.signEvent(list);
     }
 
     // ---- What an approved application may ask beyond signing (§SW9.5). Refused without a permission set.
@@ -1858,7 +1893,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
-  "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow",
+  "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",

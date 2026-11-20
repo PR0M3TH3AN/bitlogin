@@ -68,6 +68,10 @@ export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "worldOpen",
   // One person followed or unfollowed, for a world the user let do that (NSWP-14; embedded/follows.ts).
   "worldFollow",
+  // Private messages sealed and opened, and where they reach the user, for a world let do that (embedded/messages.ts).
+  "worldSeal",
+  "worldUnwrap",
+  "worldReach",
   // Asking the user's relays whether this site was taken back (docs/take-back.md). It reads one record and the
   // user's relay list, and can only end the grant or leave it be.
   "signerCheck",

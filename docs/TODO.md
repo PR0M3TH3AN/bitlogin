@@ -872,10 +872,13 @@ go-ahead.
 - [x] **Follows for a world the user let** (NSWP-10 "Asking for more",
   NSWP-14; §SW16b). Stricter than NSWP where a world says the user has no
   follow list: BitLogin asks their relays itself.
+- [x] **Private messages for a world the user let** (NSWP-14; §SW16c):
+  `seal`, `unwrap`, `reach`. Asked again after seven days.
 - [x] **Words for kind 37305,** and a follow list of up to 20,000 people
   for an application.
 - [ ] **Show in the list of sites allowed** which sites may change who the
-  person follows, and let that alone be taken back.
+  person follows or read their private messages, and let each alone be
+  taken back.
 - [ ] **Try saves and follows in Firefox and WebKit,** and at the real
   addresses with the Arcade's two-device test.
 - [ ] **Removing a save from relays** is not offered: a world clears a slot

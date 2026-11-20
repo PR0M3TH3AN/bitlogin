@@ -48,6 +48,12 @@ export interface FoundSigner {
    * family: it is for one site, by its own address.
    */
   readonly more: readonly WorldMore[];
+  /**
+   * What the site was already let do, by name, when the window opened. It
+   * is kept whichever way the user allows the site again; `more` minus this
+   * is what is new, and what the question is about.
+   */
+  readonly has: readonly WorldMore[];
   /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
   readonly known: boolean;
   /**
@@ -126,9 +132,11 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       // Checked again here, on the page that shows it: a set this site may not hold is no request at all.
       const wants = msg.wants && mayHold(world, msg.wants) ? msg.wants : null;
       const turnedDown = msg.turnedDown === true || (!!msg.wants && !wants);
-      const more = wants ? [] : (msg.more ?? []);
+      const has = wants ? [] : (msg.has ?? []);
+      // What is asked now and was not had before: the question is about these.
+      const more = wants ? [] : (msg.more ?? []).filter((name) => !has.includes(name));
       // More than a note and a reaction is for this one site: no family is offered beside it.
-      const family = wants || more.length ? "" : familyOf(world);
+      const family = wants || more.length || has.length ? "" : familyOf(world);
       resolve({
         site: world,
         wants,
@@ -137,12 +145,13 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
         knownFamily: family ? knownFamily(family) : false,
         turnedDown,
         more,
+        has,
         local: !!wants && heldAsLocal(world) && [...wants.sign, ...wants.read].some((kind) => RESERVED_KINDS.includes(kind)),
         async grant(session, name, remember, forFamily, withMore) {
           // What is sealed is exactly what this page was given to show: the set, for the site the browser named,
           // and its family only where the user chose that, with "remember" left on.
           const asFamily = forFamily === true && remember === true && !!family;
-          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world, remember === true, asFamily ? family : undefined, withMore === true && more.length && !asFamily ? more : undefined);
+          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world, remember === true, asFamily ? family : undefined, asFamily ? undefined : withMore === true && more.length ? [...has, ...more] : has.length ? has : undefined);
           const answered = new Promise<boolean>((done) => {
             onDone = done;
             setTimeout(() => done(false), 8000);

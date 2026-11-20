@@ -4,6 +4,7 @@ import type { RebroadcastResult, RecoveryExportFile, ReplicaHealthResult } from 
 import type { AppPermissions } from "../embedded/permissions.js";
 import type { Profile } from "../embedded/profile.js";
 import type { WorldMore } from "../embedded/follows.js";
+import type { ReadMessage, WrittenMessage } from "../embedded/messages.js";
 
 export interface WorkerRequest<TAction extends string = string, TPayload = unknown> {
   id: string;
@@ -262,6 +263,21 @@ export interface WorldFollowPayload {
   list: unknown;
   add?: string;
   remove?: string;
+}
+/** Private messages, for a world the user let do that (NSWP-14). The writer is the worker's own: the key it holds. */
+export interface WorldSealPayload {
+  to: string;
+  text: string;
+}
+export interface WorldSealResult {
+  message: WrittenMessage;
+  seals: [NostrEvent, NostrEvent];
+}
+export interface WorldUnwrapPayload {
+  event: unknown;
+}
+export interface WorldReachPayload {
+  relays: string[];
 }
 export interface WorldOpenResult {
   slot: string;
@@ -543,6 +559,9 @@ export type WorkerActionMap = {
   worldFind: [WorldFindPayload, { d: string }];
   worldOpen: [WorldOpenPayload, WorldOpenResult];
   worldFollow: [WorldFollowPayload, NostrEvent];
+  worldSeal: [WorldSealPayload, WorldSealResult];
+  worldUnwrap: [WorldUnwrapPayload, { message: ReadMessage }];
+  worldReach: [WorldReachPayload, NostrEvent];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];
   vaultList: [Record<string, never>, VaultListResult];
