@@ -16,6 +16,7 @@
  */
 import type { KeyValueStore } from "@bitlogin/core/storage";
 import { APP_LIMITS, knownAppName, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
+import { knownFamily, readFamily } from "../embedded/family.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
 import { cleanRelays } from "../embedded/takeBack.js";
 
@@ -34,7 +35,12 @@ export const GRANT_LIMITS = {
 } as const;
 
 export interface SignerGrant {
-  /** The asking site's origin, as the browser reported it. */
+  /**
+   * The asking site's origin, as the browser reported it: or a family of
+   * sites, `https://*.domain` (docs/site-family.md), where the user allowed
+   * every site under one domain at once. A family's grant holds no
+   * application's permissions.
+   */
   site: string;
   everydayPrivateKey: Uint8Array;
   /** When it stops, in seconds. */
@@ -64,8 +70,8 @@ export interface SignerGrant {
 /** When a grant was made: what it says, or, for one kept before that was recorded, the start of its life. */
 export const grantedAt = (grant: SignerGrant): number => grant.at ?? grant.until - keepSecFor(grant.site);
 
-/** How long a site may be kept from now, in seconds: by its address, never by anything it says of itself. */
-export const keepSecFor = (site: string): number => (knownAppName(site) !== null ? GRANT_LIMITS.keepSec : GRANT_LIMITS.unknownKeepSec);
+/** How long a site, or a family, may be kept from now, in seconds: by its address, never by anything it says of itself. */
+export const keepSecFor = (site: string): number => ((readFamily(site) ? knownFamily(site) : knownAppName(site) !== null) ? GRANT_LIMITS.keepSec : GRANT_LIMITS.unknownKeepSec);
 
 interface DeviceKeyStore {
   getOrCreateDeviceKey(key: string): Promise<CryptoKey>;
@@ -80,9 +86,9 @@ interface Sealed {
 
 const HEX64 = /^[0-9a-f]{64}$/u;
 
-/** A site as a record may be kept for: exactly an http(s) origin. "" for anything else. */
+/** A site, as a hand-off or an application's set names one: exactly an http(s) origin. "" for anything else, a family included. */
 export function grantSite(input: unknown): string {
-  if (typeof input !== "string" || input.length > 300) return "";
+  if (typeof input !== "string" || input.length > 300 || input.includes("*")) return "";
   try {
     const u = new URL(input);
     return (u.protocol === "https:" || u.protocol === "http:") && u.origin === input ? u.origin : "";
@@ -90,6 +96,9 @@ export function grantSite(input: unknown): string {
     return "";
   }
 }
+
+/** What a record may be kept under: a site, or a family of sites. */
+export const grantKey = (input: unknown): string => readFamily(input) || grantSite(input);
 
 const toBase64 = (bytes: Uint8Array): string => btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""));
 const fromBase64 = (value: string): Uint8Array => Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
@@ -102,8 +111,10 @@ const toHex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString
 
 /** Keep a site's grant. Returns false, having kept nothing, where it can't be kept encrypted or isn't a grant. */
 export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, nowSeconds: number): Promise<boolean> {
-  const site = grantSite(grant.site);
+  const site = grantKey(grant.site);
   if (!site || grant.everydayPrivateKey.length !== 32 || typeof store.getOrCreateDeviceKey !== "function") return false;
+  // A family is allowed a note, a reaction and a room pass: an application's set is approved at its own address.
+  if (readFamily(site) && grant.permissions) return false;
   // Never longer than the limit, whatever was asked.
   const until = Math.min(Math.floor(grant.until), Math.floor(nowSeconds) + keepSecFor(site));
   if (!(until > nowSeconds)) return false;
@@ -139,9 +150,9 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
   }
 }
 
-/** A site's grant, or null: none kept, kept for another site, unreadable, or past its date (then it is removed). */
+/** A site's grant, or a family's, or null: none kept, kept for another site, unreadable, or past its date (then it is removed). */
 export async function loadSignerGrant(store: GrantStore, siteInput: string, nowSeconds: number): Promise<SignerGrant | null> {
-  const site = grantSite(siteInput);
+  const site = grantKey(siteInput);
   if (!site || typeof store.getOrCreateDeviceKey !== "function") return null;
   try {
     const raw = await store.get(GRANT_PREFIX + site);
@@ -156,7 +167,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
     // again, and sees what is asked. It is never restored as a narrower or a wider one.
     const permissions = p.permissions === undefined ? undefined : readPermissions(p.permissions);
-    if (permissions === null || (permissions && !mayHold(site, permissions))) {
+    if (permissions === null || (permissions && (readFamily(site) || !mayHold(site, permissions)))) {
       await store.delete(GRANT_PREFIX + site);
       return null;
     }
@@ -187,9 +198,9 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
   }
 }
 
-/** Forget a site. */
+/** Forget a site, or a family. */
 export async function deleteSignerGrant(store: GrantStore, siteInput: string): Promise<void> {
-  const site = grantSite(siteInput);
+  const site = grantKey(siteInput);
   if (!site) return;
   try {
     await store.delete(GRANT_PREFIX + site);

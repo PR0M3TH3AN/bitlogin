@@ -188,6 +188,8 @@ export interface HandoffExportPayload {
   site?: string;
   /** The user left "remember" ticked in the window. Without it nothing is kept. */
   remember?: boolean;
+  /** The user allowed every site of this family (docs/site-family.md). The worker refuses one that does not hold `site`. */
+  family?: string;
 }
 
 // ---- Taking a site back (docs/take-back.md) ----
@@ -229,6 +231,8 @@ export interface HandoffAcceptResult {
   profile?: Profile;
   /** Whether the hand-off may be kept for the site across page loads (§SW11). */
   remember?: boolean;
+  /** The family of sites it is to be kept for, where the user allowed every site of one (docs/site-family.md). */
+  family?: string;
 }
 
 /** A world's session public key. Everything else in a room pass is the worker's own (§SW16). */
@@ -261,6 +265,8 @@ export interface SignerKeepPayload {
 
 export interface SignerSitePayload {
   site: string;
+  /** For signerRestore: the family the site is in, by the embedded signer's Public Suffix List. Its grant is taken up where the site has none of its own. */
+  family?: string;
 }
 
 export interface SignerTouchPayload {
@@ -283,6 +289,8 @@ export interface SignerRestoreResult {
   signedPass?: number[];
   /** Whether the take-back check is fresh, due behind the answer, or overdue and to be made before answering. */
   check?: "fresh" | "due" | "overdue";
+  /** The family whose grant it was, where it was not the site's own. */
+  family?: string;
   permissions?: AppPermissions;
   signedSensitive?: number[];
 }

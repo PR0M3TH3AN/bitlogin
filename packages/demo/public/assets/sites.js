@@ -1,6 +1,6 @@
 // The sign-in address's list of the sites it allowed from this browser (docs/sign-in-window.md §SW18). A record,
 // read from this origin's own storage. Everything a site supplied is written as text, never as markup.
-import { describeAllowed, describePermissions, loadAllowed, removeAllowed, saveAllowed } from "../vendor/bitlogin/bitlogin-window.js";
+import { describeAllowed, describePermissions, inFamily, loadAllowed, saveAllowed } from "../vendor/bitlogin/bitlogin-window.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 
@@ -66,8 +66,15 @@ const draw = () => {
       const words = describeAllowed(entry, now);
       const item = el("li", "", words.ended ? "sites-ended" : "");
       item.dataset.site = entry.site;
-      item.append(el("p", entry.site, "connect-site"));
-      if (words.known) item.append(el("p", `BitLogin knows this address: it is ${words.known}.`, "connect-small"));
+      if (words.family) {
+        // A family (docs/site-family.md): every site under one domain, allowed at once.
+        item.append(el("p", `Every site at ${words.family}`, "connect-site"));
+        if (entry.members?.length) item.append(el("p", `Allowed from ${entry.members.join(", ")}. Others of its sites that signed you in since are not listed here.`, "connect-small"));
+        if (words.known) item.append(el("p", `BitLogin knows this family: it is ${words.known}.`, "connect-small"));
+      } else {
+        item.append(el("p", entry.site, "connect-site"));
+        if (words.known) item.append(el("p", `BitLogin knows this address: it is ${words.known}.`, "connect-small"));
+      }
       item.append(el("p", `As ${me && me.pubkey === entry.pubkey ? me.name || "the account signed in here" : `another account (${shortKey(entry.pubkey)})`}.`));
       if (entry.wants) {
         const can = describePermissions(entry.wants, entry.site);
@@ -79,7 +86,7 @@ const draw = () => {
       }
       item.append(el("p", `Allowed ${day(entry.at)}. ${words.ended ? "" : `Ends ${day(entry.until)} at the latest. `}${words.lasts}`, "connect-small"));
       const row = el("div", "", "cta-row");
-      if (!words.ended) {
+      if (!words.ended && !words.family) {
         const open = el("a", "Open it to sign out", "btn secondary");
         // The address was read as an http(s) origin before it was ever kept. No link back to this page is given.
         open.href = entry.site;
@@ -97,9 +104,17 @@ const draw = () => {
             remove.disabled = false;
             return;
           }
-          say(`Taken back: ${entry.site}. It stops when its signer next checks, usually within a day. To stop it this minute, open it and sign out there.`);
+          say(
+            words.family
+              ? `Taken back: every site at ${words.family}. Each stops when its signer next checks, usually within a day. To stop one this minute, open it and sign out there.`
+              : `Taken back: ${entry.site}. It stops when its signer next checks, usually within a day. To stop it this minute, open it and sign out there.`
+          );
         }
-        saveAllowed(removeAllowed(loadAllowed(Date.now() / 1000), entry.site, entry.pubkey));
+        // What the record now ends goes from the list with it: a family takes its sites' own grants with it, and a
+        // site of a family takes the family's grant (docs/site-family.md SF6).
+        const ended = (other) =>
+          other.pubkey === entry.pubkey && (other.site === entry.site || (!words.ended && (inFamily(other.site, entry.site) || inFamily(entry.site, other.site))));
+        saveAllowed(loadAllowed(Date.now() / 1000).filter((other) => !ended(other)));
         draw();
       });
       row.append(remove);

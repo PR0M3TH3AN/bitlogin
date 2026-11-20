@@ -53,6 +53,7 @@ import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSessionState } from "./sessionCache.js";
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
+import { inFamily, readFamily } from "../embedded/family.js";
 import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeerFor } from "../embedded/permissions.js";
 import { signClass } from "../embedded/policy.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
@@ -154,6 +155,10 @@ interface SessionState {
   /** The user's own write relays (NIP-65). In a full session, what `loadProfile` found; in a signer-only one,
    *  what the hand-off or the grant carried. Where a signer looks for their take-back record. */
   relays: string[];
+  /** For a signer-only session: the family of sites its grant is kept for (docs/site-family.md), where the user
+   *  allowed every site under one domain. Null for a grant kept for its site alone. `site` is still the exact
+   *  site it serves: a room pass names that, never the family. */
+  family: string | null;
 }
 
 const session: SessionState = {
@@ -174,7 +179,8 @@ const session: SessionState = {
   profile: null,
   remember: false,
   grantAt: null,
-  relays: []
+  relays: [],
+  family: null
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
@@ -281,6 +287,7 @@ function clearSession(): void {
   session.remember = false;
   session.grantAt = null;
   session.relays = [];
+  session.family = null;
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
@@ -638,8 +645,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         // The profile is this worker's own finding (loadProfile), never a page's word.
         return sealHandoff(everydayPrivateKey, p.recipientPublicKey, sender, p.app, {
           ...(p.site !== undefined ? { site: p.site } : {}),
-          ...(session.profile ? { profile: session.profile } : {}),
+          // Only a site that declared nothing is told who they are. An application is held to what it asked,
+          // though the window may have read the profile to show the user which account this is.
+          ...(session.profile && !p.app ? { profile: session.profile } : {}),
           ...(p.remember === true ? { remember: true } : {}),
+          ...(p.family !== undefined ? { family: p.family } : {}),
           // With the lock on, nothing is kept for any site: a key at rest in a site's storage would be a key
           // the lock does not cover. Every site is allowed for the visit, and asks at the sign-in address again.
           ...(lockKey ? { visitOnly: true } : {}),
@@ -669,11 +679,17 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!session.remember) return { kept: false };
       // An application's grant is for the site its hand-off was sealed for, and no other.
       if ((session.app && session.app.site !== p.site) || (session.site && session.site !== p.site)) throw new Error("This hand-off was for another site.");
+      // Allowed for every site of a family: kept once, under the family, and this site's own grant (an older
+      // choice) is forgotten, so what the user chose last is what applies.
+      if (session.family) {
+        if (!inFamily(p.site, session.family)) throw new Error("This hand-off was for another site.");
+        await deleteSignerGrant(store, p.site);
+      }
       return {
         kept: await saveSignerGrant(
           store,
           {
-            site: p.site,
+            site: session.family ?? p.site,
             everydayPrivateKey,
             until: p.until,
             ...(p.name ? { name: p.name } : {}),
@@ -692,14 +708,20 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     // signer-only session. It touches nothing a full session uses.
     case "signerRestore": {
       const p = payload as SignerSitePayload;
-      const grant = await loadSignerGrant(store, p.site, Date.now() / 1000);
-      if (!grant) return { restored: false };
+      // The site's own grant first. Where it has none, the family's, for a site in that family: the embedded
+      // signer names the family, from the site's address, by the Public Suffix List (docs/site-family.md).
+      const ownGrant = await loadSignerGrant(store, p.site, Date.now() / 1000);
+      const family = !ownGrant && p.family !== undefined && readFamily(p.family) && inFamily(p.site, p.family) ? p.family : null;
+      const grant = ownGrant ?? (family ? await loadSignerGrant(store, family, Date.now() / 1000) : null);
+      if (!grant || (family && grant.site !== family)) return { restored: false };
       clearSession();
       session.signer = new NostrSigner(grant.everydayPrivateKey);
       session.everydayPrivateKey = grant.everydayPrivateKey;
       session.signerOnly = true;
       session.app = grant.permissions ? { site: grant.site, permissions: grant.permissions } : null;
-      session.site = grant.site;
+      // The site it serves is the one asking, whichever grant it was kept under.
+      session.site = family ? p.site : grant.site;
+      session.family = family;
       session.profile = grant.profile ?? null;
       session.remember = true;
       session.grantAt = grantedAt(grant);
@@ -713,6 +735,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         signed: grant.signed,
         ...(grant.signedPass ? { signedPass: grant.signedPass } : {}),
         check: checkDue(Date.now() / 1000, grantedAt(grant), grant.checkedAt ?? 0),
+        ...(family ? { family } : {}),
         ...(grant.permissions ? { permissions: grant.permissions, signedSensitive: grant.signedSensitive ?? [] } : {})
       };
     }
@@ -723,7 +746,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (!session.signerOnly) throw new Error("Only a signer-only session is counted for a site.");
       const p = payload as SignerTouchPayload;
       const now = Date.now() / 1000;
-      const kept = await loadSignerGrant(store, p.site, now);
+      // A family's counts are the family's: every site of it shares one (docs/site-family.md SF5).
+      const kept = await loadSignerGrant(store, session.family && inFamily(p.site, session.family) ? session.family : p.site, now);
       // Only a grant that is there, and is this session's, is rewritten.
       if (kept && getPublicKeyHex(kept.everydayPrivateKey) === getPublicKeyHex(everydayPrivateKey)) {
         await saveSignerGrant(
@@ -735,8 +759,12 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       return {};
     }
 
+    // Signing out of a site that was allowed as one of a family signs out of the family: otherwise its next page
+    // load would take the family's grant up again, and the sign-out would not have happened (SF6).
     case "signerForget": {
-      await deleteSignerGrant(store, (payload as SignerSitePayload).site);
+      const site = (payload as SignerSitePayload).site;
+      await deleteSignerGrant(store, site);
+      if (session.family && inFamily(site, session.family)) await deleteSignerGrant(store, session.family);
       return {};
     }
 
@@ -760,12 +788,14 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.remember = opened.remember;
       session.grantAt = opened.at;
       session.relays = opened.relays;
+      session.family = opened.family;
       return {
         everydayPublicKey: session.signer.getPublicKey(),
         ...(opened.app ? { app: opened.app } : {}),
         ...(opened.site ? { site: opened.site } : {}),
         ...(opened.profile ? { profile: opened.profile } : {}),
-        ...(opened.remember ? { remember: true } : {})
+        ...(opened.remember ? { remember: true } : {}),
+        ...(opened.family ? { family: opened.family } : {})
       };
     }
 
@@ -849,7 +879,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "signerCheck": {
       const { signer } = requireUnlocked();
       if (!session.signerOnly || !session.site) return { state: "ok" };
-      const site = session.site;
+      // What is checked is what the grant is kept under: the site, or its family.
+      const site = session.family ?? session.site;
       const now = Date.now() / 1000;
       const grant = await loadSignerGrant(store, site, now);
       // Allowed for one visit: held in memory, ends with the page, and is not checked.

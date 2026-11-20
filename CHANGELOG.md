@@ -6,6 +6,47 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-19 (later, on `beta` only)
+
+- **The Allow screen shows who you are signing in as, and the buttons
+  come first** (asked for by the owner after the window signed them in to
+  a world as an account they did not mean). Under the site's address: the
+  name and picture from the account's own signed profile, the whole npub,
+  the line about them, and "Use a different account". Then Allow and
+  Don't allow, on screen without scrolling. What it allows is listed below.
+- **"Use a different account"** signs this browser out of BitLogin as the
+  account shown (and removes the lock, if one is on) and offers the
+  ordinary sign-in. Sites already allowed as the first account stay
+  allowed as it.
+- **A deployment must change one header:** `img-src` gains `https:` on the
+  sign-in address's pages, so a profile picture can be fetched. The
+  embedded signer's page is unchanged: it fetches no pictures.
+- **An application is never handed the profile.** The window now reads it
+  for every site, to show the user; the worker leaves it out of an
+  application's hand-off.
+- **Words on the Allow screen for two kinds:** 30004 ("change your lists
+  of worlds") and 37300 ("announce a world as yours").
+- **One Allow can cover every site under one domain
+  (`docs/site-family.md`).** At the second site of a family the sign-in
+  window offers "Allow every example.com site" beside "Just this one".
+  After that, any site under that domain is signed in with nothing
+  pressed, for notes, reactions and room passes. An application's own
+  permissions still need its own Allow. Never offered on shared hosting
+  names (`x.vercel.app`, `alice.github.io`).
+- **New files to deploy with the sign-in window and signer:** one more
+  `bitlogin-shared-*.js` chunk, holding the Public Suffix List (45 KB
+  compressed). A site that vendors only `bitlogin.js` and the worker is
+  not affected.
+- **New on the headless signer:** `exportHandoff()` takes a family;
+  `restoreSignerGrant()` takes the site's family. `FoundSigner` gains
+  `family` and `knownFamily`, and `grant()` a fourth argument.
+- **The take-back record may list a family** (`https://*.example.com`). An
+  older signer ignores such an entry; it holds no family grants.
+- **The name a site is told is the one a person shows** (§SW16): their
+  profile's `display_name`, then `displayName`, then `name`, the order
+  BitPortal and other Nostr clients use. It was `name` first. A room pass
+  made from a sign-in after this carries the new name.
+
 ## 2026-11-19
 
 **A site can be taken back from one place (`docs/take-back.md`).** For

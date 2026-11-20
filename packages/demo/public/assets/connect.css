@@ -12,6 +12,16 @@
 .connect-key { font: .88em ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--muted); }
 .connect-small { font-size: .9rem; color: var(--muted); }
 .connect .cta-row { margin-top: 1.1rem; }
+/* Who they are signing in as, above the buttons: the name, the whole key, and the line from their own profile. A
+   wrong account has to be something a person can see before Allow (owner, 2026-11-19). */
+.connect-account { margin: .7rem 0; padding: .6rem .9rem; border: 1px solid var(--line-strong); border-radius: 10px; }
+.connect-account p { margin: 0 0 .2rem; overflow-wrap: anywhere; }
+.connect-account .connect-key { font-size: .8rem; }
+.connect-who { display: flex; align-items: center; gap: .6rem; font-size: 1.1rem; }
+.connect-avatar { flex: none; width: 2.6rem; height: 2.6rem; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: var(--ink-softer); border: 1px solid var(--line-strong); font-weight: 700; }
+.connect-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.connect-link { background: none; border: 0; padding: .2rem 0 0; color: var(--fg); font: inherit; font-size: .9rem; text-decoration: underline; cursor: pointer; }
+.connect-what { margin: 1.2rem 0 0; }
 #widget-slot { margin: 1rem 0 .4rem; }
 
 /* What an application asks that deserves a second look (docs/sign-in-window.md §SW9.7). */

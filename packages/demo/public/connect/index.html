@@ -35,7 +35,25 @@
     <h1>Let this site sign notes as you?</h1>
     <p id="site" class="connect-site"></p>
     <p class="connect-small">Only allow a site you meant to visit. This is its address exactly as your browser reports it.</p>
-    <p>Signing as <strong id="who"></strong><span id="who-key" class="connect-key"></span>.</p>
+    <div class="connect-account">
+      <p class="connect-small">Signing in as</p>
+      <p class="connect-who"><span id="who-pic" class="connect-avatar" aria-hidden="true"></span><strong id="who"></strong></p>
+      <p id="who-key" class="connect-key"></p>
+      <p id="who-about" class="connect-small" hidden></p>
+      <button id="switch" class="connect-link" type="button">Use a different account</button>
+    </div>
+    <label id="remember-row" class="connect-remember" hidden><input id="remember" type="checkbox" checked /> <span id="remember-label">Remember this site on this device</span></label>
+    <div id="family" class="connect-known" hidden>
+      <p>You allowed <strong id="family-earlier"></strong> <span id="family-when"></span>.</p>
+      <p>Every site whose address ends in <strong id="family-domain"></strong> can know who you are and ask you to sign notes, without asking you first. Choose this only if one person or team runs all of them.</p>
+      <p id="family-lasts" class="connect-small"></p>
+    </div>
+    <div class="cta-row">
+      <button id="allow-family" class="btn primary" type="button" hidden>Allow every site</button>
+      <button id="allow" class="btn primary" type="button">Allow</button>
+      <button id="deny" class="btn secondary" type="button">Don't allow</button>
+    </div>
+    <p class="connect-what">What this allows:</p>
     <ul>
       <li>It can post notes and reactions as you: three a minute at most, and twenty an hour.</li>
       <li>Each one is marked with this site's address.</li>
@@ -43,12 +61,7 @@
       <li>It can't read your messages, change your profile or who you follow, or touch your account or anything in it.</li>
       <li id="lasts">It lasts until you sign out of that site, or 30 days, on this device.</li>
     </ul>
-    <label id="remember-row" class="connect-remember" hidden><input id="remember" type="checkbox" checked /> <span id="remember-label">Remember this site on this device</span></label>
     <p class="connect-small">Your key stays with BitLogin. The site never sees it, and nothing is typed there.</p>
-    <div class="cta-row">
-      <button id="allow" class="btn primary" type="button">Allow</button>
-      <button id="deny" class="btn secondary" type="button">Don't allow</button>
-    </div>
   </section>
 
   <section id="ask-app" class="connect-card" hidden>
@@ -58,7 +71,19 @@
     <p id="app-known" class="connect-known" hidden>BitLogin knows this address: it is <strong id="app-known-name"></strong>.</p>
     <p id="app-unknown" class="connect-small" hidden>BitLogin does not know this application. That is not a warning by itself: most are not on its list. Go by the address.</p>
     <p id="app-name-line" hidden>It calls itself <strong id="app-name"></strong>. Anyone can call themselves anything: go by the address.</p>
-    <p>Acting as <strong id="app-who"></strong><span id="app-who-key" class="connect-key"></span>, it asks to do these <strong>without asking you again</strong>:</p>
+    <div class="connect-account">
+      <p class="connect-small">Acting as</p>
+      <p class="connect-who"><span id="app-who-pic" class="connect-avatar" aria-hidden="true"></span><strong id="app-who"></strong></p>
+      <p id="app-who-key" class="connect-key"></p>
+      <p id="app-who-about" class="connect-small" hidden></p>
+      <button id="switch-app" class="connect-link" type="button">Use a different account</button>
+    </div>
+    <label id="remember-app-row" class="connect-remember" hidden><input id="remember-app" type="checkbox" checked /> <span id="remember-app-label">Remember this application on this device</span></label>
+    <div class="cta-row">
+      <button id="allow-app" class="btn primary" type="button">Allow</button>
+      <button id="deny-app" class="btn secondary" type="button">Don't allow</button>
+    </div>
+    <p class="connect-what">It asks to do these <strong>without asking you again</strong>. Read them before you allow it:</p>
     <ul id="app-ordinary"></ul>
     <div id="app-sensitive-block" class="connect-warning" hidden>
       <p><strong>And these, which deserve a second look:</strong></p>
@@ -69,12 +94,7 @@
       <li>It can't take your key, sign in anywhere else as you, or touch your BitLogin account.</li>
       <li id="app-lasts">It lasts until you sign out of that application, or 30 days, on this device.</li>
     </ul>
-    <label id="remember-app-row" class="connect-remember" hidden><input id="remember-app" type="checkbox" checked /> <span id="remember-app-label">Remember this application on this device</span></label>
     <p class="connect-small">Your key stays with BitLogin. The application never sees it, and nothing is typed there.</p>
-    <div class="cta-row">
-      <button id="allow-app" class="btn primary" type="button">Allow</button>
-      <button id="deny-app" class="btn secondary" type="button">Don't allow</button>
-    </div>
   </section>
 
   <section id="signin" class="connect-card" hidden>

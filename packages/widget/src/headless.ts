@@ -62,7 +62,9 @@ export interface HeadlessSigner {
     /** The site the hand-off is for, as the signer reported it. Sealed with the key. */
     site?: string,
     /** The user left "remember" ticked in the window. Without it nothing is kept. */
-    remember?: boolean
+    remember?: boolean,
+    /** The user allowed every site of this family, `https://*.domain` (docs/site-family.md). Only with `remember`. */
+    family?: string
   ): Promise<{ senderPublicKey: string; payload: string }>;
   /** The optional lock (docs/sign-in-window.md §SW12): whether it is on, and whether it is locked now. */
   lockStatus(): Promise<LockStatusResult>;
@@ -103,7 +105,7 @@ export interface HeadlessSigner {
    */
   acceptHandoff(
     sealed: { senderPublicKey: string; payload: string }
-  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean }>;
+  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean; family?: string }>;
   /**
    * For a session an application was approved for (docs/sign-in-window.md
    * §SW9.5). Each rejects unless the session carries a permission set that
@@ -129,8 +131,10 @@ export interface HeadlessSigner {
    * then holds a signer-only session. Null when nothing is kept for it.
    */
   restoreSignerGrant(
-    site: string
-  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
+    site: string,
+    /** The family the site is in (publicSuffix.ts): its grant is taken up where the site has none of its own. */
+    family?: string
+  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
@@ -196,9 +200,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async beginHandoff() {
       return (await client.handoffBegin()).recipientPublicKey;
     },
-    async exportHandoff(recipientPublicKey, app, site, remember) {
+    async exportHandoff(recipientPublicKey, app, site, remember, family) {
       await requirePubkey();
-      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}), ...(site ? { site } : {}), ...(remember ? { remember: true } : {}) });
+      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}), ...(site ? { site } : {}), ...(remember ? { remember: true } : {}), ...(family ? { family } : {}) });
     },
     async lockStatus() {
       return client.lockStatus();
@@ -225,7 +229,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async acceptHandoff(sealed) {
       const res = await client.handoffAccept(sealed);
       pubkey = res.everydayPublicKey;
-      return { pubkey, ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}) };
+      return { pubkey, ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}), ...(res.family ? { family: res.family } : {}) };
     },
     async appEncrypt(peerPublicKey, text, scheme = "nip44") {
       return (await client.appEncrypt({ peerPublicKey, text, scheme })).text;
@@ -242,8 +246,8 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async keepSignerGrant(grant) {
       return (await client.signerKeep(grant)).kept;
     },
-    async restoreSignerGrant(site) {
-      const res = await client.signerRestore({ site });
+    async restoreSignerGrant(site, family) {
+      const res = await client.signerRestore({ site, ...(family ? { family } : {}) });
       if (!res.restored || !res.everydayPublicKey || typeof res.until !== "number") return null;
       pubkey = res.everydayPublicKey;
       return {
@@ -254,6 +258,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         signed: res.signed ?? [],
         ...(res.signedPass ? { signedPass: res.signedPass } : {}),
         ...(res.check ? { check: res.check } : {}),
+        ...(res.family ? { family: res.family } : {}),
         ...(res.permissions ? { permissions: res.permissions, signedSensitive: res.signedSensitive ?? [] } : {})
       };
     },

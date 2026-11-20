@@ -317,9 +317,11 @@ const KIND_WORDS: Readonly<Record<number, string>> = {
   27302: "let a world open a terminal on a computer of yours",
   27303: "give a world access you have granted it",
   30000: "change your lists",
+  30004: "change your lists of worlds",
   30015: "change your interests",
   34235: "post videos",
-  34236: "post short videos"
+  34236: "post short videos",
+  37300: "announce a world as yours"
 };
 
 const READ_WORDS: Readonly<Record<number, string>> = {

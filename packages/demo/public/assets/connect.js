@@ -4,7 +4,19 @@
 // BitLogin's workers, as a key that can only sign.
 //
 // This page never holds the key, and speaks only to pages of its own origin.
-import { askLockDevice, describePermissions, findEmbeddedSigner, knownAppName, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
+import {
+  askLockDevice,
+  declineFamily,
+  describePermissions,
+  familyDeclined,
+  familyDomain,
+  familyOffer,
+  findEmbeddedSigner,
+  knownAppName,
+  loadAllowed,
+  recordAllowed,
+  SIGN_LIMITS
+} from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -12,7 +24,6 @@ const $ = (id) => document.getElementById(id);
 const status = (text) => {
   $("status").textContent = text;
 };
-const shortKey = (npub) => `${npub.slice(0, 10)}…${npub.slice(-4)}`;
 /** A press sooner than a person could have read the question was meant for the site, and is ignored. */
 const TOO_SOON_MS = 900;
 
@@ -22,6 +33,8 @@ let who = null;
 let lockOn = false;
 let askedAt = 0;
 let finished = false;
+/** Where every site of this one's family may be allowed at once (docs/site-family.md SF4): the earlier site of it. */
+let offer = null;
 
 /** Relays other than BitLogin's own list, where the page names them. The live page names none. */
 const relayList = (value) => (value || "").split(",").map((url) => url.trim()).filter(Boolean);
@@ -37,6 +50,8 @@ const relays = {
  */
 let preparing = null;
 let profileLoaded = Promise.resolve();
+/** Their own signed profile, once relays have answered: shown so they can see which account this is. */
+let profile = null;
 /** The one worker this page talks to. Where the lock is on, it is the one that was unlocked. */
 let worker = null;
 const theWorker = async () => (worker ??= await createHeadlessSigner(relays));
@@ -45,11 +60,48 @@ const prepare = () =>
     const session = await theWorker();
     const restored = await session.restore();
     if (!restored || restored.pubkey !== who.pubkey) throw new Error("no session");
-    // Only a world is told who someone is: an application is held to what it asked, and this is not in it. Their
-    // relay list is read for every site: it is where the signer later looks for a take-back (docs/take-back.md).
-    profileLoaded = session.loadProfile({ profile: !found.wants }).catch(() => null);
+    // Their profile is read for every site, to show them which account this is. Only a world is told it: the
+    // worker leaves it out of an application's hand-off. Their relay list is read too: it is where the signer
+    // later looks for a take-back (docs/take-back.md).
+    const forWho = who.pubkey;
+    profileLoaded = session
+      .loadProfile()
+      .then((found_) => {
+        if (who?.pubkey !== forWho) return;
+        profile = found_;
+        paintWho();
+      })
+      .catch(() => null);
     return session;
   })());
+/**
+ * Who they are signing in as: the name and picture from their own signed profile, the whole key, and the line
+ * about them. Before relays answer, and where there is no profile, the name the sign-in address knows them by.
+ * Everything is written as text. The picture is an https address the worker cleaned; where it does not load, the
+ * first letter of the name stands in.
+ */
+const paintWho = () => {
+  if (!who) return;
+  const name = profile?.name || who.name || "";
+  for (const pre of ["", "app-"]) {
+    $(`${pre}who`).textContent = name || "An account with no name";
+    $(`${pre}who-key`).textContent = who.npub;
+    $(`${pre}who-about`).textContent = profile?.about || "";
+    $(`${pre}who-about`).hidden = !profile?.about;
+    const pic = $(`${pre}who-pic`);
+    const letter = () => pic.replaceChildren(document.createTextNode((name || "?").trim().slice(0, 1).toUpperCase()));
+    letter();
+    if (profile?.picture) {
+      const img = new Image();
+      img.alt = "";
+      img.referrerPolicy = "no-referrer";
+      img.onload = () => pic.replaceChildren(img);
+      img.onerror = letter;
+      img.src = profile.picture;
+    }
+  }
+};
+
 /** How long Allow waits for relays to answer about the profile. Without one, the site is told the key alone. */
 const PROFILE_WAIT_MS = 2500;
 
@@ -68,7 +120,7 @@ const leave = () => {
  * any other. Unticked, it is for this visit. With the lock on, every site is for one visit, and there is no box.
  */
 const days = () => (found.known ? 30 : 7);
-const lasting = (what, row, box, label, line) => {
+const lasting = (what, row, box, label, line, after) => {
   const say = () => {
     $(line).textContent = lockOn
       ? `It lasts for this visit: until that ${what}'s page is closed or loaded again. Your lock is on, so nothing is kept for any site.`
@@ -79,8 +131,30 @@ const lasting = (what, row, box, label, line) => {
   $(row).hidden = lockOn;
   $(label).textContent = `Remember this ${what} on this device for ${days()} days`;
   $(box).checked = !lockOn;
-  $(box).onchange = say;
+  $(box).onchange = () => {
+    say();
+    after?.();
+  };
   say();
+};
+
+/**
+ * The family question, at the second site of a family (docs/site-family.md SF4): two buttons in place of Allow,
+ * neither of them the default. Only while "remember" is ticked: a family is never allowed for one visit.
+ */
+const familyShown = () => !!offer && !lockOn && $("remember").checked;
+const showFamily = () => {
+  const shown = familyShown();
+  $("family").hidden = !shown;
+  $("allow-family").hidden = !shown;
+  $("allow").textContent = shown ? "Just this one" : "Allow";
+  if (!offer) return;
+  const domain = familyDomain(found.family);
+  $("family-earlier").textContent = offer.site;
+  $("family-when").textContent = `on ${new Date(offer.at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long" })}`;
+  $("family-domain").textContent = domain;
+  $("family-lasts").textContent = `It lasts ${found.knownFamily ? 30 : 7} days on this device, or until you sign out of any one of them, which signs you out of them all.`;
+  $("allow-family").textContent = `Allow every ${domain} site`;
 };
 
 /** A list, written as text: nothing a site sent is ever put on this page as markup. */
@@ -107,8 +181,7 @@ const askApp = () => {
   $("app-name").textContent = found.wants.name || "";
   // Its own name is shown only where BitLogin has none for it: beside a known name it would only confuse.
   $("app-name-line").hidden = !found.wants.name || !!known;
-  $("app-who").textContent = who.name || shortKey(who.npub);
-  $("app-who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
+  paintWho();
   lasting("application", "remember-app-row", "remember-app", "remember-app-label", "app-lasts");
   fill("app-ordinary", words.ordinary);
   fill("app-sensitive", words.sensitive);
@@ -124,9 +197,11 @@ const ask = () => {
   void prepare().catch(() => {});
   if (found.wants) return askApp();
   $("site").textContent = found.site;
-  $("who").textContent = who.name || shortKey(who.npub);
-  $("who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
-  lasting("site", "remember-row", "remember", "remember-label", "lasts");
+  paintWho();
+  // Offered only where an earlier site of the same family was allowed, as this account, and not turned down lately.
+  offer = !lockOn && found.family && !familyDeclined(found.family) ? familyOffer(loadAllowed(), found.site, found.family, who.pubkey) : null;
+  lasting("site", "remember-row", "remember", "remember-label", "lasts", showFamily);
+  showFamily();
   status("A site is asking to sign notes as you. Check the address.");
   $("ask").hidden = false;
   // Allow is never given the keys unasked: a key meant for the site, pressed as this window came up, must not land on it.
@@ -184,21 +259,57 @@ const signIn = () => {
   $("widget-slot").append(widget);
 };
 
-const allow = async (button) => {
+/**
+ * "Use a different account": this browser is signed out of BitLogin as the account shown, and the ordinary
+ * sign-in is offered in its place. Nothing is handed to the site. Sites already allowed as the first account stay
+ * allowed as it: what they hold is their own.
+ */
+const switchAccount = async () => {
+  if (!who || finished) return;
+  $("ask").hidden = true;
+  $("ask-app").hidden = true;
+  status("Signing this browser out of that account.");
+  try {
+    await (await theWorker()).logout();
+  } catch {
+    $(found.wants ? "ask-app" : "ask").hidden = false;
+    return status("That didn't work, and you are still signed in as the account shown.");
+  }
+  worker?.destroy();
+  worker = null;
+  preparing = null;
+  profile = null;
+  profileLoaded = Promise.resolve();
+  who = null;
+  lockOn = false;
+  signIn();
+  status("You are signed out of that account in this browser. Sign in as the one you want to use.");
+};
+
+const allow = async (button, forFamily = false) => {
   if (!found || !who || performance.now() - askedAt < TOO_SOON_MS) return;
   button.disabled = true;
+  // Both answers to the family question are kept: "Just this one" stops it being asked again for thirty days.
+  const asFamily = forFamily && familyShown();
+  if (!forFamily && familyShown()) declineFamily(found.family);
   status(found.wants ? "Handing over a key that can do only what you just read." : "Handing over a key that can only sign.");
   let session = null;
   try {
     session = await prepare();
     await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
     const remember = !lockOn && $(found.wants ? "remember-app" : "remember").checked;
-    const ok = await found.grant(session, who.name, remember);
+    const ok = await found.grant(session, who.name, remember, asFamily);
     $("ask").hidden = true;
     $("ask-app").hidden = true;
     if (!ok) return status("That didn't work, and nothing was handed over. Close this window and try again from the site that opened it.");
     // Written down at the sign-in address, for the list of sites allowed. A record only: it lets nothing sign.
     const at = Math.floor(Date.now() / 1000);
+    if (asFamily) {
+      recordAllowed({ site: found.family, members: [found.site, offer.site], pubkey: who.pubkey, at, until: at + (found.knownFamily ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec), remembered: true });
+      status(`Done. Every ${familyDomain(found.family)} site can sign notes as you until you sign out of one of them.`);
+      setTimeout(leave, 700);
+      return;
+    }
     recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (remember ? (found.known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec), remembered: remember, ...(found.wants ? { wants: found.wants } : {}) });
     const how = remember ? "until you sign out of it" : "for this visit";
     status(found.wants ? `Done. That application can act as you, as you allowed, ${how}.` : `Done. That site can sign notes as you ${how}.`);
@@ -212,8 +323,11 @@ const allow = async (button) => {
   }
 };
 $("allow").addEventListener("click", () => allow($("allow")));
+$("allow-family").addEventListener("click", () => allow($("allow-family"), true));
 $("allow-app").addEventListener("click", () => allow($("allow-app")));
 $("deny-app").addEventListener("click", leave);
+$("switch").addEventListener("click", switchAccount);
+$("switch-app").addEventListener("click", switchAccount);
 $("deny").addEventListener("click", leave);
 $("deny-2").addEventListener("click", leave);
 

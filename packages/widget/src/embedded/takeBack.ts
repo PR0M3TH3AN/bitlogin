@@ -12,10 +12,18 @@
  * site is listed with `before >= t`. Allowing the site again makes a grant
  * with a later time, which the old entry does not touch.
  *
+ * A family of sites (docs/site-family.md) is listed as `https://*.domain`. It
+ * ends a site's own grant for any site in it, and the family's grant; a site
+ * of the family that is listed ends the family's grant too (SF6).
+ *
  * Nothing here signs, encrypts or contacts anything.
  */
 import { isAllowedRelayUrl, verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
+import { inFamily, readFamily } from "./family.js";
 import { cleanOrigin } from "./policy.js";
+
+/** A site as a record lists it: an exact origin, or a family. "" for anything else. */
+const listedSite = (input: unknown): string => (typeof input === "string" && input.includes("*") ? readFamily(input) : cleanOrigin(input));
 
 export const TAKE_BACK_KIND = 30078;
 export const TAKE_BACK_D = "bitlogin:taken-back:v1";
@@ -56,7 +64,7 @@ export function readTakenBack(input: unknown): TakenBack | null {
   for (const entry of r.sites.slice(0, TAKE_BACK_LIMITS.sites * 2)) {
     if (!entry || typeof entry !== "object") continue;
     const e = entry as Record<string, unknown>;
-    const site = cleanOrigin(e.site);
+    const site = listedSite(e.site);
     const before = time(e.before);
     if (!site || site !== e.site || !before) continue;
     newest.set(site, Math.max(newest.get(site) ?? 0, before));
@@ -84,19 +92,27 @@ export function mergeTakenBack(a: TakenBack, b: TakenBack, nowSeconds: number): 
   return { allBefore, sites };
 }
 
-/** Take one site back, or everything, as of now. */
+/** Take one site back, a family, or everything, as of now. */
 export function takeBack(record: TakenBack, what: { site: string } | { all: true }, nowSeconds: number): TakenBack {
   const now = Math.floor(nowSeconds);
   if ("all" in what) return mergeTakenBack(record, { allBefore: now, sites: [] }, now);
-  const site = cleanOrigin(what.site);
+  const site = listedSite(what.site);
   if (!site) return record;
   return mergeTakenBack(record, { allBefore: 0, sites: [{ site, before: now }] }, now);
 }
 
-/** The rule: whether a grant made at `grantedAt` for `site` is ended by this record. */
+/**
+ * The rule: whether a grant made at `grantedAt`, kept for `site` (an origin or
+ * a family), is ended by this record. An entry ends it when it names the same
+ * thing, when it is a family the site is in, or, for a family's grant, when
+ * it is a site of that family.
+ */
 export function isTakenBack(record: TakenBack, site: string, grantedAt: number): boolean {
   if (record.allBefore >= grantedAt) return true;
-  return record.sites.some((entry) => entry.site === site && entry.before >= grantedAt);
+  const family = readFamily(site);
+  return record.sites.some(
+    (entry) => entry.before >= grantedAt && (entry.site === site || (family ? inFamily(entry.site, family) : !!readFamily(entry.site) && inFamily(site, entry.site)))
+  );
 }
 
 /** The newest validly signed take-back event by `pubkey` among what relays returned, or null. Its content is still sealed. */

@@ -9,7 +9,13 @@
  * sign-in address can see or change. So this list can say what was allowed
  * and when it ends, and cannot say how often a site signed or switch one
  * off.
+ *
+ * A family of sites allowed at once (docs/site-family.md) is one entry, its
+ * `site` written `https://*.domain`, with the sites it was allowed from. A
+ * site of the family that signs in later by the family's grant never comes
+ * back to this page, so it is not listed: the list cannot see it.
  */
+import { familyDomain, inFamily, knownFamily, readFamily } from "./family.js";
 import { knownAppName, readPermissions, type AppPermissions } from "./permissions.js";
 import { cleanOrigin } from "./policy.js";
 
@@ -18,12 +24,18 @@ export const ALLOWED_LIMITS = {
   /** No more entries than this are kept: the oldest go first. */
   entries: 200,
   /** How long an entry is kept after it has ended, in seconds. */
-  keepEndedSec: 30 * 24 * 3600
+  keepEndedSec: 30 * 24 * 3600,
+  /** After "Just this one", a family is not offered again for this long, in seconds (docs/site-family.md SF4). */
+  familyDeclineSec: 30 * 24 * 3600,
+  /** No more sites than this are listed under a family. */
+  members: 20
 } as const;
 
 export interface AllowedSite {
-  /** The site's origin, as the browser reported it to the signer. */
+  /** The site's origin, as the browser reported it to the signer: or a family, `https://*.domain`. */
   site: string;
+  /** For a family: the sites of it the user allowed it from, newest first. */
+  members?: string[];
   /** The account it was allowed as: a public key, hex. */
   pubkey: string;
   /** When Allow was pressed, in seconds. */
@@ -41,12 +53,14 @@ const HEX64 = /^[0-9a-f]{64}$/u;
 function readEntry(input: unknown): AllowedSite | null {
   if (!input || typeof input !== "object") return null;
   const e = input as Record<string, unknown>;
-  const site = cleanOrigin(e.site);
+  const family = readFamily(e.site);
+  const site = family || (typeof e.site === "string" && e.site.includes("*") ? "" : cleanOrigin(e.site));
   if (!site || site !== e.site || typeof e.pubkey !== "string" || !HEX64.test(e.pubkey)) return null;
   if (typeof e.at !== "number" || typeof e.until !== "number" || !Number.isFinite(e.at) || !Number.isFinite(e.until) || e.until < e.at) return null;
   const wants = e.wants === undefined ? undefined : readPermissions(e.wants);
-  if (wants === null) return null;
-  return { site, pubkey: e.pubkey, at: Math.floor(e.at), until: Math.floor(e.until), remembered: e.remembered === true, ...(wants ? { wants } : {}) };
+  if (wants === null || (family && wants)) return null;
+  const members = family && Array.isArray(e.members) ? [...new Set(e.members.filter((m): m is string => inFamily(m, family)))].slice(0, ALLOWED_LIMITS.members) : [];
+  return { site, ...(members.length ? { members } : {}), pubkey: e.pubkey, at: Math.floor(e.at), until: Math.floor(e.until), remembered: e.remembered === true, ...(wants ? { wants } : {}) };
 }
 
 /** The record as it was stored, read again: anything that is not an entry is dropped, and so is one long ended. Newest first. */
@@ -67,22 +81,42 @@ export function readAllowed(raw: string | null | undefined, nowSeconds: number):
     .slice(0, ALLOWED_LIMITS.entries);
 }
 
-/** Allowing a site again as the same account replaces what was there for it. */
+/**
+ * Allowing a site again as the same account replaces what was there for it.
+ * Allowing a family again keeps the sites it was allowed from before, so its
+ * row still says where it came from.
+ */
 export function addAllowed(list: readonly AllowedSite[], entry: AllowedSite): AllowedSite[] {
   const clean = readEntry(entry);
   if (!clean) return [...list];
-  return [clean, ...list.filter((other) => !(other.site === clean.site && other.pubkey === clean.pubkey))].slice(0, ALLOWED_LIMITS.entries);
+  const before = list.find((other) => other.site === clean.site && other.pubkey === clean.pubkey);
+  const merged =
+    readFamily(clean.site) && before?.members ? (readEntry({ ...clean, members: [...(clean.members ?? []), ...before.members] }) ?? clean) : clean;
+  return [merged, ...list.filter((other) => !(other.site === clean.site && other.pubkey === clean.pubkey))].slice(0, ALLOWED_LIMITS.entries);
+}
+
+/**
+ * When a family may be offered (docs/site-family.md SF4): at a site of it,
+ * where another site of the same family was allowed before as the same
+ * account and remembered. Returns that earlier entry, the newest, to name in
+ * the question; null where there is none.
+ */
+export function familyOffer(list: readonly AllowedSite[], site: string, family: string, pubkey: string): AllowedSite | null {
+  if (!readFamily(family) || !inFamily(site, family)) return null;
+  return list.find((entry) => entry.pubkey === pubkey && entry.remembered && entry.site !== site && inFamily(entry.site, family)) ?? null;
 }
 
 export function removeAllowed(list: readonly AllowedSite[], site: string, pubkey: string): AllowedSite[] {
   return list.filter((entry) => !(entry.site === site && entry.pubkey === pubkey));
 }
 
-/** What an entry is, in words, for the list. */
-export function describeAllowed(entry: AllowedSite, nowSeconds: number): { known: string | null; ended: boolean; lasts: string } {
+/** What an entry is, in words, for the list. `family` is the domain, for a family's entry. */
+export function describeAllowed(entry: AllowedSite, nowSeconds: number): { known: string | null; family: string | null; ended: boolean; lasts: string } {
   const ended = entry.until <= nowSeconds;
+  const family = familyDomain(entry.site) || null;
   return {
-    known: knownAppName(entry.site),
+    known: family ? (knownFamily(entry.site) ? `every site at ${family}` : null) : knownAppName(entry.site),
+    family,
     ended,
     lasts: ended ? "Ended." : entry.remembered ? "Remembered on this device until then, unless you sign out there sooner." : "For one visit: it ended when that site's page was closed or loaded again, and by then at the latest."
   };
@@ -117,4 +151,36 @@ export function saveAllowed(list: readonly AllowedSite[], storage: Storage | nul
 /** Write down that a site was allowed. Best-effort: Allow never fails for want of a record. */
 export function recordAllowed(entry: AllowedSite, storage: Storage | null = here()): boolean {
   return saveAllowed(addAllowed(loadAllowed(entry.at, storage), entry), storage);
+}
+
+export const FAMILY_DECLINED_KEY = "bitlogin:family-declined:v1";
+
+const readDeclined = (storage: Storage | null): Record<string, number> => {
+  try {
+    const parsed = JSON.parse(storage?.getItem(FAMILY_DECLINED_KEY) ?? "{}") as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+};
+
+/** "Just this one": the family is not offered again for thirty days. Best-effort. */
+export function declineFamily(family: string, nowSeconds = Date.now() / 1000, storage: Storage | null = here()): boolean {
+  if (!readFamily(family)) return false;
+  const now = Math.floor(nowSeconds);
+  // Only what is still in force is kept, so the record stays small.
+  const kept = Object.fromEntries(Object.entries(readDeclined(storage)).filter(([key, until]) => readFamily(key) && typeof until === "number" && until > now));
+  kept[family] = now + ALLOWED_LIMITS.familyDeclineSec;
+  try {
+    storage?.setItem(FAMILY_DECLINED_KEY, JSON.stringify(kept));
+    return !!storage;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the user said "Just this one" for this family in the last thirty days. */
+export function familyDeclined(family: string, nowSeconds = Date.now() / 1000, storage: Storage | null = here()): boolean {
+  const until = readDeclined(storage)[family];
+  return typeof until === "number" && until > nowSeconds;
 }

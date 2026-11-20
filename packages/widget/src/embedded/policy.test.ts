@@ -128,8 +128,13 @@ describe("the embedded signer and the window, as written", () => {
 
   it("the signer never restores this origin's own session, and reaches storage only through the worker", () => {
     expect(signer).not.toMatch(/\.restore\(\)|readCachedSession|localStorage|indexedDB|sessionStorage/u);
-    // What it takes up is only what it kept for the site it is in.
-    expect(signer).toContain("restoreSignerGrant(site)");
+    // What it takes up is only what it kept for the site it is in, or for that site's family (docs/site-family.md):
+    // and the family is worked out here, from the address the browser gave, never taken from a message.
+    expect(signer).toContain("restoreSignerGrant(site, familyOf(site) || undefined)");
+    expect(signer.split("restoreSignerGrant(").length - 1).toBe(1);
+    expect(signer.split("familyOf(").length - 1).toBe(signer.split("familyOf(site)").length - 1);
+    // A hand-off for a family is refused unless it is this site's own family.
+    expect(signer).toContain('if (got.family && got.family !== familyOf(site)) throw new Error("for another family");');
     expect(signer).toContain("keepSignerGrant({ site, until");
     // Locking forgets the site.
     expect(signer.slice(signer.indexOf("const lock = ()"), signer.indexOf("let remembering"))).toContain("forgetSignerGrant(forSite)");

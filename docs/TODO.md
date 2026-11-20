@@ -212,6 +212,33 @@ that moved.
     the NSWP kit to show the frame.
   - [ ] **Try the lock on real devices:** a fingerprint or face reader,
     Safari, a phone.
+- [x] **14. One Allow for a family of sites** (asked for by the owner
+  through the BitPortal session, 2026-11-19). Design: `docs/site-family.md`.
+  **Built on `beta` 2026-11-19.** At the second site of a family the window
+  asks once, "Allow every bitblocks.network site" or "Just this one"; after
+  the first, every site under that domain is signed in with nothing
+  pressed, for notes, reactions and room passes only, with counts shared
+  across the family. The owner's four decisions are in §SF9.
+  - [ ] **Try it at the real worlds,** once it is on `main` and BitPortal
+    has it vendored. Nothing has been tried at `bitblocks.network`.
+  - [ ] **Run the family test in Firefox and WebKit** (§SF10): it runs in
+    Chromium only.
+  - [ ] **Keep the Public Suffix List current:** a step in the release
+    checklist to run `scripts/update-public-suffix.mjs`.
+- [ ] **15. Always show who is signed in** (asked for by the owner,
+  2026-11-19, after the window signed them in to a world as the wrong
+  account). The Allow screen now shows the profile's name and picture, the
+  whole npub, and "Use a different account", with the buttons at the top.
+  On `beta`.
+  - [ ] **The widget itself** (`<bitlogin-auth>`, the account page, the
+    sites page) still shows a key and no picture.
+  - [ ] **Several accounts kept on one device, and a chooser**
+    (`docs/account-switching.md`, not built). Today "Use a different
+    account" signs the first one out.
+  - [ ] **A way for a site to draw its own sign-in and account switcher**
+    over BitLogin's client. Asked for by the owner; not designed.
+  - [ ] **From the BitPortal session, undecided:** reserved kinds at a
+    local development address; a "taken or not" answer to `want`.
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound
