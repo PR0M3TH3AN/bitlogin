@@ -1,0 +1,237 @@
+{
+  "description": "Saves (protocol/12-saves.md). `key1`'s NIP-44 conversation key with itself is `conversationKey`. `addresses` gives the `d` for a world and a slot (\"\" where there is none). `sealed` is a save made with the fixed `nonce`, so it can be reproduced exactly. In `opening`, `expect` is what a signer answers when the world `askedBy` hands it `event`: the slot, the data and the time, or null for a refusal. Signatures are checked separately.",
+  "testKeys": {
+    "note": "TEST-ONLY keys derived from public strings: sha256(utf8(label)). Anyone can sign as them. Signatures use 32 zero bytes of BIP-340 aux randomness so they are reproducible.",
+    "key1": {
+      "label": "nswp test vector key 1",
+      "secretKey": "a2b21391e4eb08443bfc5f24d7e778410f717b0509e82999e71a2bee98ad4912",
+      "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6"
+    },
+    "key2": {
+      "label": "nswp test vector key 2",
+      "secretKey": "5bc5ca1924bd664c612999947060bd3785d1e568e3b0fde563b73fea0a4b9959",
+      "pubkey": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+    },
+    "session": {
+      "label": "nswp test vector session key",
+      "secretKey": "2046112f77ef7e117c03898e53aec40c7d33e8aa5a164efe66d7b7672c4db4c9",
+      "pubkey": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f"
+    }
+  },
+  "conversationKey": "ea055f80734f4d7622038120b5046d65e8b0fdedc3ee750769f2a203bb9448e6",
+  "nonce": "aba8b9829ef707c475027154ea596b2894e1d3643888f139297150547c507485",
+  "addresses": [
+    {
+      "world": "https://arcade.example",
+      "slot": "main",
+      "d": "4d07b92e04234bbbdf1c58745d8e2dd207ed21fdc8ee139a3f9c92325dd87fc6"
+    },
+    {
+      "world": "https://arcade.example/play/?level=3",
+      "slot": "main",
+      "d": "4d07b92e04234bbbdf1c58745d8e2dd207ed21fdc8ee139a3f9c92325dd87fc6",
+      "note": "Only the origin counts: the same address as the line above."
+    },
+    {
+      "world": "https://arcade.example",
+      "slot": "run-2",
+      "d": "ec4346f0ddc296726390ae1addcb024606513128417ef482ca92d1d8d79a7aa0"
+    },
+    {
+      "world": "https://other.example",
+      "slot": "main",
+      "d": "d84fdf658c1356c8fec265cbccfb443cd074f36a8deb48bf2bc92023656bccc0"
+    },
+    {
+      "world": "https://arcade.example",
+      "slot": "Not A Slot",
+      "d": "",
+      "note": "Not a slot's name: no address."
+    }
+  ],
+  "sealed": {
+    "world": "https://arcade.example",
+    "slot": "main",
+    "data": "{\"level\":3}",
+    "now": 1794430800,
+    "event": {
+      "kind": 37304,
+      "created_at": 1794430800,
+      "tags": [
+        [
+          "d",
+          "4d07b92e04234bbbdf1c58745d8e2dd207ed21fdc8ee139a3f9c92325dd87fc6"
+        ],
+        [
+          "alt",
+          "Something a world keeps for its visitor. Only they can read it."
+        ]
+      ],
+      "content": "AquouYKe9wfEdQJxVOpZayiU4dNkOIjxOSlxUFR8UHSFrmep/HJNy/ufBA9bxG34tawE6dlda1kPUFHdhuDTo0nouebXiAIfLJDjYMlltZ3QYJAWz1oweBwDogvVPGUx+EXSjRyzEf/rNLok5k5EmLdNvWUuz+HeSZzrE3uhA1w+Vh16g+WBjLfnNervA7r8ajhs8fEPm7h13nTk/esDQstWJQ==",
+      "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "id": "4c104fd427e314271ec8e939e7fe3e80ef29590fb5b5e1790cfa3a10b17d3373",
+      "sig": "91b7fea2969edae01b22816d5868ab5de90ccea53a49ef685ea08137a16f316d842cff7facaabac3ab292fef27399ba71f8343c1f8ba499e54a953aea0c750cc"
+    }
+  },
+  "opening": [
+    {
+      "name": "its_own_world",
+      "description": "Opened for the world it was saved from.",
+      "event": {
+        "kind": 37304,
+        "created_at": 1794430800,
+        "tags": [
+          [
+            "d",
+            "4d07b92e04234bbbdf1c58745d8e2dd207ed21fdc8ee139a3f9c92325dd87fc6"
+          ],
+          [
+            "alt",
+            "Something a world keeps for its visitor. Only they can read it."
+          ]
+        ],
+        "content": "AquouYKe9wfEdQJxVOpZayiU4dNkOIjxOSlxUFR8UHSFrmep/HJNy/ufBA9bxG34tawE6dlda1kPUFHdhuDTo0nouebXiAIfLJDjYMlltZ3QYJAWz1oweBwDogvVPGUx+EXSjRyzEf/rNLok5k5EmLdNvWUuz+HeSZzrE3uhA1w+Vh16g+WBjLfnNervA7r8ajhs8fEPm7h13nTk/esDQstWJQ==",
+        "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+        "id": "4c104fd427e314271ec8e939e7fe3e80ef29590fb5b5e1790cfa3a10b17d3373",
+        "sig": "91b7fea2969edae01b22816d5868ab5de90ccea53a49ef685ea08137a16f316d842cff7facaabac3ab292fef27399ba71f8343c1f8ba499e54a953aea0c750cc"
+      },
+      "askedBy": "https://arcade.example",
+      "expect": {
+        "slot": "main",
+        "data": "{\"level\":3}",
+        "at": 1794430800
+      }
+    },
+    {
+      "name": "another_world_asks",
+      "description": "The same save, handed over by another world: refused.",
+      "event": {
+        "kind": 37304,
+        "created_at": 1794430800,
+        "tags": [
+          [
+            "d",
+            "4d07b92e04234bbbdf1c58745d8e2dd207ed21fdc8ee139a3f9c92325dd87fc6"
+          ],
+          [
+            "alt",
+            "Something a world keeps for its visitor. Only they can read it."
+          ]
+        ],
+        "content": "AquouYKe9wfEdQJxVOpZayiU4dNkOIjxOSlxUFR8UHSFrmep/HJNy/ufBA9bxG34tawE6dlda1kPUFHdhuDTo0nouebXiAIfLJDjYMlltZ3QYJAWz1oweBwDogvVPGUx+EXSjRyzEf/rNLok5k5EmLdNvWUuz+HeSZzrE3uhA1w+Vh16g+WBjLfnNervA7r8ajhs8fEPm7h13nTk/esDQstWJQ==",
+        "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+        "id": "4c104fd427e314271ec8e939e7fe3e80ef29590fb5b5e1790cfa3a10b17d3373",
+        "sig": "91b7fea2969edae01b22816d5868ab5de90ccea53a49ef685ea08137a16f316d842cff7facaabac3ab292fef27399ba71f8343c1f8ba499e54a953aea0c750cc"
+      },
+      "askedBy": "https://other.example",
+      "expect": null
+    },
+    {
+      "name": "moved_to_another_worlds_address",
+      "description": "A real save put at the address of the asking world's own slot: what is inside still says whose it is. Refused.",
+      "event": {
+        "kind": 37304,
+        "created_at": 1794430800,
+        "tags": [
+          [
+            "d",
+            "d84fdf658c1356c8fec265cbccfb443cd074f36a8deb48bf2bc92023656bccc0"
+          ]
+        ],
+        "content": "AquouYKe9wfEdQJxVOpZayiU4dNkOIjxOSlxUFR8UHSFrmup/HJNy/ufBA9bxG34tawE6dlda1kPUFHdhuDTo0nouebXiAIfLJDjYMlltZ3QYJAWz1oweBwDogvVPGUx+Eas0nDWZ5qHaJge1TNm5bdNvWUuz+HeSZzrE3uhA1w+Vh1BnK65YpQKzwUHnAEc2/qgsdV7dWwmacianmiQTzOm/w==",
+        "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+        "id": "eff2016c87e0261e7e772b81df1d2a9ea64db2392d20b481fb743da3970d32e1",
+        "sig": "f297b2bc0b5b1086b4bd9756cc8f330a5c60a9e634e3a12fbae3ed8d120dc1689bb8e9fe369a17fb6936edfc21f2c0e0dd50894d7ca0c42f9acbb5c5a5cb09e6"
+      },
+      "askedBy": "https://other.example",
+      "expect": null
+    },
+    {
+      "name": "kept_at_the_wrong_slot",
+      "description": "At the address of another slot of the same world: refused.",
+      "event": {
+        "kind": 37304,
+        "created_at": 1794430800,
+        "tags": [
+          [
+            "d",
+            "ec4346f0ddc296726390ae1addcb024606513128417ef482ca92d1d8d79a7aa0"
+          ]
+        ],
+        "content": "AquouYKe9wfEdQJxVOpZayiU4dNkOIjxOSlxUFR8UHSFrmup/HJNy/ufBA9bxG34tawE6dlda1kPUFHdhuDTo0nouebXiAIfLJDjYMlltZ3QYJAWz1oweBwDogvVPGUx+Eas0nDWZ5qHaJge1TNm5bdNvWUuz+HeSZzrE3uhA1w+Vh1BnK65YpQKzwUHnAEc2/qgsdV7dWwmacianmiQTzOm/w==",
+        "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+        "id": "c6a6f802345cc8535906ff2bb999257f78877de9841f727006e71b12bcd91d82",
+        "sig": "bfd9cf5f0adf6af8279e07dbf7753bca5b7d92be365b5a18c90a8aef7981ae33d6b1e0a7ca0cb40e4efef1fbd7b2cfc724338af48c9df49d097077006efd9b94"
+      },
+      "askedBy": "https://arcade.example",
+      "expect": null
+    },
+    {
+      "name": "somebody_elses",
+      "description": "A save by another key: refused.",
+      "event": {
+        "kind": 37304,
+        "created_at": 1794430800,
+        "tags": [
+          [
+            "d",
+            "1dcc521f491b81bed3356c3bf902fe918b1386cd4927d2fceb7353a6ad15dafa"
+          ],
+          [
+            "alt",
+            "Something a world keeps for its visitor. Only they can read it."
+          ]
+        ],
+        "content": "AquouYKe9wfEdQJxVOpZayiU4dNkOIjxOSlxUFR8UHSFVpyB6Ql/Y1gHRcjUuidO7K7OhEJd1cQ6dfOaNfDVoPJj5e0qJ8795zazJvNrgGEfUr15qm/5nrlYl0FrgGNTNpo+/uMqGlLQmNb45w8qw2pyohUGUYGq2ZKFDFr5jFggsU4PVcG0eqA2VdNJWJQuvoJNPZuIF46ev+QY4emPgoWmGw==",
+        "pubkey": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+        "id": "97a5bcc7bda42d1ff1b72c3be616ab815e8c715477cc118450c6fad9b46fbe74",
+        "sig": "e551c6bffaf253e0e667fd74f7768cc942ebc625dafecb464fd5e0a609c3c83ec73d33d53d0703f07eff77a0b06c92e221e17693e252de477625829c76a2b550"
+      },
+      "askedBy": "https://arcade.example",
+      "expect": null
+    },
+    {
+      "name": "not_a_save",
+      "description": "The same words in a note of another kind: refused.",
+      "event": {
+        "kind": 1,
+        "created_at": 1794430800,
+        "tags": [],
+        "content": "AquouYKe9wfEdQJxVOpZayiU4dNkOIjxOSlxUFR8UHSFrmep/HJNy/ufBA9bxG34tawE6dlda1kPUFHdhuDTo0nouebXiAIfLJDjYMlltZ3QYJAWz1oweBwDogvVPGUx+EXSjRyzEf/rNLok5k5EmLdNvWUuz+HeSZzrE3uhA1w+Vh16g+WBjLfnNervA7r8ajhs8fEPm7h13nTk/esDQstWJQ==",
+        "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+        "id": "813ab2bf46b0fa91229d08df20ac2e1af8c9a08513cdf335fdff9fb9f3d9698f",
+        "sig": "8e03a8e778043a65b807b31de1547b800a9294bc63ef1f8ec2e542fe5a5138f77cad27d326547698794220b77ae0f143ef00ee56c980ea059f37611ef0ebc242"
+      },
+      "askedBy": "https://arcade.example",
+      "expect": null
+    },
+    {
+      "name": "cleared",
+      "description": "An empty save: opened, and empty. This is how a slot is cleared.",
+      "event": {
+        "kind": 37304,
+        "created_at": 1794430800,
+        "tags": [
+          [
+            "d",
+            "4d07b92e04234bbbdf1c58745d8e2dd207ed21fdc8ee139a3f9c92325dd87fc6"
+          ],
+          [
+            "alt",
+            "Something a world keeps for its visitor. Only they can read it."
+          ]
+        ],
+        "content": "AquouYKe9wfEdQJxVOpZayiU4dNkOIjxOSlxUFR8UHSFrmqp/HJNy/ufBA9bxG34tawE6dlda1kPUFHdhuDTo0nouebXiAIfLJDjYMlltZ3QYJAWz1oweBwDogvVPGUx+BzzjBcq+IeLr/A5OnhuOuN+EKJZcqcNOm0GOzp3mupuKjs=",
+        "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+        "id": "eb2672e1b3e3d1e61270b3e72f8a87c903c09d26a09c3ba6bdaa174b3322ae39",
+        "sig": "331024d6ae7cfee17c355d8bd9949a8d0f67ee5ae28b870ec37d0b3f588e6e4caea89a7a21e8c563f6f4079fa1e36f517c9d6e5f20a9455beced6ac3b5115273"
+      },
+      "askedBy": "https://arcade.example",
+      "expect": {
+        "slot": "main",
+        "data": "",
+        "at": 1794430800
+      }
+    }
+  ]
+}

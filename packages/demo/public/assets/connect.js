@@ -147,7 +147,11 @@ const showFamily = () => {
   const shown = familyShown();
   $("family").hidden = !shown;
   $("allow-family").hidden = !shown;
-  $("allow").textContent = shown ? "Just this one" : "Allow";
+  // A world that asked to change who they follow: two buttons, neither the default, as for a family.
+  const asksFollows = !!found && found.more.includes("follows");
+  $("more-follows").hidden = !asksFollows;
+  $("allow-more").hidden = !asksFollows;
+  $("allow").textContent = shown ? "Just this one" : asksFollows ? "Allow without that" : "Allow";
   if (!offer) return;
   const domain = familyDomain(found.family);
   $("family-earlier").textContent = offer.site;
@@ -366,7 +370,7 @@ const addAccount = async () => {
   status("Sign in as the account you want to use at this site.");
 };
 
-const allow = async (button, forFamily = false) => {
+const allow = async (button, forFamily = false, withMore = false) => {
   if (!found || !who || performance.now() - askedAt < TOO_SOON_MS) return;
   button.disabled = true;
   // Both answers to the family question are kept: "Just this one" stops it being asked again for thirty days.
@@ -378,7 +382,7 @@ const allow = async (button, forFamily = false) => {
     session = await prepare();
     await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
     const remember = !lockOn && $(found.wants ? "remember-app" : "remember").checked;
-    const ok = await found.grant(session, who.name, remember, asFamily);
+    const ok = await found.grant(session, who.name, remember, asFamily, withMore);
     $("ask").hidden = true;
     $("ask-app").hidden = true;
     if (!ok) return status("That didn't work, and nothing was handed over. Close this window and try again from the site that opened it.");
@@ -392,7 +396,7 @@ const allow = async (button, forFamily = false) => {
     }
     recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (remember ? (found.known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec), remembered: remember, ...(found.wants ? { wants: found.wants } : {}) });
     const how = remember ? "until you sign out of it" : "for this visit";
-    status(found.wants ? `Done. That application can act as you, as you allowed, ${how}.` : `Done. That site can sign notes as you ${how}.`);
+    status(found.wants ? `Done. That application can act as you, as you allowed, ${how}.` : withMore ? `Done. That site can sign notes as you, and change who you follow, ${how}.` : `Done. That site can sign notes as you ${how}.`);
     setTimeout(leave, 700);
   } catch {
     $("ask").hidden = true;
@@ -404,6 +408,7 @@ const allow = async (button, forFamily = false) => {
 };
 $("allow").addEventListener("click", () => allow($("allow")));
 $("allow-family").addEventListener("click", () => allow($("allow-family"), true));
+$("allow-more").addEventListener("click", () => allow($("allow-more"), false, true));
 $("allow-app").addEventListener("click", () => allow($("allow-app")));
 $("deny-app").addEventListener("click", leave);
 $("switch").addEventListener("click", choose);

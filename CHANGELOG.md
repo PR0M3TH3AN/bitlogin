@@ -6,6 +6,27 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-20 (on `beta` only)
+
+- **A world can keep saves with its visitor's account** (NSWP-12;
+  `docs/sign-in-window.md` §SW16a). The embedded signer answers `save`,
+  `find` and `open` for a site that declared nothing. A save is an
+  encrypted note of kind 37304 that names no world, and is opened only for
+  the world it is from. Six a minute and sixty an hour for one world. No
+  application may sign or read kind 37304.
+- **A world can be let follow and unfollow people** (NSWP-14; §SW16b). It
+  asks with `want` and `more: ["follows"]`; the window asks the user, with
+  two buttons; `state` then carries `more`. `follow` hands over the
+  user's newest follow list and one change. BitLogin checks the list is
+  theirs and looks at their relays itself before it signs. Never with a
+  family grant, never for an application.
+- **`FoundSigner.more`, and a fifth argument to `grant`** (`withMore`), for
+  a site that draws its own sign-in window.
+- **A follow list of more than 2,500 people can be signed** by an
+  application that may sign kind 3: up to 20,000 tags for that kind.
+- **Words for kind 37305** in the window: "rate worlds, from one to five
+  stars".
+
 ## 2026-11-19 (later, on `beta` only)
 
 - **A site that asks for more than it may have is told so, and so is the

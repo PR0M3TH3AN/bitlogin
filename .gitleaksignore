@@ -1,0 +1,16 @@
+# Findings the secret scan is told to pass over. Each line is one finding in
+# one commit: nothing here loosens a rule, and a new key anywhere is still
+# reported.
+#
+# NSWP's published test vectors (vectors/saves.json at 8400ac7, people.json
+# at 13d5feb), copied whole on 2026-11-20 (owner's decision). Their keys are
+# test-only, derived from public strings (sha256 of a label in the file):
+# "Anyone can sign as them." They guard nothing.
+f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/saves.vectors.json:generic-api-key:7
+f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/saves.vectors.json:generic-api-key:12
+f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/saves.vectors.json:generic-api-key:17
+f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/saves.vectors.json:generic-api-key:21
+f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/follows.vectors.json:generic-api-key:7
+f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/follows.vectors.json:generic-api-key:12
+f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/follows.vectors.json:generic-api-key:17
+f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/follows.vectors.json:generic-api-key:22

@@ -15,6 +15,7 @@ import { handoffMessage, readHandoffMessage } from "./policy.js";
 import { describePermissions, heldAsLocal, knownAppName, mayHold, RESERVED_KINDS, type AppPermissions, type PermissionWords } from "./permissions.js";
 import { familyDomain, inFamily, knownFamily } from "./family.js";
 import { familyOf } from "./publicSuffix.js";
+import type { WorldMore } from "./follows.js";
 
 export { describePermissions, knownAppName, type AppPermissions, type PermissionWords };
 export { declineFamily, describeAllowed, familyDeclined, familyOffer, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
@@ -37,7 +38,16 @@ export interface FoundSigner {
    * is whether they left it ticked. Resolves
    * true once the signer says it is unlocked.
    */
-  grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string, remember?: boolean, forFamily?: boolean): Promise<boolean>;
+  grant(session: Pick<HeadlessSigner, "exportHandoff">, name?: string, remember?: boolean, forFamily?: boolean, withMore?: boolean): Promise<boolean>;
+  /**
+   * What a world asked to be let do beyond a note and a reaction, by name
+   * (today only "follows": change who the person follows, one at a time).
+   * Say it on the page in BitLogin's own words, and give the user a way to
+   * allow the site without it. It is handed over only where `grant` is
+   * called with `withMore`. Empty for an application, and never with a
+   * family: it is for one site, by its own address.
+   */
+  readonly more: readonly WorldMore[];
   /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
   readonly known: boolean;
   /**
@@ -116,7 +126,9 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       // Checked again here, on the page that shows it: a set this site may not hold is no request at all.
       const wants = msg.wants && mayHold(world, msg.wants) ? msg.wants : null;
       const turnedDown = msg.turnedDown === true || (!!msg.wants && !wants);
-      const family = wants ? "" : familyOf(world);
+      const more = wants ? [] : (msg.more ?? []);
+      // More than a note and a reaction is for this one site: no family is offered beside it.
+      const family = wants || more.length ? "" : familyOf(world);
       resolve({
         site: world,
         wants,
@@ -124,12 +136,13 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
         family,
         knownFamily: family ? knownFamily(family) : false,
         turnedDown,
+        more,
         local: !!wants && heldAsLocal(world) && [...wants.sign, ...wants.read].some((kind) => RESERVED_KINDS.includes(kind)),
-        async grant(session, name, remember, forFamily) {
+        async grant(session, name, remember, forFamily, withMore) {
           // What is sealed is exactly what this page was given to show: the set, for the site the browser named,
           // and its family only where the user chose that, with "remember" left on.
           const asFamily = forFamily === true && remember === true && !!family;
-          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world, remember === true, asFamily ? family : undefined);
+          const sealed = await session.exportHandoff(recipient, wants ? { site: world, permissions: wants } : undefined, world, remember === true, asFamily ? family : undefined, withMore === true && more.length && !asFamily ? more : undefined);
           const answered = new Promise<boolean>((done) => {
             onDone = done;
             setTimeout(() => done(false), 8000);

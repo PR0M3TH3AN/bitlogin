@@ -3,6 +3,7 @@ import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
 import type { RebroadcastResult, RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
 import type { AppPermissions } from "../embedded/permissions.js";
 import type { Profile } from "../embedded/profile.js";
+import type { WorldMore } from "../embedded/follows.js";
 
 export interface WorkerRequest<TAction extends string = string, TPayload = unknown> {
   id: string;
@@ -190,6 +191,8 @@ export interface HandoffExportPayload {
   remember?: boolean;
   /** The user allowed every site of this family (docs/site-family.md). The worker refuses one that does not hold `site`. */
   family?: string;
+  /** What the user let this world do beyond a note and a reaction, by name. Never with `app` or `family`. */
+  more?: string[];
 }
 
 // ---- Taking a site back (docs/take-back.md) ----
@@ -233,11 +236,37 @@ export interface HandoffAcceptResult {
   remember?: boolean;
   /** The family of sites it is to be kept for, where the user allowed every site of one (docs/site-family.md). */
   family?: string;
+  /** What this world was let do beyond a note and a reaction, by name. */
+  more?: WorldMore[];
 }
 
 /** A world's session public key. Everything else in a room pass is the worker's own (§SW16). */
 export interface RoomPassPayload {
   session: string;
+}
+
+/** What a world keeps for its visitor (NSWP-12). The world it is for is the worker's own: the site the session serves. */
+export interface WorldSavePayload {
+  slot: string;
+  data: string;
+}
+export interface WorldFindPayload {
+  slot: string;
+}
+export interface WorldOpenPayload {
+  event: unknown;
+}
+/** One person followed or unfollowed, for a world the user let do that (NSWP-14). */
+export interface WorldFollowPayload {
+  /** The visitor's newest follow list as the world found it, or null where it says they have none. */
+  list: unknown;
+  add?: string;
+  remove?: string;
+}
+export interface WorldOpenResult {
+  slot: string;
+  data: string;
+  at: number;
 }
 
 // ---- What an approved application may ask beyond signing (docs/sign-in-window.md §SW9.5) ----
@@ -293,6 +322,8 @@ export interface SignerRestoreResult {
   family?: string;
   permissions?: AppPermissions;
   signedSensitive?: number[];
+  /** What this world was let do beyond a note and a reaction, by name. */
+  more?: WorldMore[];
 }
 
 // ---- The optional lock (docs/sign-in-window.md §SW12) ----
@@ -508,6 +539,10 @@ export type WorkerActionMap = {
   lockNow: [Record<string, never>, LockStatusResult];
   lockOpen: [LockOpenPayload, LockOpenResult];
   roomPass: [RoomPassPayload, NostrEvent];
+  worldSave: [WorldSavePayload, NostrEvent];
+  worldFind: [WorldFindPayload, { d: string }];
+  worldOpen: [WorldOpenPayload, WorldOpenResult];
+  worldFollow: [WorldFollowPayload, NostrEvent];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];
   vaultList: [Record<string, never>, VaultListResult];

@@ -19,6 +19,7 @@ import { APP_LIMITS, knownAppName, mayHold, readPermissions, type AppPermissions
 import { knownFamily, readFamily } from "../embedded/family.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
 import { cleanRelays } from "../embedded/takeBack.js";
+import { cleanMore, type WorldMore } from "../embedded/follows.js";
 
 const GRANT_PREFIX = "bitlogin:signer-grant:v1:";
 const GRANT_DEVICE_KEY = "bitlogin:signer-grant-device-key:v1";
@@ -57,6 +58,8 @@ export interface SignerGrant {
   signedSensitive?: number[];
   /** When the last room passes for this site were made, counted apart from notes (§SW16). */
   signedPass?: number[];
+  /** What a world was let do beyond a note and a reaction, by name (follows.ts). Never in a family's grant or an application's. */
+  more?: WorldMore[];
   /** When it was allowed, in seconds (docs/take-back.md). Absent in a grant kept before this was recorded. */
   at?: number;
   /** The user's own write relays, where a signer looks for their take-back record. */
@@ -132,6 +135,7 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       // An application's public signatures are counted up to its own hourly limit, so more of them are kept.
       signed: grant.signed.filter((t) => Number.isFinite(t)).slice(-(grant.permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept)),
       ...(grant.permissions ? { permissions: grant.permissions } : {}),
+      ...(!grant.permissions && !readFamily(site) && cleanMore(grant.more).length ? { more: cleanMore(grant.more) } : {}),
       ...(typeof grant.at === "number" ? { at: Math.floor(grant.at) } : {}),
       ...(cleanRelays(grant.relays).length ? { relays: cleanRelays(grant.relays) } : {}),
       ...(typeof grant.checkedAt === "number" ? { checkedAt: Math.floor(grant.checkedAt) } : {}),
@@ -161,7 +165,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; more?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown };
     const when = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
     const profile = readProfile(p.profile);
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
@@ -186,6 +190,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       ...(profile ? { profile } : {}),
       signed: times(p.signed, permissions ? APP_LIMITS.public.hourly : GRANT_LIMITS.signedKept),
       ...(times(p.signedPass, GRANT_LIMITS.passKept).length ? { signedPass: times(p.signedPass, GRANT_LIMITS.passKept) } : {}),
+      ...(!permissions && !readFamily(site) && cleanMore(p.more).length ? { more: cleanMore(p.more) } : {}),
       ...(when(p.at) ? { at: when(p.at)! } : {}),
       ...(cleanRelays(p.relays).length ? { relays: cleanRelays(p.relays) } : {}),
       ...(when(p.checkedAt) ? { checkedAt: when(p.checkedAt)! } : {}),

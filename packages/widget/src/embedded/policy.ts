@@ -12,6 +12,8 @@
  */
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import { readPermissions, type AppPermissions } from "./permissions.js";
+import { cleanSlot, fitsInSave } from "./saves.js";
+import { cleanMore, type WorldMore } from "./follows.js";
 
 export const SIGNER_PROTOCOL = "nswp-signer";
 export const HANDOFF_PROTOCOL = "nswp-handoff";
@@ -154,9 +156,21 @@ export type SignerRequest =
   | { t: "sign"; id: string; event: unknown }
   /** A room pass for this site, naming the given session key (§SW16). Everything else in it is the signer's. */
   | { t: "pass"; id: string; session: string }
+  // What a world keeps for its visitor (NSWP-12; saves.ts). Not for an application.
+  /** Keep this for me. The world gives a slot's name and the words; where it is kept is the signer's to say. */
+  | { t: "save"; id: string; slot: string; data: string }
+  /** Where is my save in this slot kept? So the world can ask a relay for it. */
+  | { t: "find"; id: string; slot: string }
+  /** Open this save, which a relay gave me. Opened only if it is this world's. */
+  | { t: "open"; id: string; event: unknown }
   // From an application (§SW9). A world sends none of these.
   /** What the application would like to be approved for. Shown in the window the next time it is opened. */
   | { t: "want"; id: string; permissions: AppPermissions }
+  // From a world that would be let do more than a note and a reaction (NSWP-10, "Asking for more"; follows.ts).
+  /** By name, from a short closed list. It approves nothing: the window shows it, in BitLogin's words. */
+  | { t: "wantMore"; id: string; more: WorldMore[] }
+  /** Follow or unfollow one person: the visitor's newest follow list as the world found it (or null), and the one change. */
+  | { t: "follow"; id: string; list: unknown; add?: string; remove?: string }
   | { t: "encrypt"; id: string; peer: string; text: string; scheme: "nip44" | "nip04" }
   | { t: "decrypt"; id: string; peer: string; text: string; scheme: "nip44" | "nip04" }
   | { t: "read"; id: string; event: unknown };
@@ -174,12 +188,18 @@ export type SignerReply =
       until?: number;
       remembered?: boolean;
       permissions?: AppPermissions;
+      /** What a world was let do beyond a note and a reaction, by name. */
+      more?: WorldMore[];
       /** In answer to `want` only: whether that set may be shown to the user at this address. False approves
        *  nothing and true approves nothing: it says whether asking is worth it. */
       taken?: boolean;
     }
   | { t: "signed"; id: string; event: NostrEvent }
   | { t: "text"; id: string; text: string }
+  /** Answers `find`: the `d` of this world's save in that slot. */
+  | { t: "found"; id: string; d: string }
+  /** Answers `open`: what was kept, in which slot, and when. */
+  | { t: "opened"; id: string; slot: string; data: string; at: number }
   | { t: "refused"; id: string };
 
 const ID = /^[0-9a-z-]{1,40}$/iu;
@@ -196,6 +216,17 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.t === "lock") return { t: "lock", id: d.id };
   if (d.t === "sign" && d.event && typeof d.event === "object") return { t: "sign", id: d.id, event: d.event };
   if (d.t === "pass" && typeof d.session === "string" && HEX64.test(d.session)) return { t: "pass", id: d.id, session: d.session };
+  if (d.t === "save" && cleanSlot(d.slot) && fitsInSave(d.data)) return { t: "save", id: d.id, slot: cleanSlot(d.slot), data: d.data };
+  if (d.t === "find" && cleanSlot(d.slot)) return { t: "find", id: d.id, slot: cleanSlot(d.slot) };
+  if (d.t === "open" && d.event && typeof d.event === "object") return { t: "open", id: d.id, event: d.event };
+  // A world asking for more, by name. A message that carries a permission set is an application's, below.
+  if (d.t === "want" && d.permissions === undefined && Array.isArray(d.more)) return { t: "wantMore", id: d.id, more: cleanMore(d.more) };
+  if (d.t === "follow" && (d.list === null || (!!d.list && typeof d.list === "object"))) {
+    const add = typeof d.add === "string" && HEX64.test(d.add);
+    const remove = typeof d.remove === "string" && HEX64.test(d.remove);
+    if (add === remove) return null;
+    return { t: "follow", id: d.id, list: d.list, ...(add ? { add: d.add as string } : { remove: d.remove as string }) };
+  }
   if (d.t === "want") {
     const permissions = readPermissions(d.permissions);
     return permissions ? { t: "want", id: d.id, permissions } : null;
@@ -215,7 +246,7 @@ export type HandoffMessage =
   | { t: "hello"; nonce: string }
   /** Signer to window: which site embeds it (as the browser says), a throwaway key to seal the hand-off to, and
    *  what that site said it wants, if it is an application (§SW9). */
-  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean }
+  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean; /** A world asked to be let do more, by name. */ more?: WorldMore[] }
   /** Window to signer, after the user pressed Allow: the sealed hand-off, for that site. */
   | { t: "grant"; nonce: string; world: string; sealed: { senderPublicKey: string; payload: string }; name?: string }
   /** Signer to window: it is unlocked, or it could not be. */
@@ -233,7 +264,7 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
     // A set that does not read as one is no frame at all: the window must not show part of what was asked.
     const wants = d.wants === undefined ? undefined : readPermissions(d.wants);
     if (wants === null) return null;
-    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}) };
+    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}), ...(!wants && cleanMore(d.more).length ? { more: cleanMore(d.more) } : {}) };
   }
   if (d.t === "grant" && cleanOrigin(d.world) && d.sealed && typeof d.sealed === "object") {
     const s = d.sealed as Record<string, unknown>;

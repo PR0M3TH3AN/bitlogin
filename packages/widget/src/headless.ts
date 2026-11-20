@@ -23,6 +23,7 @@ import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
 import type { KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
+import type { WorldMore } from "./embedded/follows.js";
 
 export interface HeadlessSignerOptions {
   /** Relays for the Connection Vault (only needed for wallet features). */
@@ -77,7 +78,9 @@ export interface HeadlessSigner {
     /** The user left "remember" ticked in the window. Without it nothing is kept. */
     remember?: boolean,
     /** The user allowed every site of this family, `https://*.domain` (docs/site-family.md). Only with `remember`. */
-    family?: string
+    family?: string,
+    /** What the user let this world do beyond a note and a reaction, by name ("follows"). Never with `app` or `family`. */
+    more?: readonly string[]
   ): Promise<{ senderPublicKey: string; payload: string }>;
   /** The optional lock (docs/sign-in-window.md §SW12): whether it is on, and whether it is locked now. */
   lockStatus(): Promise<LockStatusResult>;
@@ -112,13 +115,28 @@ export interface HeadlessSigner {
    */
   roomPass(session: string): Promise<NostrEvent>;
   /**
+   * In the same kind of session: what the world keeps for its visitor
+   * (NSWP-12). A save for the site the session serves, signed; where that
+   * site's save in a slot is kept; and a save opened, only if it is that
+   * site's. Each is refused for anything else.
+   */
+  worldSave(slot: string, data: string): Promise<NostrEvent>;
+  worldFind(slot: string): Promise<string>;
+  worldOpen(event: unknown): Promise<{ slot: string; data: string; at: number }>;
+  /**
+   * In the same kind of session, for a world the user let change who they
+   * follow (NSWP-14): their follow list with one person added or taken out,
+   * signed. `list` is their newest as the world found it, or null.
+   */
+  worldFollow(list: unknown, change: { add?: string; remove?: string }): Promise<NostrEvent>;
+  /**
    * Receiving side, last step: open the hand-off. This signer then holds a
    * signer-only session, in memory: it can sign and say who it is, and
    * nothing else, and nothing is cached.
    */
   acceptHandoff(
     sealed: { senderPublicKey: string; payload: string }
-  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean; family?: string }>;
+  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean; family?: string; more?: WorldMore[] }>;
   /**
    * For a session an application was approved for (docs/sign-in-window.md
    * §SW9.5). Each rejects unless the session carries a permission set that
@@ -147,7 +165,7 @@ export interface HeadlessSigner {
     site: string,
     /** The family the site is in (publicSuffix.ts): its grant is taken up where the site has none of its own. */
     family?: string
-  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
+  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; more?: WorldMore[]; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
@@ -226,9 +244,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async beginHandoff() {
       return (await client.handoffBegin()).recipientPublicKey;
     },
-    async exportHandoff(recipientPublicKey, app, site, remember, family) {
+    async exportHandoff(recipientPublicKey, app, site, remember, family, more) {
       await requirePubkey();
-      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}), ...(site ? { site } : {}), ...(remember ? { remember: true } : {}), ...(family ? { family } : {}) });
+      return client.handoffExport({ recipientPublicKey, ...(app ? { app } : {}), ...(site ? { site } : {}), ...(remember ? { remember: true } : {}), ...(family ? { family } : {}), ...(more?.length ? { more: [...more] } : {}) });
     },
     async lockStatus() {
       return client.lockStatus();
@@ -252,10 +270,22 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async roomPass(sessionKey) {
       return client.roomPass({ session: sessionKey });
     },
+    async worldSave(slot, data) {
+      return client.worldSave({ slot, data });
+    },
+    async worldFind(slot) {
+      return (await client.worldFind({ slot })).d;
+    },
+    async worldOpen(event) {
+      return client.worldOpen({ event });
+    },
+    async worldFollow(list, change) {
+      return client.worldFollow({ list, ...change });
+    },
     async acceptHandoff(sealed) {
       const res = await client.handoffAccept(sealed);
       pubkey = res.everydayPublicKey;
-      return { pubkey, ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}), ...(res.family ? { family: res.family } : {}) };
+      return { pubkey, ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}), ...(res.family ? { family: res.family } : {}), ...(res.more?.length ? { more: res.more } : {}) };
     },
     async appEncrypt(peerPublicKey, text, scheme = "nip44") {
       return (await client.appEncrypt({ peerPublicKey, text, scheme })).text;
@@ -285,6 +315,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         ...(res.signedPass ? { signedPass: res.signedPass } : {}),
         ...(res.check ? { check: res.check } : {}),
         ...(res.family ? { family: res.family } : {}),
+        ...(res.more?.length ? { more: res.more } : {}),
         ...(res.permissions ? { permissions: res.permissions, signedSensitive: res.signedSensitive ?? [] } : {})
       };
     },

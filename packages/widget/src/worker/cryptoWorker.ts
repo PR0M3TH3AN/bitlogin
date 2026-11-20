@@ -39,7 +39,7 @@ import {
   listenForNostrconnect,
   type NostrEvent
 } from "@bitlogin/core/nostr";
-import { getPublicKeyHex, base64urlToBytes, wipe, generatePrivateKey, randomBytes, bytesToHex } from "@bitlogin/core/crypto";
+import { getPublicKeyHex, base64urlToBytes, wipe, generatePrivateKey, randomBytes, bytesToHex, getConversationKey } from "@bitlogin/core/crypto";
 import {
   VaultSession,
   parseNwcUri,
@@ -56,7 +56,9 @@ import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock,
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { inFamily, readFamily } from "../embedded/family.js";
 import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
-import { signClass } from "../embedded/policy.js";
+import { createSignGate, signClass } from "../embedded/policy.js";
+import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
+import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { deleteSignerGrant, grantedAt, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
@@ -81,6 +83,10 @@ import { SerialQueue } from "./serialQueue.js";
 import type { VaultConnectionSummary } from "./protocol.js";
 import type {
   WorkerRequest,
+  WorldSavePayload,
+  WorldFindPayload,
+  WorldOpenPayload,
+  WorldFollowPayload,
   WorkerResponse,
   ConfigurePayload,
   RegisterPayload,
@@ -161,6 +167,8 @@ interface SessionState {
    *  allowed every site under one domain. Null for a grant kept for its site alone. `site` is still the exact
    *  site it serves: a room pass names that, never the family. */
   family: string | null;
+  /** For a signer-only session serving a world: what the user let it do beyond a note and a reaction, by name. */
+  more: readonly string[];
 }
 
 const session: SessionState = {
@@ -182,7 +190,8 @@ const session: SessionState = {
   remember: false,
   grantAt: null,
   relays: [],
-  family: null
+  family: null,
+  more: []
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
@@ -263,6 +272,45 @@ function requireUnlocked(): { signer: NostrSigner; everydayPrivateKey: Uint8Arra
   return { signer: session.signer, everydayPrivateKey: session.everydayPrivateKey };
 }
 
+/**
+ * A world: a site that declared nothing, in a session that arrived by a hand-off for it. What it keeps for its
+ * visitor (saves) is asked of this, and of nothing else: an application is held to the set the user read.
+ */
+function requireWorld(): { signer: NostrSigner; everydayPrivateKey: Uint8Array; site: string } {
+  const unlocked = requireUnlocked();
+  if (!session.signerOnly || session.app || !session.site) throw new Error("refused");
+  return { ...unlocked, site: session.site };
+}
+
+/**
+ * One world's own counts, apart from notes and passes: each world has its own, whether it was allowed by itself or
+ * as one of a family (a save is kept by the world's exact address). Kept where loading the page again can't lose
+ * them; where nothing can be kept, a grant ends with the page too, so the count in memory is enough.
+ */
+const WORLD_COUNTS = "bitlogin:world-counts:v1:";
+/** The time of the newest follow list of an account that this signer has signed, been handed or found: by public key. */
+const FOLLOWS_SEEN = "bitlogin:follows-seen:v1:";
+const worldCounts = new Map<string, number[]>();
+async function takeWorldCount(what: string, site: string, limits: { burst: number; perMs: number; hourly: number }): Promise<boolean> {
+  const key = `${WORLD_COUNTS}${what}:${site}`;
+  let already = worldCounts.get(key);
+  if (!already) {
+    try {
+      const kept: unknown = JSON.parse((await store.get(key)) ?? "[]");
+      already = Array.isArray(kept) ? kept.filter((t): t is number => typeof t === "number" && Number.isFinite(t)).slice(-limits.hourly) : [];
+    } catch {
+      already = [];
+    }
+  }
+  const gate = createSignGate(limits, already);
+  // A count of when, not a secret: the time is what is counted.
+  const nowMs = Date.now();
+  const ok = gate.take(nowMs);
+  worldCounts.set(key, gate.times());
+  if (ok) await store.set(key, JSON.stringify(gate.times())).catch(() => {});
+  return ok;
+}
+
 function requireApp(): HandoffApp {
   if (!session.signerOnly || !session.app) throw new Error("refused");
   return session.app;
@@ -291,6 +339,7 @@ function clearSession(): void {
   session.grantAt = null;
   session.relays = [];
   session.family = null;
+  session.more = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
     session.pendingRecovery.everydayPrivateKey.fill(0);
@@ -700,6 +749,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
           ...(session.profile && !p.app ? { profile: session.profile } : {}),
           ...(p.remember === true ? { remember: true } : {}),
           ...(p.family !== undefined ? { family: p.family } : {}),
+          ...(p.more !== undefined ? { more: p.more } : {}),
           // With the lock on, nothing is kept for any site: a key at rest in a site's storage would be a key
           // the lock does not cover. Every site is allowed for the visit, and asks at the sign-in address again.
           ...(lockKey ? { visitOnly: true } : {}),
@@ -747,6 +797,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
             at: session.grantAt ?? Math.floor(now),
             ...(session.relays.length ? { relays: session.relays } : {}),
             signed: [],
+            ...(!session.app && !session.family && session.more.length ? { more: cleanMore(session.more) } : {}),
             ...(session.app ? { permissions: session.app.permissions, signedSensitive: [] } : {})
           },
           now
@@ -776,6 +827,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.remember = true;
       session.grantAt = grantedAt(grant);
       session.relays = grant.relays ?? [];
+      // More than a note and a reaction is the site's own grant's to say, never a family's.
+      session.more = family ? [] : (grant.more ?? []);
       return {
         restored: true,
         everydayPublicKey: session.signer.getPublicKey(),
@@ -786,6 +839,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         ...(grant.signedPass ? { signedPass: grant.signedPass } : {}),
         check: checkDue(Date.now() / 1000, grantedAt(grant), grant.checkedAt ?? 0),
         ...(family ? { family } : {}),
+        ...(session.more.length ? { more: cleanMore(session.more) } : {}),
         ...(grant.permissions ? { permissions: grant.permissions, signedSensitive: grant.signedSensitive ?? [] } : {})
       };
     }
@@ -815,6 +869,11 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const site = (payload as SignerSitePayload).site;
       await deleteSignerGrant(store, site);
       if (session.family && inFamily(site, session.family)) await deleteSignerGrant(store, session.family);
+      // Its counts go with it: nothing is left here that says the site was ever used.
+      for (const what of ["save", "follow"]) {
+        worldCounts.delete(`${WORLD_COUNTS}${what}:${site}`);
+        await store.delete(`${WORLD_COUNTS}${what}:${site}`).catch(() => {});
+      }
       return {};
     }
 
@@ -839,13 +898,15 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       session.grantAt = opened.at;
       session.relays = opened.relays;
       session.family = opened.family;
+      session.more = opened.more;
       return {
         everydayPublicKey: session.signer.getPublicKey(),
         ...(opened.app ? { app: opened.app } : {}),
         ...(opened.site ? { site: opened.site } : {}),
         ...(opened.profile ? { profile: opened.profile } : {}),
         ...(opened.remember ? { remember: true } : {}),
-        ...(opened.family ? { family: opened.family } : {})
+        ...(opened.family ? { family: opened.family } : {}),
+        ...(opened.more.length ? { more: opened.more } : {})
       };
     }
 
@@ -1005,6 +1066,100 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       });
       if (!pass) throw new Error("refused");
       return signer.signEvent(pass);
+    }
+
+    // ---- What a world keeps for its visitor (NSWP-12; embedded/saves.ts). The world is never taken from what is
+    // asked: it is the site this session serves, as the browser gave it to the signer's page.
+
+    case "worldSave": {
+      const { signer, everydayPrivateKey, site } = requireWorld();
+      const p = payload as WorldSavePayload;
+      const conversationKey = getConversationKey(everydayPrivateKey, signer.getPublicKey());
+      try {
+        const save = sealSave({ conversationKey, world: site, slot: p.slot, data: p.data, nowSeconds: Date.now() / 1000 });
+        if (!save || !(await takeWorldCount("save", site, SAVE_LIMITS))) throw new Error("refused");
+        return signer.signEvent(save);
+      } finally {
+        wipe(conversationKey);
+      }
+    }
+
+    case "worldFind": {
+      const { signer, everydayPrivateKey, site } = requireWorld();
+      const conversationKey = getConversationKey(everydayPrivateKey, signer.getPublicKey());
+      try {
+        const d = saveAddress(conversationKey, site, (payload as WorldFindPayload).slot);
+        if (!d) throw new Error("refused");
+        return { d };
+      } finally {
+        wipe(conversationKey);
+      }
+    }
+
+    case "worldOpen": {
+      const { signer, everydayPrivateKey, site } = requireWorld();
+      const event = (payload as WorldOpenPayload).event;
+      if (!verifyNostrEvent(event)) throw new Error("refused");
+      const conversationKey = getConversationKey(everydayPrivateKey, signer.getPublicKey());
+      try {
+        const opened = openSave(event, { conversationKey, pubkey: signer.getPublicKey(), world: site });
+        if (!opened) throw new Error("refused");
+        return opened;
+      } finally {
+        wipe(conversationKey);
+      }
+    }
+
+    // ---- Following from inside a world (NSWP-14; embedded/follows.ts). Only for a world the user let do this, by
+    // name, in the window. The world hands over their newest follow list and one change; what is signed is that
+    // list with that change and nothing else. A follow list replaces the last, so before a world's word is
+    // believed this worker looks at the user's own relays itself: a world that is behind, or that says there is
+    // no list where one merely couldn't be reached, is refused.
+    case "worldFollow": {
+      const { signer, site } = requireWorld();
+      if (!session.more.includes("follows")) throw new Error("refused");
+      const p = payload as WorldFollowPayload;
+      const me = signer.getPublicKey();
+      const list = p.list === null ? null : readFollowList(p.list, me);
+      if (p.list !== null && !list) throw new Error("refused");
+      const seenKey = FOLLOWS_SEEN + me;
+      let seen = 0;
+      try {
+        const kept = Number(await store.get(seenKey));
+        if (Number.isSafeInteger(kept) && kept > 0) seen = kept;
+      } catch {
+        /* nothing kept: only what is handed over and what relays say is known */
+      }
+      // Asked of where they write, and of the usual relays. A world's own choice of relays is not asked.
+      const relayUrls = [...new Set([...cleanRelays(session.relays), ...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
+      let answered = 0;
+      let newestAt = 0;
+      if (relayUrls.length) {
+        const pool = new RelayPool(relayUrls);
+        try {
+          const lists = await pool.queryQuorum({ kinds: [FOLLOWS_KIND], authors: [me], limit: 2 }, 3500);
+          answered = lists.respondedCount;
+          for (const found of lists.outcomes.flatMap((o) => o.events)) {
+            if (found.created_at > newestAt && readFollowList(found, me)) newestAt = found.created_at;
+          }
+        } catch {
+          /* no relay could be asked: as if none answered */
+        } finally {
+          pool.closeAll();
+        }
+      }
+      // The page was closed, or the site signed out of, while relays were answering.
+      if (session.signer !== signer || !session.more.includes("follows")) throw new Error("refused");
+      seen = Math.max(seen, newestAt);
+      if (seen) await store.set(seenKey, String(seen)).catch(() => {});
+      if (!believedList(list, { answered, newestAt })) throw new Error("refused");
+      const next = followForWorld({ list, ...(p.add !== undefined ? { add: p.add } : {}), ...(p.remove !== undefined ? { remove: p.remove } : {}), pubkey: me, nowSeconds: Date.now() / 1000, seen });
+      if (!next || !(await takeWorldCount("follow", site, FOLLOW_LIMITS))) throw new Error("refused");
+      // No mark of the site on it: a follow list that named the world it was last changed in would say where its
+      // owner had been.
+      const signed = signer.signEvent(next);
+      await store.set(seenKey, String(Math.max(seen, signed.created_at))).catch(() => {});
+      return signed;
     }
 
     // ---- What an approved application may ask beyond signing (§SW9.5). Refused without a permission set.
@@ -1703,7 +1858,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
-  "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass",
+  "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",

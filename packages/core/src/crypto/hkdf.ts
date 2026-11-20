@@ -1,6 +1,7 @@
 /** HKDF-SHA256 domain separation (§11.1, §11.4, §11.5). RFC 5869 via @noble/hashes. */
 import { sha256 } from "@noble/hashes/sha2";
 import { extract, expand } from "@noble/hashes/hkdf";
+import { hmac } from "@noble/hashes/hmac";
 import { utf8ToBytes } from "./encoding.js";
 
 /** HKDF-Extract(salt, IKM) -> PRK. `salt` is a domain-separation label already hashed by the caller. */
@@ -17,4 +18,9 @@ export function hkdfExpand(prk: Uint8Array, info: string | Uint8Array, length: n
 /** SHA-256 of a UTF-8 label, used as an HKDF-Extract salt (§11.4, §11.5). */
 export function labelSalt(label: string): Uint8Array {
   return sha256(utf8ToBytes(label));
+}
+
+/** HMAC-SHA256(key, message). */
+export function hmacSha256(key: Uint8Array, message: Uint8Array): Uint8Array {
+  return hmac(sha256, key, message);
 }

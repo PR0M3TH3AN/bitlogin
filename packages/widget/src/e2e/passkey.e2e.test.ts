@@ -26,6 +26,7 @@ import { MockRelay } from "../../../core/src/test-support/mockRelay.js";
 import { generatePrivateKey, getPublicKeyHex } from "../../../core/src/crypto/secp256k1.js";
 import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
 import { verifyNostrEvent } from "../../../core/src/nostr/event.js";
+import { RelayPool } from "../../../core/src/nostr/pool.js";
 
 const DIST = fileURLToPath(new URL("../../../demo/dist/", import.meta.url));
 const MIME: Record<string, string> = {
@@ -990,6 +991,223 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 
         // No site heard the key, in any message.
         for (const site of [one, two, three, four]) expect(JSON.stringify(await site.page.evaluate(() => (window as any).heard))).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    },
+    240_000
+  );
+
+  it(
+    "a world keeps saves with its visitor's account, and follows for them only where they said so (NSWP-12, NSWP-14)",
+    async () => {
+      const sitePage = `<!doctype html><meta charset="utf-8"><title>a world</title><button id="open">Sign in with BitLogin</button>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  let n = 0;
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  document.getElementById("open").onclick = () => { window.popup = window.open(SIGNIN + "/connect/index.html", "bitlogin-connect", "popup,width=460,height=660"); };
+  window.ask = (message, wait = 9000) => new Promise((done) => {
+    const id = "q" + (++n);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const ARCADE = "https://arcade.saves-a.example";
+      const OTHER = "https://other.saves-b.example";
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        await context.route(/^https:\/\/[a-z]+\.saves-[ab]\.example\//u, (route) =>
+          route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: sitePage })
+        );
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        const errors: string[] = [];
+        const visit = async (site: string) => {
+          const page = await context.newPage();
+          page.on("pageerror", (err) => errors.push(String(err)));
+          await page.goto(`${site}/`);
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+          const window_ = async () => {
+            const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+            await popup.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+            // A press sooner than the question could be read is ignored.
+            await popup.waitForTimeout(1000);
+            return popup;
+          };
+          /** Wait until the signer's answer to `state` is as expected: an Allow takes a moment to arrive. */
+          const until = async (want: (state: Record<string, any>) => boolean) => {
+            for (let i = 0; i < 100; i++) {
+              const state = await ask({ t: "state" });
+              if (want(state)) return state;
+              await page.waitForTimeout(150);
+            }
+            throw new Error(`the signer at ${site} never said what was expected`);
+          };
+          return { page, ask, window: window_, until };
+        };
+        const dOf = (event: { tags: string[][] }) => event.tags.find((t) => t[0] === "d")?.[1];
+
+        // ---- Saves. Nothing is kept for a world that was not allowed.
+        const arcade = await visit(ARCADE);
+        expect((await arcade.ask({ t: "save", slot: "main", data: '{"level":1}' })).t).toBe("refused");
+        expect((await arcade.ask({ t: "find", slot: "main" })).t).toBe("refused");
+        const first = await arcade.window();
+        // Nothing was asked beyond the ordinary: no word of follows, and one Allow.
+        expect(await first.locator("#more-follows").isVisible()).toBe(false);
+        expect(await first.locator("#allow-more").isVisible()).toBe(false);
+        expect(await first.locator("#allow").textContent()).toBe("Allow");
+        expect(await first.locator("#ask").textContent()).toContain("It can keep its own saves with your account");
+        await first.locator("#allow").click();
+        const allowed = await arcade.until((s) => s.unlocked === true);
+        expect(allowed).toMatchObject({ pubkey: me, remembered: true });
+        expect(allowed.more).toBeUndefined();
+
+        // A save: signed by the visitor's key, encrypted, and with nothing on it that names the world.
+        const saved = await arcade.ask({ t: "save", slot: "main", data: '{"level":3}', world: OTHER, d: "f".repeat(64) });
+        expect(saved.t).toBe("signed");
+        expect(verifyNostrEvent(saved.event)).toBe(true);
+        expect(saved.event).toMatchObject({ kind: 37304, pubkey: me });
+        expect(saved.event.tags.map((t: string[]) => t[0])).toEqual(["d", "alt"]);
+        expect(JSON.stringify(saved.event)).not.toMatch(/saves-a|level|nswp:world|bitlogin:site/u);
+        expect(Math.abs(saved.event.created_at - Date.now() / 1000)).toBeLessThan(120);
+        // Where it is kept is the signer's to say: the same for the same slot, another for another slot.
+        const found = await arcade.ask({ t: "find", slot: "main" });
+        expect(found).toMatchObject({ t: "found", d: dOf(saved.event) });
+        expect(found.d).toMatch(/^[0-9a-f]{64}$/u);
+        const elsewhere = await arcade.ask({ t: "find", slot: "run-2" });
+        expect(elsewhere.t).toBe("found");
+        expect(elsewhere.d).not.toBe(found.d);
+        // And it is opened for the world it was saved from.
+        expect(await arcade.ask({ t: "open", event: saved.event })).toMatchObject({ t: "opened", slot: "main", data: '{"level":3}', at: saved.event.created_at });
+        // Malformed, or tampered with: no answer, or refused.
+        expect((await arcade.ask({ t: "save", slot: "Not A Slot", data: "x" })).t).toBe("no answer");
+        expect((await arcade.ask({ t: "open", event: { ...saved.event, content: saved.event.content.slice(0, -4) + "AAA=" } })).t).toBe("refused");
+        // A world can't have a save signed any other way.
+        expect((await arcade.ask({ t: "sign", event: { kind: 37304, content: saved.event.content, tags: saved.event.tags } })).t).toBe("refused");
+
+        // Another world, allowed too, can't have this one's save opened, and keeps its own somewhere else.
+        const other = await visit(OTHER);
+        const second = await other.window();
+        await second.locator("#allow").click();
+        await other.until((s) => s.unlocked === true);
+        expect((await other.ask({ t: "open", event: saved.event })).t).toBe("refused");
+        const theirs = await other.ask({ t: "find", slot: "main" });
+        expect(theirs.t).toBe("found");
+        expect(theirs.d).not.toBe(found.d);
+
+        // Six a minute for one world, counted where loading the page again can't lose the count, and apart from
+        // every other world's.
+        for (let i = 0; i < 5; i++) expect((await arcade.ask({ t: "save", slot: "main", data: String(i) })).t, `save ${i + 2}`).toBe("signed");
+        expect((await arcade.ask({ t: "save", slot: "main", data: "one too many" })).t).toBe("refused");
+        await arcade.page.reload();
+        await arcade.page.waitForFunction(() => typeof (window as any).ask === "function");
+        await arcade.until((s) => s.unlocked === true);
+        expect((await arcade.ask({ t: "save", slot: "main", data: "after a reload" })).t).toBe("refused");
+        expect((await other.ask({ t: "save", slot: "main", data: "theirs" })).t).toBe("signed");
+        // Finding and opening are not counted.
+        expect((await arcade.ask({ t: "open", event: saved.event })).t).toBe("opened");
+
+        // ---- Follows. Not without being let, by name, in the window.
+        const friend = getPublicKeyHex(generatePrivateKey());
+        const another = getPublicKeyHex(generatePrivateKey());
+        const third = getPublicKeyHex(generatePrivateKey());
+        expect((await arcade.ask({ t: "follow", list: null, add: friend })).t).toBe("refused");
+        // Asking approves nothing.
+        const asked = await arcade.ask({ t: "want", more: ["follows", "everything"] });
+        expect(asked).toMatchObject({ t: "state", unlocked: true });
+        expect(asked.more).toBeUndefined();
+        expect((await arcade.ask({ t: "follow", list: null, add: friend })).t).toBe("refused");
+        // The window says it in BitLogin's own words, with two buttons. Allowing without it gives the ordinary grant.
+        const without = await arcade.window();
+        expect(await without.locator("#more-follows").isVisible()).toBe(true);
+        expect(await without.locator("#more-follows").textContent()).toContain("change who you follow");
+        expect(await without.locator("#allow-more").isVisible()).toBe(true);
+        expect(await without.locator("#allow").textContent()).toBe("Allow without that");
+        expect(await without.locator("#allow-family").isVisible()).toBe(false);
+        await without.locator("#allow").click();
+        await without.waitForEvent("close", { timeout: 30_000 }).catch(() => {});
+        expect((await arcade.until((s) => s.unlocked === true)).more).toBeUndefined();
+        expect((await arcade.ask({ t: "follow", list: null, add: friend })).t).toBe("refused");
+        // Allowed with it: the signer says so, and it is kept across a page load.
+        const withIt = await arcade.window();
+        await withIt.locator("#allow-more").click();
+        expect((await arcade.until((s) => Array.isArray(s.more))).more).toEqual(["follows"]);
+
+        // A first list: their relays answered and had none, and this signer has seen none.
+        const list1 = await arcade.ask({ t: "follow", list: null, add: friend });
+        expect(list1.t).toBe("signed");
+        expect(verifyNostrEvent(list1.event)).toBe(true);
+        expect(list1.event).toMatchObject({ kind: 3, pubkey: me, tags: [["p", friend]], content: "" });
+        // "They have none" is not believed twice.
+        expect((await arcade.ask({ t: "follow", list: null, add: another })).t).toBe("refused");
+        // One change to their own newest list. No mark of the world is put on it.
+        const list2 = await arcade.ask({ t: "follow", list: list1.event, add: another });
+        expect(list2.t).toBe("signed");
+        expect(list2.event.tags).toEqual([["p", friend], ["p", another]]);
+        expect(list2.event.created_at).toBeGreaterThan(list1.event.created_at);
+        // An older list of theirs can't be brought back, and a list changed by the world is not theirs.
+        expect((await arcade.ask({ t: "follow", list: list1.event, add: third })).t).toBe("refused");
+        expect((await arcade.ask({ t: "follow", list: { ...list2.event, tags: [] }, add: third })).t).toBe("refused");
+        // Someone already followed, someone not followed, themselves: nothing to sign.
+        expect((await arcade.ask({ t: "follow", list: list2.event, add: friend })).t).toBe("refused");
+        expect((await arcade.ask({ t: "follow", list: list2.event, remove: third })).t).toBe("refused");
+        expect((await arcade.ask({ t: "follow", list: list2.event, add: me })).t).toBe("refused");
+        // `sign` still refuses a follow list.
+        expect((await arcade.ask({ t: "sign", event: { kind: 3, content: "", tags: [["p", third]] } })).t).toBe("refused");
+
+        // The world sends the newest list to their relays. Another world, in storage of its own, has seen none of
+        // this: what stops it going back to the older list, or starting over, is the signer's own look at relays.
+        const pool = new RelayPool(relays.map((r) => r.url));
+        try {
+          await pool.publishAll(list2.event, 5000);
+        } finally {
+          pool.closeAll();
+        }
+        await other.ask({ t: "want", more: ["follows"] });
+        const otherWindow = await other.window();
+        await otherWindow.locator("#allow-more").click();
+        await other.until((s) => Array.isArray(s.more));
+        expect((await other.ask({ t: "follow", list: null, add: third })).t).toBe("refused");
+        expect((await other.ask({ t: "follow", list: list1.event, add: third })).t).toBe("refused");
+        const list3 = await other.ask({ t: "follow", list: list2.event, remove: friend });
+        expect(list3.t).toBe("signed");
+        expect(list3.event.tags).toEqual([["p", another]]);
+        expect(JSON.stringify(list3.event)).not.toMatch(/saves-[ab]/u);
+
+        // Kept across a page load, and ended by signing out.
+        await arcade.page.reload();
+        await arcade.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect((await arcade.until((s) => s.unlocked === true)).more).toEqual(["follows"]);
+        expect(await arcade.ask({ t: "lock" })).toMatchObject({ unlocked: false });
+        expect((await arcade.ask({ t: "follow", list: list2.event, add: third })).t).toBe("refused");
+        expect((await arcade.ask({ t: "save", slot: "main", data: "x" })).t).toBe("refused");
+
+        for (const site of [arcade, other]) expect(JSON.stringify(await site.page.evaluate(() => (window as any).heard))).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
         expect(errors).toEqual([]);
       } finally {
         await browser.close();

@@ -31,15 +31,18 @@ const KIND_HTTP_PROOF = 27235;
 const KIND_FILE_PROOF = 24242;
 const KIND_RELAY_PROOF = 22242;
 const KIND_SEAL = 13;
+const KIND_SAVE = 37304;
 
 /** BitLogin's own names under kind 30078. No application may write them, whatever it was allowed. */
 export const RESERVED_APP_DATA_PREFIX = "bitlogin:";
 
 /**
  * Never signed for a site, whatever it declares and whatever the user
- * presses: remote-signer and wallet traffic, and NSWP's room signals.
+ * presses: remote-signer and wallet traffic, NSWP's room signals, and what a
+ * world keeps for its visitor (a save, kind 37304: written and opened only by
+ * the signer itself, for the world whose it is; embedded/saves.ts).
  */
-export const NEVER_FOR_APPS: readonly number[] = [13194, 23194, 23195, 24133, 27301];
+export const NEVER_FOR_APPS: readonly number[] = [13194, 23194, 23195, 24133, 27301, 37304];
 
 /**
  * Applications BitLogin knows by their address (owner's decision,
@@ -175,6 +178,8 @@ export function readPermissions(input: unknown): AppPermissions | null {
 
   if (!sign.every(isKind) || !read.every(isKind)) return null;
   if ((sign as number[]).some((k) => NEVER_FOR_APPS.includes(k))) return null;
+  // Nor read one world's save for another: a save is opened only by the signer, for the world whose it is.
+  if ((read as number[]).includes(KIND_SAVE)) return null;
   // A set that asks for nothing is not a set.
   if (sign.length === 0 && read.length === 0 && peers.length === 0) return null;
 
@@ -220,7 +225,7 @@ export const APP_LIMITS: Readonly<Record<LimitClass, { burst: number; perMs: num
   read: { burst: 600, perMs: 60_000, hourly: 12_000 }
 };
 
-export const APP_SIGN_LIMITS = { contentChars: 100_000, tags: 2500, tagItems: 16, tagChars: 1000, clockSlackSec: 600 } as const;
+export const APP_SIGN_LIMITS = { contentChars: 100_000, tags: 2500, /** Who someone follows (kind 3) is one note with a tag for each person: more are let through. */ followTags: 20_000, tagItems: 16, tagChars: 1000, clockSlackSec: 600 } as const;
 
 const isAddressable = (kind: number): boolean => kind >= 30000 && kind < 40000;
 
@@ -287,7 +292,7 @@ export function prepareForApp(perms: AppPermissions, input: unknown, siteInput: 
   // A reserved kind is signed only for the address it is reserved to, whatever set this session was given.
   if (RESERVED_KINDS.includes(e.kind) && !reservedFor(site).includes(e.kind)) return null;
   if (typeof e.content !== "string" || e.content.length > APP_SIGN_LIMITS.contentChars) return null;
-  if (!Array.isArray(e.tags) || e.tags.length > APP_SIGN_LIMITS.tags) return null;
+  if (!Array.isArray(e.tags) || e.tags.length > (e.kind === 3 ? APP_SIGN_LIMITS.followTags : APP_SIGN_LIMITS.tags)) return null;
   const tags: string[][] = [];
   for (const tag of e.tags) {
     if (!Array.isArray(tag) || tag.length === 0 || tag.length > APP_SIGN_LIMITS.tagItems) return null;
@@ -393,7 +398,8 @@ const KIND_WORDS: Readonly<Record<number, string>> = {
   30015: "change your interests",
   34235: "post videos",
   34236: "post short videos",
-  37300: "announce a world as yours"
+  37300: "announce a world as yours",
+  37305: "rate worlds, from one to five stars"
 };
 
 const READ_WORDS: Readonly<Record<number, string>> = {
