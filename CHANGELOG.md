@@ -8,6 +8,10 @@ would plausibly want. Newest first.
 
 ## 2026-11-20 (on `beta` only)
 
+- **Words for kind 37308** in the window, a visitor's bag: "change what is
+  in your bag: the items you carry between worlds". And for a score
+  (37306) and an achievement (37307), should an application ask to sign
+  them.
 - **A world can have an achievement its visitor holds signed** (NSWP-16;
   `docs/sign-in-window.md` §SW16e): `achieve` with a world's coordinate,
   the achievement's name and its title. Built and marked by the signer, as
