@@ -55,7 +55,7 @@ import { describe as describeKept, forget as forgetKept, keep as keepKept, loadK
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { inFamily, readFamily } from "../embedded/family.js";
-import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeerFor } from "../embedded/permissions.js";
+import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
 import { signClass } from "../embedded/policy.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { deleteSignerGrant, grantedAt, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
@@ -1040,11 +1040,19 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const event: unknown = (payload as AppDecryptEventPayload).event;
       // Reading is tied to an event that really is what it says: signed, of a kind the user approved reading.
       if (!verifyNostrEvent(event)) throw new Error("refused");
-      const peer = readPeerFor(app.permissions, signer.getPublicKey(), event);
-      if (!peer) throw new Error("refused");
+      const peers = readPeersFor(app.permissions, signer.getPublicKey(), event);
       // Kind 4 is the older scheme, and says so in its content.
-      const text = event.kind === 4 || /\?iv=[A-Za-z0-9+/=]+$/u.test(event.content) ? signer.nip04Decrypt(peer, event.content) : signer.nip44Decrypt(peer, event.content);
-      return { text };
+      const older = event.kind === 4 || /\?iv=[A-Za-z0-9+/=]+$/u.test(event.content);
+      // Against the key the event names, and then, for one the user signed themselves, their own: a note saved
+      // for them alone is sealed to their own key whatever tags it carries.
+      for (const peer of peers) {
+        try {
+          return { text: older ? signer.nip04Decrypt(peer, event.content) : signer.nip44Decrypt(peer, event.content) };
+        } catch {
+          // Not sealed to that key: the next is tried, and with none left it is refused.
+        }
+      }
+      throw new Error("refused");
     }
 
     case "nip46Connect": {

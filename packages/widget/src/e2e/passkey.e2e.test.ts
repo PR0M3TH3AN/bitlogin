@@ -1192,6 +1192,51 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
+    "the embedded signer loads itself again, once, when one of its files fails to arrive",
+    async () => {
+      const asking = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(`<!doctype html><meta charset="utf-8"><title>a site that asks</title>
+<iframe id="signer" src="${origin}/signer/index.html"></iframe>
+<script>window.heard = []; addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));</script>`);
+      });
+      await new Promise<void>((resolve) => asking.listen(0, "127.0.0.1", () => resolve()));
+      const askingAddress = asking.address();
+      const site = `http://127.0.0.1:${typeof askingAddress === "object" && askingAddress ? askingAddress.port : 0}`;
+      const browser = await playwright!.chromium.launch();
+      try {
+        // What a deploy can do to a page caught in the middle of it: the signer's file is not there the first time.
+        const context = await browser.newContext();
+        let asked = 0;
+        await context.route("**/vendor/bitlogin/bitlogin-signer.js", (route) => (++asked === 1 ? route.abort() : route.continue()));
+        const page = await context.newPage();
+        await page.goto(`${site}/`);
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        expect(asked).toBe(2);
+        expect(page.frames().find((f) => f.url().startsWith(`${origin}/signer/`))!.url()).toContain("again=1");
+        await context.close();
+
+        // A file that never arrives: it tries once more and then stops. It does not load itself for ever.
+        const broken = await browser.newContext();
+        let tries = 0;
+        await broken.route("**/vendor/bitlogin/bitlogin-signer.js", (route) => {
+          tries++;
+          return route.abort();
+        });
+        const silent = await broken.newPage();
+        await silent.goto(`${site}/`);
+        await silent.waitForTimeout(3000);
+        expect(tries).toBe(2);
+        expect(await silent.evaluate(() => (window as any).heard.length)).toBe(0);
+      } finally {
+        await browser.close();
+        asking.close();
+      }
+    },
+    120_000
+  );
+
+  it(
     "a different passkey derives a DIFFERENT account (PRF is per-credential)",
     async () => {
       const browser = await playwright!.chromium.launch();

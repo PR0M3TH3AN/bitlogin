@@ -13,6 +13,7 @@ import {
   NEVER_FOR_APPS,
   prepareForApp,
   readPeerFor,
+  readPeersFor,
   readPermissions,
   type AppPermissions
 } from "./permissions.js";
@@ -204,6 +205,16 @@ describe("encrypting and reading", () => {
     expect(readPeerFor(perms, ME, { kind: 30078, pubkey: ME, tags: [["d", "example:draft:1"]] })).toBe(ME);
   });
 
+  it("tries the user's own key too, for a note of their own that names somebody", () => {
+    // A note an application saved for the user alone is sealed to their own key, whatever tags it carries.
+    expect(readPeersFor(perms, ME, { kind: 30078, pubkey: ME, tags: [["d", "example:settings"], ["p", OTHER]] })).toEqual([OTHER, ME]);
+    expect(readPeersFor(perms, ME, { kind: 30078, pubkey: ME, tags: [["d", "example:settings"]] })).toEqual([ME]);
+    // Never for somebody else's event, and never for one the set may not read at all.
+    expect(readPeersFor(perms, ME, { kind: 1573, pubkey: OTHER, tags: [["p", ME]] })).toEqual([OTHER]);
+    expect(readPeersFor(perms, ME, { kind: 7375, pubkey: ME, tags: [["p", OTHER]] })).toEqual([]);
+    expect(readPeersFor(perms, ME, { kind: 30078, pubkey: ME, tags: [["d", "adzap:draft:1"], ["p", OTHER]] })).toEqual([]);
+  });
+
   it("approval to read one kind is not approval to read another", () => {
     // The user's Cashu tokens, and their private messages, are other kinds.
     expect(readPeerFor(perms, ME, { kind: 7375, pubkey: ME, tags: [] })).toBeNull();
@@ -223,6 +234,8 @@ describe("limits", () => {
     expect(limitClass(30310)).toBe("quiet");
     expect(limitClass(1)).toBe("public");
     expect(limitClass(0)).toBe("sensitive");
+    // A pass, a terminal on the user's computer, and access granted to a world: counted as the window warns of them.
+    for (const kind of [27300, 27302, 27303]) expect(limitClass(kind), String(kind)).toBe("sensitive");
     expect(limitClass(5)).toBe("sensitive");
     expect(limitClass(10002)).toBe("sensitive");
     // Sized to what the applications do today: about eighty proofs a minute, a hundred entries at once.

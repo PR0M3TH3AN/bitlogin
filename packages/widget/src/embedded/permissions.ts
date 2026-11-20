@@ -177,7 +177,9 @@ const isAddressable = (kind: number): boolean => kind >= 30000 && kind < 40000;
 
 /** Which count a signature of this kind is taken from. */
 export function limitClass(kind: number): Exclude<LimitClass, "read"> {
-  if (SENSITIVE_KINDS.includes(kind) && kind !== KIND_RELAY_PROOF) return "sensitive";
+  // The reserved kinds (a pass, a terminal on the user's computer, access granted to a world) are shown in the
+  // window as deserving a second look, and are counted that way too.
+  if ((SENSITIVE_KINDS.includes(kind) && kind !== KIND_RELAY_PROOF) || RESERVED_KINDS.includes(kind)) return "sensitive";
   if (PROOF_KINDS.includes(kind) || isAddressable(kind)) return "quiet";
   return "public";
 }
@@ -283,6 +285,19 @@ export function readPeerFor(perms: AppPermissions, me: string, event: { kind?: u
   if (event.pubkey !== me) return event.pubkey;
   const to = tagValues(tags, "p")[0];
   return to !== undefined && HEX64.test(to) ? to : me;
+}
+
+/**
+ * The keys an event's content may be opened against, in the order to try them. One, as `readPeerFor` has it:
+ * and, for an event the user signed themselves that names somebody in a "p" tag, their own key after that. A
+ * note an application saved for the user alone is sealed to the user's own key whatever tags it carries, and a
+ * "p" tag on it used to make it unreadable. Nothing more is read by this: the event is one the set may read, and
+ * the user's own key is what opens it where there is no "p" tag at all.
+ */
+export function readPeersFor(perms: AppPermissions, me: string, event: { kind?: unknown; pubkey?: unknown; tags?: unknown }): string[] {
+  const first = readPeerFor(perms, me, event);
+  if (!first) return [];
+  return event.pubkey === me && first !== me ? [first, me] : [first];
 }
 
 // ---- In words, for the window (§SW9.7)

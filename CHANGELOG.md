@@ -8,6 +8,18 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **Five things for applications that sign through the window**
+  (`docs/sign-in-window.md` §SW9.4 to §SW9.6), after the BitPortal session
+  moved its sign-in to it:
+  - `decryptEvent` on the user's own event that carries a `p` tag now also
+    tries the user's own key. A saved note with a `p` tag was unreadable.
+  - The reserved kinds (27300, 27302, 27303) are counted at the sensitive
+    rate, 30 a minute and 300 an hour, where they were 60 and 1,200.
+  - The embedded signer's page loads itself again, once, if one of its
+    files fails to arrive (a page caught in the middle of a deploy).
+  - Written down, not changed: a tag named `nswp:world` or `bitlogin:site`
+    is taken off what an application sends; and a `created_at` more than
+    ten minutes off is replaced, so read it from the event that comes back.
 - **Several accounts can be kept signed in on one device, and switched
   between with one press** (`docs/account-switching.md`, "What is built").
   Signing in as another account no longer signs the first one out. The

@@ -245,6 +245,14 @@ that moved.
     `switchAccount()` and `signOut()` exist; an application's `state()`
     carries no name or picture (it is not handed the profile), and nothing
     documents the whole as one interface.
+  - [ ] **The "signer didn't answer" the owner saw at two worlds** (Brave,
+    2026-11-19, about 22:06) is not explained. Tried 2026-11-19: Brave
+    157 with Shields at their defaults gets `ready` in 0.4 to 0.7 s and
+    `state` from the live signer at two world addresses, as Chromium does.
+    Not tried: Shields set to aggressive, or cookies blocked. The signer
+    now loads itself again once if a file fails to arrive.
+  - [ ] **The password-form test in WebKit fails about one run in several**
+    and passes alone. Cause not found.
   - [ ] **From the BitPortal session, undecided:** reserved kinds at a
     local development address; a "taken or not" answer to `want`.
 
