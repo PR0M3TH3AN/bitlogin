@@ -230,8 +230,11 @@ that moved.
   account). The Allow screen now shows the profile's name and picture, the
   whole npub, and "Use a different account", with the buttons at the top.
   On `beta`.
-  - [ ] **The widget itself** (`<bitlogin-auth>`, the account page, the
-    sites page) still shows a key and no picture.
+  - [x] **The widget itself** (`<bitlogin-auth>`, so the account page) and
+    the sites page show the picture, name and whole npub. On `beta`.
+  - [ ] **An extension or remote-signer session** still shows the key
+    alone: the profile is read by the worker, which holds no session for
+    those.
   - [ ] **Several accounts kept on one device, and a chooser**
     (`docs/account-switching.md`, not built). Today "Use a different
     account" signs the first one out.

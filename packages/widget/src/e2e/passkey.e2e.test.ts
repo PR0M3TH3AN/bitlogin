@@ -481,6 +481,16 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           });
         }
 
+        // The widget's signed-in view says who is signed in: a picture or a letter, the name from their own signed
+        // profile, and the whole key. Loaded again, it shows the profile that is now the newest.
+        expect(await widget.locator(".who .pubkey").textContent()).toBe(encodeNpub(me));
+        expect(await widget.locator(".who-pic").count()).toBe(1);
+        await account.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator(".who-name", { hasText: "Ada Lovelace" }).waitFor({ timeout: 30_000 });
+        expect(await widget.locator(".who-about").textContent()).toBe("Line one line two");
+        // The picture's address can't be fetched here, so the letter stands in for it.
+        await widget.locator(".who-pic", { hasText: "A" }).waitFor({ timeout: 30_000 });
+
         // The asking site, in another tab.
         const page = await context.newPage();
         const errors: string[] = [];
@@ -642,6 +652,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const row = listing.locator("#sites li[data-site]");
         await row.first().waitFor({ timeout: 30_000 });
         expect(await row.count()).toBe(1);
+        // And says who is signed in here, by name and by the whole key.
+        await listing.locator("#me-name", { hasText: "Ada Lovelace" }).waitFor({ timeout: 30_000 });
+        expect(await listing.locator("#me-key").textContent()).toBe(encodeNpub(me));
         expect(await row.getAttribute("data-site")).toBe(site);
         expect(await row.locator(".connect-site").textContent()).toBe(site);
         expect(await row.textContent()).toContain("Remembered on this device");

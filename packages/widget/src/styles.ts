@@ -330,6 +330,16 @@ button:focus-visible { outline: 2px solid var(--bl-accent); outline-offset: 2px;
   color: var(--bl-muted);
   word-break: break-all;
 }
+.who { display: flex; align-items: center; gap: 12px; margin: 10px 0 12px; }
+.who-pic {
+  flex: none; width: 44px; height: 44px; border-radius: 50%; overflow: hidden;
+  display: grid; place-items: center; font-weight: 700; font-size: 18px;
+  background: var(--bl-input-bg); border: 1px solid var(--bl-border); color: var(--bl-fg);
+}
+.who-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.who-text { min-width: 0; }
+.who-text p { margin: 0; }
+.who-name { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
 .divider { border-top: 1px solid var(--bl-border); margin: 18px 0; }
 .small { font-size: 12px; color: var(--bl-muted); }
 .health-list { margin: 12px 0 6px; border: 1px solid var(--bl-border); border-radius: 9px; overflow: hidden; }

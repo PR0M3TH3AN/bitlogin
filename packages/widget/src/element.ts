@@ -32,6 +32,7 @@ import {
 } from "./passkey.js";
 import { askLockDevice, createLockDevice } from "./lockDevice.js";
 import type { LockOpenResult, LockStatusResult } from "./worker/protocol.js";
+import type { Profile } from "./embedded/profile.js";
 
 type Screen =
   | "welcome"
@@ -115,6 +116,13 @@ export class BitLoginAuthElement extends HTMLElement {
   private offlineExportFileNotice: string | undefined;
 
   private session: { publicKey: string; npub: string; accountId?: string; method: SignerMethod } | null = null;
+  /**
+   * The signed-in account's own signed profile (kind 0), as the worker fetched and checked it: so the signed-in
+   * view can show a name and a picture, and one account is not mistaken for another. Kept with the key it is
+   * for, and shown only for that key. Null until relays answer, and where there is none.
+   */
+  private profile: { pubkey: string; found: Profile | null } | null = null;
+  private profileAsked = "";
 
   // ---- Alternative-method sessions (docs/login-methods.md §LM4, §LM5, §LM7) ----
   // `pending*` state holds a candidate between "the signer answered" and the user
@@ -2028,7 +2036,55 @@ export class BitLoginAuthElement extends HTMLElement {
   private render(): void {
     const successOverlay = this.pendingSuccessLabel ? this.renderSuccessOverlay(this.pendingSuccessLabel) : "";
     this.root.innerHTML = `<div class="card">${this.renderScreen()}${successOverlay}</div>`;
+    // A picture that can't be fetched (it is gone, or the host page's policy forbids it) gives way to a letter.
+    for (const img of this.root.querySelectorAll<HTMLImageElement>("img[data-avatar]")) {
+      img.addEventListener("error", () => img.replaceWith(document.createTextNode(img.dataset.avatar ?? "?")), { once: true });
+    }
     this.exposeParts();
+  }
+
+  /**
+   * Who is signed in, for the signed-in view: a picture (or a letter), the name from their own signed profile,
+   * and the whole key. The profile is asked for once per account, behind the view; the view is drawn again when
+   * it arrives. Everything from a profile is escaped, and a picture is only ever an https address the worker
+   * cleaned.
+   */
+  private renderWho(): string {
+    const session = this.session;
+    if (!session) return "";
+    if (session.method === "bitlogin" && this.profileAsked !== session.publicKey) {
+      this.profileAsked = session.publicKey;
+      void this.fetchProfile(session.publicKey);
+    }
+    const found = this.profile?.pubkey === session.publicKey ? this.profile.found : null;
+    const name = found?.name || (session.method === "bitlogin" ? this.loginName : "") || "";
+    const letter = (name || "?").trim().slice(0, 1).toUpperCase();
+    const picture = found?.picture
+      ? `<img data-avatar="${escapeHtml(letter)}" src="${escapeHtml(found.picture)}" alt="" referrerpolicy="no-referrer" />`
+      : escapeHtml(letter);
+    return `
+      <div class="who">
+        <span class="who-pic" aria-hidden="true">${picture}</span>
+        <div class="who-text">
+          ${name ? `<p class="who-name">${escapeHtml(name)}</p>` : ""}
+          ${found?.about ? `<p class="small who-about">${escapeHtml(found.about)}</p>` : ""}
+          <p class="pubkey">${escapeHtml(session.npub)}</p>
+        </div>
+      </div>`;
+  }
+
+  private async fetchProfile(pubkey: string): Promise<void> {
+    try {
+      const found = (await this.worker.loadProfile({})).profile ?? null;
+      // Signed out, or signed in as someone else, while relays were answering: it is not theirs to show.
+      if (this.session?.publicKey !== pubkey) return;
+      this.profile = { pubkey, found };
+      if (found && this.screen === "dashboard") this.render();
+    } catch {
+      // No relay answered, or the worker is locked: the key is shown without a name, and it is asked again
+      // the next time someone signs in.
+      if (this.profileAsked === pubkey) this.profileAsked = "";
+    }
   }
 
   /**
@@ -2525,7 +2581,7 @@ export class BitLoginAuthElement extends HTMLElement {
         return `
           <h2>Signed in</h2>
           ${this.renderWarnings()}
-          <p class="pubkey">${escapeHtml(this.session?.npub ?? "")}</p>
+          ${this.renderWho()}
           ${keyBackupNotice}
           ${passkeyStanding}
           ${this.renderError()}

@@ -8,6 +8,14 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **The widget's signed-in view shows who is signed in:** a picture, the
+  name from the account's own signed profile, the line about them and the
+  whole npub, where it showed the key alone. So does the sites page. For a
+  BitLogin account only: an extension or remote-signer session still shows
+  the key. **For a site with its own vendored copy:** the worker asks up
+  to eight relays for the profile once per sign-in, and the picture is
+  fetched from its https address. A page whose policy forbids remote
+  images (`img-src`) shows a letter in its place; nothing breaks.
 - **The Allow screen shows who you are signing in as, and the buttons
   come first** (asked for by the owner after the window signed them in to
   a world as an account they did not mean). Under the site's address: the
