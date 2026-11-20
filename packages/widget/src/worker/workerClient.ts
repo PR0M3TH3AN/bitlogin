@@ -34,6 +34,10 @@ import type {
   LockOpenPayload,
   LockPinPayload,
   RoomPassPayload,
+  WorldSavePayload,
+  WorldFindPayload,
+  WorldOpenPayload,
+  WorldFollowPayload,
   SignerKeepPayload,
   TakeBackPayload,
   SignerSitePayload,
@@ -271,6 +275,18 @@ export class WorkerClient {
   }
   roomPass(payload: RoomPassPayload) {
     return this.call("roomPass", payload);
+  }
+  worldSave(payload: WorldSavePayload) {
+    return this.call("worldSave", payload);
+  }
+  worldFind(payload: WorldFindPayload) {
+    return this.call("worldFind", payload);
+  }
+  worldOpen(payload: WorldOpenPayload) {
+    return this.call("worldOpen", payload);
+  }
+  worldFollow(payload: WorldFollowPayload) {
+    return this.call("worldFollow", payload);
   }
   signerKeep(payload: SignerKeepPayload) {
     return this.call("signerKeep", payload);

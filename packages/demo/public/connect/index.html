@@ -49,7 +49,12 @@
       <p>Every site whose address ends in <strong id="family-domain"></strong> can know who you are and ask you to sign notes, without asking you first. Choose this only if one person or team runs all of them.</p>
       <p id="family-lasts" class="connect-small"></p>
     </div>
+    <div id="more-follows" class="connect-warning" hidden>
+      <p><strong>This site also asks to change who you follow.</strong></p>
+      <p>If you let it, it can follow and unfollow people for you, one at a time, without asking each time, as any Nostr app you use can. It can't sign a list of its own making. Let it only if you trust this site: who you follow is one list, and a wrong change to it is yours to put right.</p>
+    </div>
     <div class="cta-row">
+      <button id="allow-more" class="btn primary" type="button" hidden>Allow, and let it change who I follow</button>
       <button id="allow-family" class="btn primary" type="button" hidden>Allow every site</button>
       <button id="allow" class="btn primary" type="button">Allow</button>
       <button id="deny" class="btn secondary" type="button">Don't allow</button>
@@ -59,7 +64,8 @@
       <li>It can post notes and reactions as you: three a minute at most, and twenty an hour.</li>
       <li>Each one is marked with this site's address.</li>
       <li>It can tell the other people there who you are: your name, picture and the line about you from your Nostr profile. That is good at this site only, for four hours at a time.</li>
-      <li>It can't read your messages, change your profile or who you follow, or touch your account or anything in it.</li>
+      <li>It can keep its own saves with your account, so they are there on your next device. Only you can read them, and it can open only its own.</li>
+      <li id="cant">It can't read your messages, change your profile or who you follow, or touch your account or anything in it.</li>
       <li id="lasts">It lasts until you sign out of that site, or 30 days, on this device.</li>
     </ul>
     <p class="connect-small">Your key stays with BitLogin. The site never sees it, and nothing is typed there.</p>

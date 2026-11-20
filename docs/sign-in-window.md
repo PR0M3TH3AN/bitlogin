@@ -119,7 +119,7 @@ Unlocking is not agreeing to everything. `embedded/policy.ts` is the list.
 | | Kinds | When |
 |---|---|---|
 | Ordinary | A note (1), a reaction (7) | Once the user has allowed that site, in the window |
-| Careful | A profile (0), a follow list (3), a deletion (5), a relay list (10002), and anything not named | Only with their say each time, on a page of the sign-in address. **Not built: refused** |
+| Careful | A profile (0), a follow list (3), a deletion (5), a relay list (10002), and anything not named | Only with their say each time, on a page of the sign-in address. **Not built: refused.** A follow list is changed another way, for a site the user let (§SW16b); a save (37304) is written only by the signer (§SW16a) |
 | Never | Private messages and their wrappings (4, 13, 14, 15, 1059, 1060); passes and room signals (27300, 27301); proofs of identity (22242, 27235); wallet and remote-signer traffic (13194, 23194, 23195, 24133); application data (30078), which is where an account's capsules live | Refused, whatever anyone says |
 
 - **The signer finishes the event.** It sets `created_at` itself and adds
@@ -813,6 +813,121 @@ in four hours whether or not the site is still allowed.
 Checked against NSWP's own `verifyRoomPass` at its `main` of 2026-11-19
 (`99f51a4`): a pass built here is accepted for its site and refused for
 another.
+
+# SW16a. What a world keeps for its visitor: saves (built on `beta`)
+
+Asked for by the NSWP session on 2026-11-20 (NSWP-12, kit 0.36.0) and agreed
+by the owner the same day. A world can keep something with its visitor's
+own account, so it is there on their next device.
+
+Three more requests, for a site that declared nothing. All need the signer
+unlocked for that site. Anything else is `refused`, with no reason.
+
+```
+site → signer   { ..., t: "save", slot, data }     signer → site   { ..., t: "signed", event }
+site → signer   { ..., t: "find", slot }           signer → site   { ..., t: "found", d }
+site → signer   { ..., t: "open", event }          signer → site   { ..., t: "opened", slot, data, at }
+```
+
+- **A save is a note of kind 37304,** signed by the visitor's key, with the
+  content encrypted to that same key (NIP-44). Its tags are `d` and `alt`,
+  and nothing else: no `nswp:world`, no `bitlogin:site`. Nothing on a relay
+  names the world.
+- **Where it is kept is the signer's to say.** `d` is
+  `HMAC-SHA256(K, "nswp-save\n" + origin + "\n" + slot)`, in hex, where `K`
+  is the NIP-44 conversation key of the visitor's key with itself. The
+  origin is the site the hand-off was sealed for, never anything in the
+  request.
+- **A save is opened only for the world it is from.** The signature must be
+  good and the visitor's own; the kind 37304; what is inside must name the
+  asking origin; and `d` must be the address the signer works out for that
+  origin and slot.
+- **Limits:** 32,768 bytes of UTF-8; a slot of lower-case letters, digits
+  and hyphens, 32 at most; six saves a minute and sixty an hour.
+- **The count is the world's own,** by its exact address, whether it was
+  allowed by itself or as one of a family (`site-family.md`). It is kept
+  across page loads, and apart from notes and passes. Finding and opening
+  are not counted.
+- **No other way in.** `sign` refuses kind 37304 for a world. An application
+  may not have it in a permission set, to sign or to read. Kind 30078 stays
+  refused for a world.
+- **Not for an application,** which keeps its own data under kind 30078.
+- **The window says so** before Allow: the site can keep its own saves with
+  your account; only you can read them.
+
+All of it is done in BitLogin's worker (`worldSave`, `worldFind`,
+`worldOpen`), from `embedded/saves.ts`. Checked against NSWP's vectors
+(`vectors/saves.json` at `8400ac7`): every address, the sealed save, and all
+seven opening cases.
+
+What it costs: a world the user allowed can put up to about 2 MB an hour of
+encrypted notes on their relays, under their key. A relay sees that this key
+saved something, how big, and when.
+
+# SW16b. Following from inside a world (built on `beta`)
+
+Asked for by the BitPortal session on 2026-11-20 (NSWP-10 "Asking for
+more", NSWP-14, kit 0.40.0), on the owner's decision of the same day:
+"worlds no differently than a Nostr client. Some trust is required."
+
+**Asking.** A world sends `{ t: "want", more: ["follows"] }`. It approves
+nothing. The signer remembers it and the window shows it, in BitLogin's own
+words, with two buttons: **Allow, and let it change who I follow** and
+**Allow without that**. Neither is the default. What was allowed comes back
+in `state` as `more: ["follows"]`.
+
+- **A short closed list of names** (`WORLD_MORE`), today one. A name not on
+  it is dropped.
+- **For one site, by its own address.** Never with a family: no family is
+  offered beside it, and a family's grant never carries it. Never for an
+  application, which is held to its permission set. A hand-off that mixes
+  them is refused whole.
+- **It lasts as long as the grant,** is kept with it, and ends with `lock`.
+
+**Following.** The world then sends
+`{ t: "follow", list, add | remove }`, where `list` is the visitor's newest
+kind 3 event as the world found it, or null. The answer is `signed`, with
+the new list, or `refused`.
+
+A follow list replaces the last one, so a wrong one loses everyone its owner
+follows. Before anything is signed:
+
+1. **The list is theirs.** A real signature, by the visitor's own key, kind
+   3, at most 20,000 tags.
+2. **BitLogin looks for itself.** Its worker asks the user's own write
+   relays and the usual ones for their newest follow list. A world's own
+   choice of relays is not asked.
+3. **A world that is behind is refused:** a list older than one a relay
+   has, or older than the newest this signer has signed, been handed or
+   found (kept by public key).
+4. **"They have none" is believed once,** and only where a relay answered
+   and had none. With no relay answering it is refused. NSWP lets a signer
+   take a world's word here; BitLogin does not.
+5. **One change:** one person added or taken out. Everything else is kept
+   as it was and in its order. Following oneself, someone already followed,
+   or unfollowing someone not followed is refused.
+6. **No mark of the site** is put on it, and any on the old list is
+   dropped: a follow list that named a world would say where its owner had
+   been.
+
+- **Limits:** six a minute and sixty an hour for one world, kept across
+  page loads.
+- **`sign` still refuses kind 3** for a world.
+
+Checked against NSWP's vectors (`vectors/people.json`, `fromAWorld`, at
+`13d5feb`).
+
+Where it stops short:
+
+- **A list handed over stands where no relay answers.** It is theirs,
+  signed, and not older than any this signer has seen. In a browser that
+  has seen none, with every relay down, an old list of theirs would be
+  taken as the newest.
+- **A first follow is refused while relays are down.** The world says so,
+  and the person tries again.
+- **The list of sites allowed** (§SW18) does not yet say which sites may
+  change who the person follows.
+- **Tried in Chromium only,** with made-up addresses and mock relays.
 
 # SW17. Not covered
 

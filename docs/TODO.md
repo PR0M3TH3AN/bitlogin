@@ -865,6 +865,22 @@ go-ahead.
   calls PRF support uneven and lists no headset browser. BitPortal's Phase 2
   will run this matrix; results belong in that document.
 
+### Built on `beta`, 2026-11-20 (not on `main`)
+
+- [x] **Saves** (NSWP-12): `save`, `find`, `open` in the world signer
+  (`docs/sign-in-window.md` §SW16a).
+- [x] **Follows for a world the user let** (NSWP-10 "Asking for more",
+  NSWP-14; §SW16b). Stricter than NSWP where a world says the user has no
+  follow list: BitLogin asks their relays itself.
+- [x] **Words for kind 37305,** and a follow list of up to 20,000 people
+  for an application.
+- [ ] **Show in the list of sites allowed** which sites may change who the
+  person follows, and let that alone be taken back.
+- [ ] **Try saves and follows in Firefox and WebKit,** and at the real
+  addresses with the Arcade's two-device test.
+- [ ] **Removing a save from relays** is not offered: a world clears a slot
+  by saving an empty one. NSWP lists this as proposed.
+
 ### Already tracked here, now with a second consumer waiting
 
 - One official tagged release with an integrity manifest (Priority 1 and

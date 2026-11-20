@@ -338,6 +338,13 @@ describe("limits", () => {
 });
 
 describe("describePermissions", () => {
+  it("has words for a rating of a world, as an ordinary thing to sign", () => {
+    const words = describePermissions(set({ sign: [1, 37305], appData: [], proofs: [], read: [], peers: [] }), SITE);
+    expect(words.ordinary).toContain("rate worlds, from one to five stars");
+    expect(JSON.stringify(words)).not.toContain("no words for");
+    expect(words.sensitive).toEqual([]);
+  });
+
   it("puts a set into words, the ones that deserve a second look apart", () => {
     const words = describePermissions(set({ sign: [0, 1, 5, 7, 24242, 27235, 30078, 30310, 9999], read: [30078, 1059, 7375] }), SITE);
     expect(words.ordinary).toEqual([

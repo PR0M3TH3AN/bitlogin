@@ -45,6 +45,7 @@ import {
   type SignGate,
   type SignerReply
 } from "./policy.js";
+import type { WorldMore } from "./follows.js";
 
 export interface EmbeddedSignerHandle {
   /** Whether it is running embedded. False when the page was opened on its own: then it does nothing. */
@@ -84,6 +85,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
   /** The site asked for a set it may not hold at this address. The window says so, so the user is not shown the
    *  plain question with no word that more was asked. */
   let turnedDown = false;
+  /** What a world was let do beyond a note and a reaction, and what it has asked to be, by name (follows.ts). */
+  let more: WorldMore[] = [];
+  let wantedMore: WorldMore[] = [];
   /** An application's counts, apart from a world's (§SW9.6). Only the public and the sensitive are kept across
    *  page loads: they are what a reload could be used to get round. */
   let gates = { quiet: createSignGate(APP_LIMITS.quiet), public: createSignGate(APP_LIMITS.public), sensitive: createSignGate(APP_LIMITS.sensitive), read: createSignGate(APP_LIMITS.read) };
@@ -135,6 +139,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     until = 0;
     remembered = false;
     app = null;
+    more = [];
     if (held) void (forSite ? held.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => held.destroy());
   };
   /**
@@ -155,6 +160,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
         until = kept.until;
         remembered = true;
         app = kept.permissions ?? null;
+        more = app ? [] : (kept.more ?? []);
         if (app) gates = appGates(kept.signed, kept.signedSensitive);
         else gate = createSignGate(SIGN_LIMITS, kept.signed);
         // Too long unchecked: the answer waits for the check. Otherwise the check is made behind the answer.
@@ -180,7 +186,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       ...(pubkey && profile?.picture ? { picture: profile.picture } : {}),
       ...(pubkey && profile?.about ? { about: profile.about } : {}),
       // An application is told what it was approved for, so it can tell that from what it now wants.
-      ...(pubkey && app ? { permissions: app } : {})
+      ...(pubkey && app ? { permissions: app } : {}),
+      // A world is told what more it was let do, so it asks for nothing that isn't there.
+      ...(pubkey && !app && more.length ? { more } : {})
     };
   };
 
@@ -196,6 +204,11 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (ask.t === "state") return say(state(ask.id));
     if (ask.t === "lock") {
       lock();
+      return say(state(ask.id));
+    }
+    if (ask.t === "wantMore") {
+      // Remembered for the window to show, in BitLogin's own words. It approves nothing.
+      wantedMore = ask.more;
       return say(state(ask.id));
     }
     if (ask.t === "want") {
@@ -223,6 +236,34 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
               ? await headless.appEncrypt(ask.peer, ask.text, ask.scheme)
               : await headless.appDecrypt(ask.peer, ask.text, ask.scheme);
         return say({ t: "text", id: ask.id, text });
+      } catch {
+        return refuse();
+      }
+    }
+
+    if (ask.t === "save" || ask.t === "find" || ask.t === "open") {
+      // What a world keeps for its visitor (NSWP-12). Not for an application. The worker does all of it, for the
+      // site the hand-off was sealed for: where a save is kept, what is in it and the count are never the site's.
+      if (app) return refuse();
+      try {
+        if (ask.t === "find") return say({ t: "found", id: ask.id, d: await headless.worldFind(ask.slot) });
+        if (ask.t === "open") return say({ t: "opened", id: ask.id, ...(await headless.worldOpen(ask.event)) });
+        const save = await headless.worldSave(ask.slot, ask.data);
+        if (save.pubkey !== pubkey) return refuse();
+        return say({ t: "signed", id: ask.id, event: save });
+      } catch {
+        return refuse();
+      }
+    }
+
+    if (ask.t === "follow") {
+      // Only a world the user let change who they follow, by name, in the window. The worker checks the list is
+      // theirs, looks at their relays itself, makes the one change and counts it.
+      if (app || !more.includes("follows")) return refuse();
+      try {
+        const list = await headless.worldFollow(ask.list, ask.add ? { add: ask.add } : { remove: ask.remove! });
+        if (list.pubkey !== pubkey) return refuse();
+        return say({ t: "signed", id: ask.id, event: list });
       } catch {
         return refuse();
       }
@@ -273,7 +314,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}) });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }
@@ -292,6 +333,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       if (got.family && got.family !== familyOf(site)) throw new Error("for another family");
       profile = got.profile ?? null;
       app = got.app?.permissions ?? null;
+      more = app || got.family ? [] : (got.more ?? []);
       gates = appGates();
       pubkey = got.pubkey;
       name = msg.name ?? null;

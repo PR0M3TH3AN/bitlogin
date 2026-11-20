@@ -137,9 +137,11 @@ describe("a session that arrived by a hand-off", () => {
     expect(openAppHandoff(sealHandoff(everyday, to, generatePrivateKey(), portal), recipient).app?.permissions.sign).toEqual([27300, 27302, 27303]);
   });
 
+  // The four "world" actions (§SW16a, §SW16b) each serve only the site the hand-off was sealed for, and refuse an
+  // application. `worldFollow` also needs the user to have let that site, by name.
   it("lets a handed-over session ask for nothing beyond signing, the grant, and what an application was approved for", () => {
     expect([...SIGNER_ONLY_ACTIONS].sort()).toEqual(
-      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "roomPass", "signEvent", "signerCheck", "signerForget", "signerKeep", "signerRestore", "signerTouch"]
+      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "roomPass", "signEvent", "signerCheck", "signerForget", "signerKeep", "signerRestore", "signerTouch", "worldFind", "worldFollow", "worldOpen", "worldSave"]
     );
     // "roomPass" was added with the owner's say (2026-11-19, §SW16): a pass for the one site, built in the worker.
     // "signerCheck" likewise (docs/take-back.md): it asks the user's relays whether the site was taken back.
