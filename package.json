@@ -13,6 +13,7 @@
     "build": "npm run build -w @bitlogin/core && npm run build -w @bitlogin/widget",
     "build:demo": "npm run build && npm run build -w @bitlogin/demo",
     "release:artifacts": "npm run build && node scripts/release-artifacts.mjs",
+    "vendor": "node scripts/vendor.mjs",
     "deploy:beta": "bash scripts/deploy-beta.sh",
     "dev:demo": "npm run dev -w @bitlogin/demo",
     "test": "vitest run",
