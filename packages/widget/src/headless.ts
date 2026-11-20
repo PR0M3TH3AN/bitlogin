@@ -130,6 +130,8 @@ export interface HeadlessSigner {
    * signed. `list` is their newest as the world found it, or null.
    */
   worldFollow(list: unknown, change: { add?: string; remove?: string }): Promise<NostrEvent>;
+  /** In the same kind of session: a score on one of a world's boards (NSWP-15), built whole in the worker and marked with the site the session serves. */
+  worldScore(world: string, board: string, score: number): Promise<NostrEvent>;
   /**
    * In the same kind of session, for a world the user let send and read
    * their private messages (NSWP-14): a message written and sealed twice; a
@@ -299,6 +301,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async worldReach(relays) {
       return client.worldReach({ relays });
+    },
+    async worldScore(world, board, score) {
+      return client.worldScore({ world, board, score });
     },
     async acceptHandoff(sealed) {
       const res = await client.handoffAccept(sealed);

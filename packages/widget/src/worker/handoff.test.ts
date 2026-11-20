@@ -142,7 +142,7 @@ describe("a session that arrived by a hand-off", () => {
   // site, by name.
   it("lets a handed-over session ask for nothing beyond signing, the grant, and what an application was approved for", () => {
     expect([...SIGNER_ONLY_ACTIONS].sort()).toEqual(
-      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "roomPass", "signEvent", "signerCheck", "signerForget", "signerKeep", "signerRestore", "signerTouch", "worldFind", "worldFollow", "worldOpen", "worldReach", "worldSave", "worldSeal", "worldUnwrap"]
+      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "roomPass", "signEvent", "signerCheck", "signerForget", "signerKeep", "signerRestore", "signerTouch", "worldFind", "worldFollow", "worldOpen", "worldReach", "worldSave", "worldScore", "worldSeal", "worldUnwrap"]
     );
     // "roomPass" was added with the owner's say (2026-11-19, §SW16): a pass for the one site, built in the worker.
     // "signerCheck" likewise (docs/take-back.md): it asks the user's relays whether the site was taken back.

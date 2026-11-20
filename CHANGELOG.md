@@ -8,6 +8,11 @@ would plausibly want. Newest first.
 
 ## 2026-11-20 (on `beta` only)
 
+- **A world can have its visitor's score signed** (NSWP-15;
+  `docs/sign-in-window.md` §SW16d): `score` with a world's coordinate, a
+  board and a number. The signer builds the kind 37306 note and marks it
+  with the site that asked. For any site the user allowed; six a minute
+  and sixty an hour.
 - **Importing a key says plainly where the key will be kept** (`docs/spec.md`
   §28.1). The import screen now states that an encrypted copy is published
   to public relays, that anyone can download it, that it can't be taken

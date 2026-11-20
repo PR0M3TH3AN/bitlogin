@@ -874,6 +874,7 @@ go-ahead.
   follow list: BitLogin asks their relays itself.
 - [x] **Private messages for a world the user let** (NSWP-14; §SW16c):
   `seal`, `unwrap`, `reach`. Asked again after seven days.
+- [x] **Scores** (NSWP-15; §SW16d): `score` in the world signer.
 - [x] **Words for kind 37305,** and a follow list of up to 20,000 people
   for an application.
 - [ ] **Show in the list of sites allowed** which sites may change who the

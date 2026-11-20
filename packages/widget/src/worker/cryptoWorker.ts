@@ -58,6 +58,7 @@ import { inFamily, readFamily } from "../embedded/family.js";
 import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
 import { createSignGate, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
+import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
 import { buildMessageRelays, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS, sealMessage, UNWRAP_WORLD_LIMITS } from "../embedded/messages.js";
 import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
@@ -88,6 +89,7 @@ import type {
   WorldFindPayload,
   WorldOpenPayload,
   WorldFollowPayload,
+  WorldScorePayload,
   WorldSealPayload,
   WorldUnwrapPayload,
   WorldReachPayload,
@@ -874,7 +876,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       await deleteSignerGrant(store, site);
       if (session.family && inFamily(site, session.family)) await deleteSignerGrant(store, session.family);
       // Its counts go with it: nothing is left here that says the site was ever used.
-      for (const what of ["save", "follow", "seal", "unwrap", "reach"]) {
+      for (const what of ["save", "follow", "seal", "unwrap", "reach", "score"]) {
         worldCounts.delete(`${WORLD_COUNTS}${what}:${site}`);
         await store.delete(`${WORLD_COUNTS}${what}:${site}`).catch(() => {});
       }
@@ -1164,6 +1166,17 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const signed = signer.signEvent(next);
       await store.set(seenKey, String(Math.max(seen, signed.created_at))).catch(() => {});
       return signed;
+    }
+
+    // ---- A score on one of a world's boards (NSWP-15; embedded/scores.ts). For any world its visitor allowed: it
+    // is less than a note. The world names its coordinate, a board and a number; the note and the mark that says
+    // which site asked are this worker's own.
+    case "worldScore": {
+      const { signer, site } = requireWorld();
+      const p = payload as WorldScorePayload;
+      const score = scoreForWorld({ world: p.world, board: p.board, score: p.score, origin: site, nowSeconds: Date.now() / 1000 });
+      if (!score || !(await takeWorldCount("score", site, SCORE_LIMITS))) throw new Error("refused");
+      return signer.signEvent(score);
     }
 
     // ---- Private messages from inside a world (NSWP-14; embedded/messages.ts). Only for a world the user let do
@@ -1893,7 +1906,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
-  "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldSeal", "worldUnwrap", "worldReach",
+  "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",

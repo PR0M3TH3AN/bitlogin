@@ -1002,6 +1002,36 @@ Where it stops short:
   allowed does not yet show or end `messages` by itself.
 - **Tried in Chromium only,** with made-up addresses.
 
+# SW16d. A score on a world's board (built on `beta`)
+
+Asked for by the BitPortal session on 2026-11-20 (NSWP-15, kit 0.44.0), on
+the owner's words that day: "Yes, scores first".
+
+```
+site → signer   { ..., t: "score", world, board, score }     signer → site   { ..., t: "signed", event }
+```
+
+- **A score is a note of kind 37306** with no words: `d` is
+  `<world coordinate>/<board>`, `a` the world's coordinate
+  (`37300:<publisher>:<d>`), then `board`, `score` (a whole number, zero or
+  more, as text), `alt`, and `["nswp:world", <origin>]`. One for each
+  person on each board; a newer one replaces it.
+- **The signer builds all of it.** The world names its coordinate, a board
+  and a number. Nothing else it sends is read. The mark is the site the
+  hand-off was sealed for, as for a note: a board counts a score only where
+  the mark is the world's own address, so another site can't post to it.
+- **For any site the user allowed** that declared nothing. It is not asked
+  for by name (§SW16b): a score is less than a note, which such a site may
+  already have signed. `offers` and `more` are unchanged.
+- **Six a minute and sixty an hour** for one world, by its exact address,
+  kept across page loads, apart from notes.
+- **`sign` still refuses kind 37306** for a world. An application that
+  declares the kind has it marked `bitlogin:site`, as everything it signs.
+- **The window says so** before Allow.
+
+A score is a claim: nothing checks that it was earned. Checked against
+NSWP's vector (`vectors/scores.json`, `signed`, at `a087c0d`).
+
 # SW17. Not covered
 
 - Safari, and phones, where a window is a tab: not tried.
