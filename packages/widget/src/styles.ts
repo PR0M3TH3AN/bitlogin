@@ -363,6 +363,9 @@ button.account-row:hover { border-color: var(--bl-fg); }
 .health-note { flex: 1 1 100%; color: var(--bl-muted); font-size: 12px; word-break: break-word; }
 .checkbox-row { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0; font-size: 13px; }
 .checkbox-row input { margin-top: 3px; }
+.risk-list { margin: 8px 0 4px; padding-left: 18px; }
+.risk-list li { margin: 6px 0; }
+.notice .secondary { margin-top: 8px; }
 .spinner {
   display: inline-block;
   width: 14px; height: 14px;

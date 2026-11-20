@@ -108,6 +108,8 @@ export class BitLoginAuthElement extends HTMLElement {
   // Import flow (§SF10). importKey holds the pasted nsec/hex only until registration completes.
   private importKey = "";
   private importPreviewNpub = "";
+  /** The user ticked that they read how an imported key is kept (on relays, encrypted) before going on. */
+  private importAck = false;
 
   private recoverPhraseInput = "";
   private recoveredPreview: { generalRelaysCount: number; dmRelaysCount: number; chainWarning?: string } | null = null;
@@ -982,11 +984,13 @@ export class BitLoginAuthElement extends HTMLElement {
         this.loginName = "";
         this.importKey = "";
         this.importPreviewNpub = "";
+        this.importAck = false;
         this.goto("create-name");
         return;
       case "goto-import":
         this.importKey = "";
         this.importPreviewNpub = "";
+        this.importAck = false;
         this.goto("import-key");
         return;
       case "goto-restore-file":
@@ -994,6 +998,7 @@ export class BitLoginAuthElement extends HTMLElement {
         this.offlineExportFileNotice = undefined;
         this.importKey = "";
         this.importPreviewNpub = "";
+        this.importAck = false;
         this.goto("restore-file");
         return;
       case "preview-import":
@@ -1043,10 +1048,12 @@ export class BitLoginAuthElement extends HTMLElement {
       case "passkey-new":
         this.importKey = "";
         this.importPreviewNpub = "";
+        this.importAck = false;
         return void this.runPasskeyRegistration();
       case "passkey-import":
         this.importKey = "";
         this.importPreviewNpub = "";
+        this.importAck = false;
         this.goto("import-key");
         return;
       case "extension-signin":
@@ -1290,11 +1297,14 @@ export class BitLoginAuthElement extends HTMLElement {
         const preview = await this.worker.previewImportKey({ nsecOrHex: read.key });
         this.importKey = read.key;
         this.importPreviewNpub = preview.npub;
+      // A key just checked is a new question: the box is ticked for the key on the page, not one before it.
+      this.importAck = false;
         this.busy = false;
         return this.goto("import-key");
       } catch (err) {
         this.importKey = "";
         this.importPreviewNpub = "";
+        this.importAck = false;
         return this.fail(err);
       }
     }
@@ -1314,11 +1324,14 @@ export class BitLoginAuthElement extends HTMLElement {
       const preview = await this.worker.previewImportKey({ nsecOrHex: pasted });
       this.importKey = pasted;
       this.importPreviewNpub = preview.npub;
+      // A key just checked is a new question: the box is ticked for the key on the page, not one before it.
+      this.importAck = false;
       this.busy = false;
       this.render();
     } catch (err) {
       this.importKey = "";
       this.importPreviewNpub = "";
+      this.importAck = false;
       this.fail(err);
     }
   }
@@ -1328,6 +1341,14 @@ export class BitLoginAuthElement extends HTMLElement {
     // which will register with importKey set (§SF10).
     if (!this.importKey || !this.importPreviewNpub) {
       this.errorMessage = "Check your key before continuing.";
+      this.render();
+      return;
+    }
+    // Nobody goes on without having said they read where this key will be kept. The box is read where it is
+    // ticked, as the "I have saved this" boxes are.
+    this.importAck = (this.root.querySelector("#import-ack-check") as HTMLInputElement | null)?.checked ?? false;
+    if (!this.importAck) {
+      this.errorMessage = "Tick the box to say you understand where this key will be kept, or go back and choose another way in.";
       this.render();
       return;
     }
@@ -1452,6 +1473,7 @@ export class BitLoginAuthElement extends HTMLElement {
       });
       this.importKey = "";
       this.importPreviewNpub = "";
+      this.importAck = false;
       this.pendingPasskey = null;
       this.loginName = pending.loginName;
       this.registeredByImport = result.imported;
@@ -1533,6 +1555,7 @@ export class BitLoginAuthElement extends HTMLElement {
     // The pasted key is now wrapped in the capsules; drop the main-thread copy (§11.10).
     this.importKey = "";
     this.importPreviewNpub = "";
+    this.importAck = false;
     this.registeredByImport = result.imported;
     this.phraseRebuildsIdentity = result.everydayKeyDerived;
     this.recoveryPhrase = result.recoveryPhrase;
@@ -2413,7 +2436,7 @@ export class BitLoginAuthElement extends HTMLElement {
               ${passkeyRow}
               ${extensionRow}
               ${optionRow("goto-bunker", OPTION_ICONS.remote, "Remote signer", "Scan a code with Amber or another signer app")}
-              ${optionRow("goto-import", OPTION_ICONS.importKey, "Import a Nostr key", "Wrap an existing identity in a login name and password")}
+              ${optionRow("goto-import", OPTION_ICONS.importKey, "Import a Nostr key", "Stores an encrypted copy of your key on public relays")}
               ${optionRow("goto-recover", OPTION_ICONS.recover, "Recover account", "Sign back in with your 12-word recovery phrase")}
               ${optionRow("goto-restore-file", OPTION_ICONS.recover, "Restore from an export file", "Use a file saved from Export identity")}
             </div>`
@@ -2537,8 +2560,26 @@ export class BitLoginAuthElement extends HTMLElement {
         const previewed = !!this.importPreviewNpub;
         return `
           ${this.renderScreenHead("Import an existing Nostr key")}
-          <p class="sub">Wrap a Nostr identity you already control in a BitLogin login name and password. Your key never changes — you just get a friendlier way in.</p>
-          <div class="notice warn">Pasting a private key into any web page is risky. Only do this on a BitLogin build you trust, and clear your clipboard afterward. BitLogin can't secure copies of this key that already exist elsewhere.</div>
+          <p class="sub">Use a Nostr identity you already have with a BitLogin login. Read this first: importing puts an encrypted copy of your private key on public relays.</p>
+          <div class="notice warn" data-import-risk>
+            <strong>What happens to your key if you import it</strong>
+            <ul class="risk-list">
+              <li><strong>It is stored on public Nostr relays, encrypted.</strong> BitLogin has no server. So that you can sign in from any device, it encrypts your private key and publishes it to relays as notes: one opened by your login (a generated password, or your passkey), and one opened by a 12-word recovery phrase.</li>
+              <li><strong>Anyone can download those notes.</strong> Nothing can limit how many guesses someone makes against them. What protects your key is the strength of the generated password and phrase, and the encryption itself.</li>
+              <li><strong>It can't be taken back.</strong> A relay may keep its copy for good, even after you change your password or stop using BitLogin. If that password or phrase ever leaks, or the encryption is one day broken, whoever kept a copy has your key.</li>
+              <li><strong>A Nostr key can't be changed.</strong> If this one is exposed, the identity is lost for good: its name, its followers and everything it signed.</li>
+              <li><strong>Pasting a key into a web page is a risk of its own.</strong> Only do it on a BitLogin address you trust, and clear your clipboard afterward. BitLogin can't protect copies of this key that already exist elsewhere.</li>
+            </ul>
+          </div>
+          <div class="notice info" data-import-instead>
+            <strong>If you don't want your key stored on relays, even encrypted, don't import it.</strong>
+            <ul class="risk-list">
+              <li><strong>Start a fresh account.</strong> BitLogin makes a new key for it, and your existing key is never involved. This is what we recommend for a key you care about.</li>
+              <li><strong>Keep your key where it is.</strong> Sign in with a browser extension or a remote signer: they sign for you, and BitLogin never holds or stores the key.</li>
+            </ul>
+            <button class="secondary" type="button" data-action="goto-create">Create a fresh account instead</button>
+            <button class="secondary" type="button" data-action="goto-welcome">Other ways to sign in</button>
+          </div>
           ${this.renderError()}
           <form data-form="import-key">
             <label for="importKey">Your nsec or hex private key</label>
@@ -2546,12 +2587,17 @@ export class BitLoginAuthElement extends HTMLElement {
             <button class="secondary" type="submit" ${this.busy ? "disabled" : ""}>
               ${this.busy ? '<span class="spinner"></span>Checking…' : "Check key"}
             </button>
+            <p class="small">Checking shows you which identity the key belongs to. Nothing is stored or sent until you finish setting up the account.</p>
           </form>
           ${
             previewed
               ? `<div class="notice info">This key's public identity:</div>
                  <div class="credential-box">${escapeHtml(this.importPreviewNpub)}</div>
-                 <button class="primary" type="button" data-action="import-continue">This is my identity — continue</button>`
+                 <label class="checkbox-row">
+                   <input type="checkbox" id="import-ack-check" ${this.importAck ? "checked" : ""} />
+                   I understand that an encrypted copy of this private key will be published to public relays, that it can't be taken back, and that my login password and recovery phrase are all that protect it.
+                 </label>
+                 <button class="primary" type="button" data-action="import-continue">This is my identity. Import it</button>`
               : ""
           }
         `;
