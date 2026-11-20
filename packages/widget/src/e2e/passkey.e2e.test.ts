@@ -1237,6 +1237,85 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
+    "a file saved from Export identity is taken back in by \"Restore from an export file\"",
+    async () => {
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext({ acceptDownloads: true });
+        const account = await context.newPage();
+        const cdp = await context.newCDPSession(account);
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="toggle-more"]').click();
+        // The way back in is offered beside the other ways to sign in.
+        expect(await widget.locator('[data-action="goto-restore-file"]').count()).toBe(1);
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".who .pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        // Both files, saved the ordinary way from Export identity.
+        await widget.locator('[data-action="goto-export"]').first().click();
+        const [exportDownload] = await Promise.all([account.waitForEvent("download"), widget.locator('[data-action="download-recovery-export"]').click()]);
+        expect(exportDownload.suggestedFilename()).toBe("bitlogin-recovery-export.json");
+        const exportPath = await exportDownload.path();
+        await widget.locator('[data-action="reveal-nsec"]').click();
+        await widget.locator('[data-action="download-key-backup"]').waitFor({ timeout: 30_000 });
+        const [keyDownload] = await Promise.all([account.waitForEvent("download"), widget.locator('[data-action="download-key-backup"]').click()]);
+        expect(keyDownload.suggestedFilename()).toBe("bitlogin-private-key.txt");
+        const keyPath = await keyDownload.path();
+        // The screen says how each is brought back.
+        expect(await widget.evaluate((el) => el.shadowRoot!.textContent)).toContain("Restore from an export file");
+
+        await widget.locator('[data-action="goto-dashboard"]').click();
+        await widget.locator('[data-action="logout"]').click();
+        await widget.locator('[data-action="goto-login"]').waitFor({ timeout: 30_000 });
+        const openRestore = async () => {
+          if ((await widget.locator('[data-action="goto-restore-file"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+          await widget.locator('[data-action="goto-restore-file"]').click();
+          await widget.locator('input[name="restoreFile"]').waitFor({ timeout: 30_000 });
+        };
+
+        // The recovery export: it is read, and the recovery phrase is asked for, with the file already loaded.
+        await openRestore();
+        await widget.locator('input[name="restoreFile"]').setInputFiles(exportPath);
+        await widget.locator('form[data-form="recover-phrase"]').waitFor({ timeout: 30_000 });
+        expect(await widget.locator(".notice.info").textContent()).toContain("Loaded recovery export");
+        // The file alone restores nothing: nobody is signed in.
+        expect(await account.evaluate(() => window.bitlogin?.activeSession() ?? null)).toBeNull();
+
+        // The key file: the identity it holds is shown, and it is the account's own, before anything is made.
+        await widget.locator('[data-action="goto-welcome"]').first().click();
+        await openRestore();
+        await widget.locator('input[name="restoreFile"]').setInputFiles(keyPath);
+        await widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
+        expect((await widget.locator(".credential-box").textContent())?.trim()).toBe(encodeNpub(me));
+        // The key itself is not put on the page.
+        expect(await widget.evaluate((el) => el.shadowRoot!.innerHTML)).not.toMatch(/nsec1[a-z0-9]{20,}/u);
+        expect(await account.evaluate(() => window.bitlogin?.activeSession() ?? null)).toBeNull();
+
+        // A file that is neither is refused, in words, and nothing happens.
+        await widget.locator('[data-action="goto-welcome"]').first().click();
+        await openRestore();
+        await widget.locator('input[name="restoreFile"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("shopping list") });
+        await widget.locator(".notice.error", { hasText: "not a file BitLogin" }).waitFor({ timeout: 30_000 });
+        expect(await widget.locator('input[name="restoreFile"]').count()).toBe(1);
+      } finally {
+        await browser.close();
+      }
+    },
+    180_000
+  );
+
+  it(
     "a different passkey derives a DIFFERENT account (PRF is per-credential)",
     async () => {
       const browser = await playwright!.chromium.launch();

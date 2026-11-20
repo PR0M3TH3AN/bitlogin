@@ -8,6 +8,13 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **"Restore from an export file"** under "More sign-in options": either
+  file that Export identity makes is read and taken to the step that uses
+  it. The recovery export (`.json`) goes to the recovery phrase with the
+  file already loaded; the key file (`.txt`) goes to "Import a Nostr key"
+  with the key already checked. Before, the recovery export could only be
+  given as an optional extra under "Recover account", and the key file
+  could not be loaded at all.
 - **Five things for applications that sign through the window**
   (`docs/sign-in-window.md` §SW9.4 to §SW9.6), after the BitPortal session
   moved its sign-in to it:
