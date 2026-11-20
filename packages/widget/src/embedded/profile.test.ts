@@ -33,15 +33,18 @@ describe("who someone is (§SW16)", () => {
 
   it("believes a profile only as far as its signature goes", () => {
     const event = kind0({ name: "Ada", display_name: "Countess", picture: "https://pictures.example/ada.png", about: "Notes." });
-    expect(profileFromMetadata(event, me)).toEqual({ name: "Ada", picture: "https://pictures.example/ada.png", about: "Notes." });
+    expect(profileFromMetadata(event, me)).toEqual({ name: "Countess", picture: "https://pictures.example/ada.png", about: "Notes." });
     // Somebody else's profile, a changed one, another kind, and content that is not a profile.
     expect(profileFromMetadata(event, getPublicKeyHex(generatePrivateKey()))).toBeNull();
     expect(profileFromMetadata({ ...event, content: JSON.stringify({ name: "Mallory" }) }, me)).toBeNull();
     expect(profileFromMetadata(signNostrEvent({ kind: 1, pubkey: me, created_at: 1, tags: [], content: JSON.stringify({ name: "Ada" }) }, key), me)).toBeNull();
     expect(profileFromMetadata(kind0("not json"), me)).toBeNull();
     expect(profileFromMetadata(kind0([1, 2]), me)).toBeNull();
-    // The display name stands in only where there is no name.
+    // The display name comes first, then the older spelling, then the short name.
     expect(profileFromMetadata(kind0({ display_name: "Countess" }), me)).toEqual({ name: "Countess" });
+    expect(profileFromMetadata(kind0({ name: "Ada", displayName: "Lovelace" }), me)).toEqual({ name: "Lovelace" });
+    expect(profileFromMetadata(kind0({ name: "Ada", display_name: "​", displayName: " " }), me)).toEqual({ name: "Ada" });
+    expect(profileFromMetadata(kind0({ name: "Ada", display_name: 7 }), me)).toEqual({ name: "Ada" });
   });
 
   it("takes the newest profile their own key signed, even when that one says nothing", () => {

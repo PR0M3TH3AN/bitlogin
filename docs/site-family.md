@@ -2,7 +2,8 @@
 
 **Document version:** 0.1
 **Date:** 2026-11-19
-**Status:** Design only. Nothing here is built. Written on `beta`.
+**Status:** Design only, with the owner's answers in SF9. Nothing here is
+built. Written on `beta`.
 **Depends on:** `docs/sign-in-window.md` §SW5, §SW6, §SW9, §SW11, §SW16,
 §SW18; `docs/take-back.md`; `docs/spec.md` §21.6.
 
@@ -74,27 +75,35 @@ name under it, at any depth.
 
 # SF4. How it is offered
 
-At the Allow screen in `/connect/`, under the "Remember" tick (§SW11):
+**At the first site of a family,** the Allow screen is as it is today
+(§SW11). Nothing is said about a family, because nothing yet tells the
+person there is one.
 
-> ☐ Also allow every site at **bitblocks.network**
-> Every site whose address ends in bitblocks.network will know who you
-> are and may ask you to sign notes, without asking you first. Only tick
-> this if one person or team runs all of them.
+**At the second,** where the sites list (§SW18) shows another site of the
+same family already allowed, the Allow screen asks once, with two buttons
+in place of Allow:
 
-(The domain shown is the asking site's own.)
+> You allowed **portal.bitblocks.network** on 18 November.
+> Every site whose address ends in bitblocks.network can know who you are
+> and ask you to sign notes, without asking you first. Choose this only if
+> one person or team runs all of them.
+>
+> **[ Allow every bitblocks.network site ]**   **[ Just this one ]**
 
-- **It is never ticked by default.** Remembering is ticked by default
-  because it only covers the site in front of the person. This covers
-  sites they have not seen yet.
+(The domain and site shown are the person's own.)
+
+- **Neither button is the default.** Each is one press, and both are
+  equally easy to reach. Remembering is ticked by default because it
+  covers only the site in front of the person. This covers sites they have
+  not seen yet, so it is a choice they make, not one made for them.
 - **It is offered only with "Remember" ticked**, and never while the lock
   is on (§SW12). The lock already keeps nothing but one visit.
-- **It is offered only on the second site of a family.** At the first,
-  nothing tells the person that a family exists. At the second, the window
-  can say "you allowed portal.bitblocks.network on 18 November", read from
-  the sites list (§SW18). This is proposed, and is the owner's decision
-  (SF9.2).
-- **Once ticked, there are no more presses** for that family until the
-  grant runs out or is taken back.
+- **After "Allow every…" there are no more presses** for that family until
+  the grant runs out or is taken back, at sites that exist now and at
+  sites made later.
+- **After "Just this one"** the question is not asked again for that
+  family for thirty days. Asked at every new world, it would be the
+  prompt this design is meant to remove.
 
 # SF5. What a family grant allows
 
@@ -107,7 +116,7 @@ Less than a site's own grant, where the two differ:
 | A note and a reaction | Yes | Yes |
 | An application's declared kinds (§SW9) | As approved | **No.** An application that declares kinds still gets its own Allow, at its own origin, with its own list |
 | Reserved kinds (§SW9) | Only at the named address | Only at the named address, through that address's own grant |
-| How long | 30 days known, 7 unknown | 30 days if the family is listed as known (SF9.3), otherwise 7 |
+| How long | 30 days known, 7 unknown | 30 days for a known family (`bitblocks.network`, SF9.3), otherwise 7 |
 
 - **The counts are the family's,** not each site's. Two passes a minute
   and ten an hour (§SW16), three notes a burst and twenty an hour, shared
@@ -177,10 +186,17 @@ Less than a site's own grant, where the two differ:
    families has to be kept up to date. (The narrower choice was a shipped
    list of families, changed only by a release.)
 2. **Offer it at the first site of a family, or only from the second?**
-   Proposed: from the second (SF4).
+   **Decided 2026-11-19: from the second, as two buttons** (SF4).
 3. **Is `bitblocks.network` a known family,** remembered thirty days
-   instead of seven? This is the BitPortal session's other ask, adding the
-   reference worlds to `KNOWN_APPS`. Listing the family covers worlds not
-   yet made.
-4. **Does taking back one member end the whole family grant?** Proposed:
-   yes (SF6).
+   instead of seven? **Decided 2026-11-19: yes.** BitLogin keeps a short
+   list of known families beside `KNOWN_APPS`, starting with
+   `bitblocks.network`, changed only by a release. It decides how long a
+   family is kept and nothing else: any domain may still be a family
+   (SF9.1). This answers the BitPortal session's ask to add the reference
+   worlds to `KNOWN_APPS`, and covers worlds not yet made.
+4. **Does taking back one member end the whole family grant?**
+   **Decided 2026-11-19: yes** (SF6).
+
+The owner chose these as "the best user experience", on the reasons given
+in SF4 and SF6: one clear question asked once, a family that is not asked
+again every week, and a site taken back that is really gone.

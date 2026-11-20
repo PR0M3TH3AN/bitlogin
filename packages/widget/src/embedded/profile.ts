@@ -88,8 +88,8 @@ export function profileFromMetadata(event: unknown, pubkey: string): Profile | n
   }
   if (!content || typeof content !== "object" || Array.isArray(content)) return null;
   const c = content as Record<string, unknown>;
-  // `name` is the profile's name; `display_name` is used only where there is none.
-  return readProfile({ name: cleanName(c.name) || c.display_name, picture: c.picture, about: c.about });
+  // The name a person shows: `display_name`, then the older `displayName`, then the short `name`, as other Nostr clients and BitPortal show it.
+  return readProfile({ name: cleanName(c.display_name) || cleanName(c.displayName) || c.name, picture: c.picture, about: c.about });
 }
 
 /** The newest validly signed profile among what relays returned, or null. */

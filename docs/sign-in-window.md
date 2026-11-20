@@ -694,6 +694,9 @@ place: their own signed profile (kind 0).
 - BitLogin's worker fetches it at the sign-in address, while the question
   is being read, and believes it only as far as its signature goes. The
   newest one their key signed is used, even if it says nothing.
+- The name is the one they show: `display_name`, then the older
+  `displayName`, then the short `name`, the order BitPortal and other
+  Nostr clients use (owner's decision, 2026-11-19).
 - It is cleaned as NSWP cleans it: a name of one line and 48 characters; a
   picture only at an `https` address with no credentials, at most 300
   characters; a line about them of at most 280.

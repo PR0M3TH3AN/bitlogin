@@ -6,6 +6,13 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-19 (later, on `beta` only)
+
+- **The name a site is told is the one a person shows** (§SW16): their
+  profile's `display_name`, then `displayName`, then `name`, the order
+  BitPortal and other Nostr clients use. It was `name` first. A room pass
+  made from a sign-in after this carries the new name.
+
 ## 2026-11-19
 
 **A site can be taken back from one place (`docs/take-back.md`).** For
