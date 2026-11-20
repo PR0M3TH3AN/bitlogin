@@ -527,6 +527,21 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow").click();
         await page.waitForTimeout(400);
         expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+        // Who they are signing in as, before anything can be pressed: the name from their own signed profile, the
+        // whole key, the line about them, and a picture (here one that can't be fetched, so a letter stands in).
+        await popup.locator("#who", { hasText: "Ada Lovelace" }).waitFor({ timeout: 30_000 });
+        expect(await popup.locator("#who-key").textContent()).toBe(encodeNpub(me));
+        expect(await popup.locator("#who-about").textContent()).toBe("Line one line two");
+        expect(await popup.locator("#who-pic").textContent()).toBe("A");
+        // The site, the account and the buttons are all on screen at the size the window opens at, with nothing
+        // to scroll: the list of what it allows comes after them.
+        await popup.setViewportSize({ width: 460, height: 660 });
+        for (const id of ["#site", "#who", "#switch", "#allow", "#deny"]) {
+          const box = (await popup.locator(id).boundingBox())!;
+          expect(box.y, id).toBeGreaterThanOrEqual(0);
+          expect(box.y + box.height, id).toBeLessThanOrEqual(660);
+        }
+        expect((await popup.locator("#allow").boundingBox())!.y).toBeLessThan((await popup.locator("#lasts").boundingBox())!.y);
         // Remembered unless they untick it, and the window says for how long: seven days for an address BitLogin
         // does not know. Unticked, it is for this visit.
         expect(await popup.locator("#remember-row").isVisible()).toBe(true);
@@ -937,6 +952,17 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(await fourth.locator("#family").isVisible()).toBe(false);
         expect(await fourth.locator("#allow-family").isVisible()).toBe(false);
         expect(await fourth.locator("#allow").textContent()).toBe("Allow");
+        // "Use a different account": this browser is signed out of BitLogin as that account, the ordinary sign-in
+        // is offered, and nothing is handed to the site.
+        await fourth.locator("#switch").click();
+        await fourth.locator("#signin").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await fourth.locator("#ask").isVisible()).toBe(false);
+        expect(await fourth.locator("#status").textContent()).toContain("signed out of that account");
+        expect(await fourth.locator("#widget-slot bitlogin-auth").count()).toBe(1);
+        expect(await fourth.evaluate(() => (window as any).bitlogin.readCachedSession())).toBeNull();
+        expect(await four.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        // A site allowed as the first account stays allowed as it: what it holds is its own.
+        expect(await one.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me });
         await fourth.close();
         await two.page.reload();
         await two.page.waitForFunction(() => typeof (window as any).ask === "function");

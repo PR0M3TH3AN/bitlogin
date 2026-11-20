@@ -24,7 +24,6 @@ const $ = (id) => document.getElementById(id);
 const status = (text) => {
   $("status").textContent = text;
 };
-const shortKey = (npub) => `${npub.slice(0, 10)}…${npub.slice(-4)}`;
 /** A press sooner than a person could have read the question was meant for the site, and is ignored. */
 const TOO_SOON_MS = 900;
 
@@ -51,6 +50,8 @@ const relays = {
  */
 let preparing = null;
 let profileLoaded = Promise.resolve();
+/** Their own signed profile, once relays have answered: shown so they can see which account this is. */
+let profile = null;
 /** The one worker this page talks to. Where the lock is on, it is the one that was unlocked. */
 let worker = null;
 const theWorker = async () => (worker ??= await createHeadlessSigner(relays));
@@ -59,11 +60,48 @@ const prepare = () =>
     const session = await theWorker();
     const restored = await session.restore();
     if (!restored || restored.pubkey !== who.pubkey) throw new Error("no session");
-    // Only a world is told who someone is: an application is held to what it asked, and this is not in it. Their
-    // relay list is read for every site: it is where the signer later looks for a take-back (docs/take-back.md).
-    profileLoaded = session.loadProfile({ profile: !found.wants }).catch(() => null);
+    // Their profile is read for every site, to show them which account this is. Only a world is told it: the
+    // worker leaves it out of an application's hand-off. Their relay list is read too: it is where the signer
+    // later looks for a take-back (docs/take-back.md).
+    const forWho = who.pubkey;
+    profileLoaded = session
+      .loadProfile()
+      .then((found_) => {
+        if (who?.pubkey !== forWho) return;
+        profile = found_;
+        paintWho();
+      })
+      .catch(() => null);
     return session;
   })());
+/**
+ * Who they are signing in as: the name and picture from their own signed profile, the whole key, and the line
+ * about them. Before relays answer, and where there is no profile, the name the sign-in address knows them by.
+ * Everything is written as text. The picture is an https address the worker cleaned; where it does not load, the
+ * first letter of the name stands in.
+ */
+const paintWho = () => {
+  if (!who) return;
+  const name = profile?.name || who.name || "";
+  for (const pre of ["", "app-"]) {
+    $(`${pre}who`).textContent = name || "An account with no name";
+    $(`${pre}who-key`).textContent = who.npub;
+    $(`${pre}who-about`).textContent = profile?.about || "";
+    $(`${pre}who-about`).hidden = !profile?.about;
+    const pic = $(`${pre}who-pic`);
+    const letter = () => pic.replaceChildren(document.createTextNode((name || "?").trim().slice(0, 1).toUpperCase()));
+    letter();
+    if (profile?.picture) {
+      const img = new Image();
+      img.alt = "";
+      img.referrerPolicy = "no-referrer";
+      img.onload = () => pic.replaceChildren(img);
+      img.onerror = letter;
+      img.src = profile.picture;
+    }
+  }
+};
+
 /** How long Allow waits for relays to answer about the profile. Without one, the site is told the key alone. */
 const PROFILE_WAIT_MS = 2500;
 
@@ -143,8 +181,7 @@ const askApp = () => {
   $("app-name").textContent = found.wants.name || "";
   // Its own name is shown only where BitLogin has none for it: beside a known name it would only confuse.
   $("app-name-line").hidden = !found.wants.name || !!known;
-  $("app-who").textContent = who.name || shortKey(who.npub);
-  $("app-who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
+  paintWho();
   lasting("application", "remember-app-row", "remember-app", "remember-app-label", "app-lasts");
   fill("app-ordinary", words.ordinary);
   fill("app-sensitive", words.sensitive);
@@ -160,8 +197,7 @@ const ask = () => {
   void prepare().catch(() => {});
   if (found.wants) return askApp();
   $("site").textContent = found.site;
-  $("who").textContent = who.name || shortKey(who.npub);
-  $("who-key").textContent = who.name ? ` (${shortKey(who.npub)})` : "";
+  paintWho();
   // Offered only where an earlier site of the same family was allowed, as this account, and not turned down lately.
   offer = !lockOn && found.family && !familyDeclined(found.family) ? familyOffer(loadAllowed(), found.site, found.family, who.pubkey) : null;
   lasting("site", "remember-row", "remember", "remember-label", "lasts", showFamily);
@@ -223,6 +259,33 @@ const signIn = () => {
   $("widget-slot").append(widget);
 };
 
+/**
+ * "Use a different account": this browser is signed out of BitLogin as the account shown, and the ordinary
+ * sign-in is offered in its place. Nothing is handed to the site. Sites already allowed as the first account stay
+ * allowed as it: what they hold is their own.
+ */
+const switchAccount = async () => {
+  if (!who || finished) return;
+  $("ask").hidden = true;
+  $("ask-app").hidden = true;
+  status("Signing this browser out of that account.");
+  try {
+    await (await theWorker()).logout();
+  } catch {
+    $(found.wants ? "ask-app" : "ask").hidden = false;
+    return status("That didn't work, and you are still signed in as the account shown.");
+  }
+  worker?.destroy();
+  worker = null;
+  preparing = null;
+  profile = null;
+  profileLoaded = Promise.resolve();
+  who = null;
+  lockOn = false;
+  signIn();
+  status("You are signed out of that account in this browser. Sign in as the one you want to use.");
+};
+
 const allow = async (button, forFamily = false) => {
   if (!found || !who || performance.now() - askedAt < TOO_SOON_MS) return;
   button.disabled = true;
@@ -263,6 +326,8 @@ $("allow").addEventListener("click", () => allow($("allow")));
 $("allow-family").addEventListener("click", () => allow($("allow-family"), true));
 $("allow-app").addEventListener("click", () => allow($("allow-app")));
 $("deny-app").addEventListener("click", leave);
+$("switch").addEventListener("click", switchAccount);
+$("switch-app").addEventListener("click", switchAccount);
 $("deny").addEventListener("click", leave);
 $("deny-2").addEventListener("click", leave);
 

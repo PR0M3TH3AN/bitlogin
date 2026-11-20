@@ -8,6 +8,24 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **The Allow screen shows who you are signing in as, and the buttons
+  come first** (asked for by the owner after the window signed them in to
+  a world as an account they did not mean). Under the site's address: the
+  name and picture from the account's own signed profile, the whole npub,
+  the line about them, and "Use a different account". Then Allow and
+  Don't allow, on screen without scrolling. What it allows is listed below.
+- **"Use a different account"** signs this browser out of BitLogin as the
+  account shown (and removes the lock, if one is on) and offers the
+  ordinary sign-in. Sites already allowed as the first account stay
+  allowed as it.
+- **A deployment must change one header:** `img-src` gains `https:` on the
+  sign-in address's pages, so a profile picture can be fetched. The
+  embedded signer's page is unchanged: it fetches no pictures.
+- **An application is never handed the profile.** The window now reads it
+  for every site, to show the user; the worker leaves it out of an
+  application's hand-off.
+- **Words on the Allow screen for two kinds:** 30004 ("change your lists
+  of worlds") and 37300 ("announce a world as yours").
 - **One Allow can cover every site under one domain
   (`docs/site-family.md`).** At the second site of a family the sign-in
   window offers "Allow every example.com site" beside "Just this one".

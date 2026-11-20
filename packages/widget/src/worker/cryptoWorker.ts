@@ -645,7 +645,9 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         // The profile is this worker's own finding (loadProfile), never a page's word.
         return sealHandoff(everydayPrivateKey, p.recipientPublicKey, sender, p.app, {
           ...(p.site !== undefined ? { site: p.site } : {}),
-          ...(session.profile ? { profile: session.profile } : {}),
+          // Only a site that declared nothing is told who they are. An application is held to what it asked,
+          // though the window may have read the profile to show the user which account this is.
+          ...(session.profile && !p.app ? { profile: session.profile } : {}),
           ...(p.remember === true ? { remember: true } : {}),
           ...(p.family !== undefined ? { family: p.family } : {}),
           // With the lock on, nothing is kept for any site: a key at rest in a site's storage would be a key

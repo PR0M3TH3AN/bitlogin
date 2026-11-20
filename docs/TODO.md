@@ -225,6 +225,20 @@ that moved.
     Chromium only.
   - [ ] **Keep the Public Suffix List current:** a step in the release
     checklist to run `scripts/update-public-suffix.mjs`.
+- [ ] **15. Always show who is signed in** (asked for by the owner,
+  2026-11-19, after the window signed them in to a world as the wrong
+  account). The Allow screen now shows the profile's name and picture, the
+  whole npub, and "Use a different account", with the buttons at the top.
+  On `beta`.
+  - [ ] **The widget itself** (`<bitlogin-auth>`, the account page, the
+    sites page) still shows a key and no picture.
+  - [ ] **Several accounts kept on one device, and a chooser**
+    (`docs/account-switching.md`, not built). Today "Use a different
+    account" signs the first one out.
+  - [ ] **A way for a site to draw its own sign-in and account switcher**
+    over BitLogin's client. Asked for by the owner; not designed.
+  - [ ] **From the BitPortal session, undecided:** reserved kinds at a
+    local development address; a "taken or not" answer to `want`.
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound
