@@ -25,9 +25,14 @@ export function isValidRecoveryPhrase(phrase: string): boolean {
   }
 }
 
-/** NFKD-normalizes and collapses whitespace per BIP-39 phrase handling (§17.1). */
+/**
+ * NFKD-normalizes and collapses whitespace per BIP-39 phrase handling (§17.1), and reads capitals as small
+ * letters. Every word in the list is in small letters, so a phrase with a capital in it was never a valid one
+ * and never made a seed: reading "Abandon" as "abandon" changes no account that exists, and stops a phone that
+ * capitalises the first word of a field from turning a right phrase into a refused one.
+ */
 export function normalizePhrase(phrase: string): string {
-  return phrase.trim().normalize("NFKD").split(/\s+/u).join(" ");
+  return phrase.trim().normalize("NFKD").toLowerCase().split(/\s+/u).join(" ");
 }
 
 /**

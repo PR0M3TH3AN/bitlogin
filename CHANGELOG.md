@@ -8,6 +8,10 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **A recovery phrase typed with a capital letter is accepted.** It was
+  refused as "not a valid phrase", and a phone capitalises the first word
+  of a field. Every word in the list is in small letters, so no account
+  was ever made from a capitalised phrase and none changes.
 - **"Restore from an export file"** under "More sign-in options": either
   file that Export identity makes is read and taken to the step that uses
   it. The recovery export (`.json`) goes to the recovery phrase with the
