@@ -8,6 +8,12 @@ would plausibly want. Newest first.
 
 ## 2026-11-20 (on `beta` only)
 
+- **A world can have an achievement its visitor holds signed** (NSWP-16;
+  `docs/sign-in-window.md` §SW16e): `achieve` with a world's coordinate,
+  the achievement's name and its title. Built and marked by the signer, as
+  a score is.
+- **`score` takes an optional `title` and `format`** (NSWP kit 0.46.0), and
+  writes them into the note.
 - **A world can have its visitor's score signed** (NSWP-15;
   `docs/sign-in-window.md` §SW16d): `score` with a world's coordinate, a
   board and a number. The signer builds the kind 37306 note and marks it

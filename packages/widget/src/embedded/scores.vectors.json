@@ -1,9 +1,11 @@
 {
- "description": "From NSWP's vectors/scores.json at a087c0d: `world` and `signed`, as they are there. What `scoreForWorld` gives for that world, board, score, origin and time.",
+ "description": "From NSWP's vectors/scores.json on its `on-cards` branch (kit 0.46.0, not yet merged when copied on 2026-11-20): `world`, `signed` (with a title and a format) and `signedPlain` (with neither).",
  "world": "37300:9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6:arcade",
  "signed": {
   "board": "lantern-run",
   "score": 42500,
+  "title": "Lantern Run",
+  "format": "time",
   "origin": "https://arcade.example",
   "now": 1794430800,
   "expect": {
@@ -20,15 +22,54 @@
     ],
     [
      "board",
-     "lantern-run"
+     "lantern-run",
+     "Lantern Run"
     ],
     [
      "score",
-     "42500"
+     "42500",
+     "time"
     ],
     [
      "alt",
-     "A score in a world: 42500"
+     "A score in a world: Lantern Run: 42.5 s"
+    ],
+    [
+     "nswp:world",
+     "https://arcade.example"
+    ]
+   ],
+   "content": ""
+  }
+ },
+ "signedPlain": {
+  "board": "main",
+  "score": 7,
+  "origin": "https://arcade.example",
+  "now": 1794430800,
+  "expect": {
+   "kind": 37306,
+   "created_at": 1794430800,
+   "tags": [
+    [
+     "d",
+     "37300:9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6:arcade/main"
+    ],
+    [
+     "a",
+     "37300:9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6:arcade"
+    ],
+    [
+     "board",
+     "main"
+    ],
+    [
+     "score",
+     "7"
+    ],
+    [
+     "alt",
+     "A score in a world: 7"
     ],
     [
      "nswp:world",

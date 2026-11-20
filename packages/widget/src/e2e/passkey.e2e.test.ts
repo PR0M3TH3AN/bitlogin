@@ -1087,7 +1087,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(await first.locator("#allow-more").isVisible()).toBe(false);
         expect(await first.locator("#allow").textContent()).toBe("Allow");
         expect(await first.locator("#ask").textContent()).toContain("It can keep its own saves with your account");
-        expect(await first.locator("#ask").textContent()).toContain("It can post your scores on its own boards");
+        expect(await first.locator("#ask").textContent()).toContain("It can post your scores on its own boards, and show which of its achievements you hold");
         await first.locator("#allow").click();
         const allowed = await arcade.until((s) => s.unlocked === true);
         expect(allowed).toMatchObject({ pubkey: me, remembered: true });
@@ -1123,9 +1123,20 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(scored.t).toBe("signed");
         expect(verifyNostrEvent(scored.event)).toBe(true);
         expect(scored.event).toMatchObject({ kind: 37306, pubkey: me, content: "" });
-        expect(scored.event.tags).toEqual([["d", `${WORLD}/lantern-run`], ["a", WORLD], ["board", "lantern-run"], ["score", "42500"], ["alt", "A score in a world: 42500"], ["nswp:world", ARCADE]]);
+        expect(scored.event.tags).toEqual([["d", `${WORLD}/lantern-run`], ["a", WORLD], ["board", "lantern-run"], ["score", "42500"], ["alt", "A score in a world: 42,500"], ["nswp:world", ARCADE]]);
+        // With what the board is called and how it counts, so the score can be shown where the world isn't.
+        const timed = await arcade.ask({ t: "score", world: WORLD, board: "lantern-run", score: 42500, title: " Lantern  Run ", format: "time" });
+        expect(timed.event.tags.slice(2, 5)).toEqual([["board", "lantern-run", "Lantern Run"], ["score", "42500", "time"], ["alt", "A score in a world: Lantern Run: 42.5 s"]]);
         expect((await arcade.ask({ t: "score", world: WORLD, board: "Not A Board", score: 1 })).t).toBe("no answer");
         expect((await arcade.ask({ t: "score", world: WORLD, board: "lantern-run", score: -5 })).t).toBe("no answer");
+        // An achievement held there, the same way: the world's name for it as one plain line, and the same mark.
+        const held = await arcade.ask({ t: "achieve", world: WORLD, achievement: "all-twelve", title: "  All\u202e twelve\n ", origin: OTHER });
+        expect(held.t).toBe("signed");
+        expect(verifyNostrEvent(held.event)).toBe(true);
+        expect(held.event).toMatchObject({ kind: 37307, pubkey: me, content: "" });
+        expect(held.event.tags).toEqual([["d", `${WORLD}/all-twelve`], ["a", WORLD], ["achievement", "all-twelve"], ["title", "All twelve"], ["alt", "An achievement in a world: All twelve"], ["nswp:world", ARCADE]]);
+        expect((await arcade.ask({ t: "achieve", world: WORLD, achievement: "all-twelve", title: " " })).t).toBe("no answer");
+        expect((await arcade.ask({ t: "sign", event: { kind: 37307, content: "", tags: [["title", "Anything"]] } })).t).toBe("refused");
         // A world can't build a score of its own with other tags.
         expect((await arcade.ask({ t: "sign", event: { kind: 37306, content: "", tags: [["score", "999999"]] } })).t).toBe("refused");
 

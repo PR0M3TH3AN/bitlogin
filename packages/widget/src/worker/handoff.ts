@@ -70,6 +70,8 @@ export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "worldFollow",
   // A score on one of a world's boards, built whole in the worker (embedded/scores.ts).
   "worldScore",
+  // An achievement held in a world, built whole in the worker (embedded/achievements.ts).
+  "worldAchieve",
   // Private messages sealed and opened, and where they reach the user, for a world let do that (embedded/messages.ts).
   "worldSeal",
   "worldUnwrap",

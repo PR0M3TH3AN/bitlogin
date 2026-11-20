@@ -39,6 +39,7 @@ import type {
   WorldOpenPayload,
   WorldFollowPayload,
   WorldScorePayload,
+  WorldAchievePayload,
   WorldSealPayload,
   WorldUnwrapPayload,
   WorldReachPayload,
@@ -303,6 +304,9 @@ export class WorkerClient {
   }
   worldScore(payload: WorldScorePayload) {
     return this.call("worldScore", payload);
+  }
+  worldAchieve(payload: WorldAchievePayload) {
+    return this.call("worldAchieve", payload);
   }
   signerKeep(payload: SignerKeepPayload) {
     return this.call("signerKeep", payload);

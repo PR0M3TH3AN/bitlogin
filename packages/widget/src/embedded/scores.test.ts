@@ -1,19 +1,31 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { cleanBoard, cleanScore, SCORE_KIND, scoreForWorld, worldCoordinate } from "./scores.js";
+import { cleanBoard, cleanScore, SCORE_KIND, scoreForWorld, scoreWords, worldCoordinate } from "./scores.js";
 import { prepareForSite, readSignerRequest, SIGNER_PROTOCOL } from "./policy.js";
 import { prepareForApp, readPermissions } from "./permissions.js";
 
 /** From NSWP's vectors/scores.json at a087c0d: `world` and `signed`. */
 const vectors = JSON.parse(readFileSync(new URL("./scores.vectors.json", import.meta.url), "utf8")) as {
   world: string;
-  signed: { board: string; score: number; origin: string; now: number; expect: unknown };
+  signed: { board: string; score: number; title: string; format: string; origin: string; now: number; expect: unknown };
+  signedPlain: { board: string; score: number; origin: string; now: number; expect: unknown };
 };
 
 describe("a score in a world (NSWP-15)", () => {
-  it("builds the score NSWP's vectors have, mark and all", () => {
+  it("builds the scores NSWP's vectors have, mark and all: with a title and a format, and with neither", () => {
     const v = vectors.signed;
-    expect(scoreForWorld({ world: vectors.world, board: v.board, score: v.score, origin: v.origin, nowSeconds: v.now })).toEqual(v.expect);
+    expect(scoreForWorld({ world: vectors.world, board: v.board, score: v.score, title: v.title, format: v.format, origin: v.origin, nowSeconds: v.now })).toEqual(v.expect);
+    const p = vectors.signedPlain;
+    expect(scoreForWorld({ world: vectors.world, board: p.board, score: p.score, origin: p.origin, nowSeconds: p.now })).toEqual(p.expect);
+  });
+
+  it("carries what the board is called and how it counts only where the world gives them, tidied", () => {
+    const base = { world: vectors.world, board: "main", origin: "https://arcade.example", nowSeconds: 1 };
+    expect(scoreForWorld({ ...base, score: 1200 })!.tags.slice(2, 5)).toEqual([["board", "main"], ["score", "1200"], ["alt", "A score in a world: 1,200"]]);
+    expect(scoreForWorld({ ...base, score: 754000, title: "  Long\n Run ", format: "time" })!.tags.slice(2, 5)).toEqual([["board", "main", "Long Run"], ["score", "754000", "time"], ["alt", "A score in a world: Long Run: 12 min 34.0 s"]]);
+    // Anything but "time" is a plain number, and a title that is not text is no title.
+    expect(scoreForWorld({ ...base, score: 5, title: 7, format: "stars" })!.tags.slice(2, 4)).toEqual([["board", "main"], ["score", "5"]]);
+    expect(scoreWords("time", 42500)).toBe("42.5 s");
   });
 
   it("marks it with the site the signer names, whatever page of it asked", () => {
@@ -38,6 +50,8 @@ describe("a score in a world (NSWP-15)", () => {
   it("reads the message, tidied, and nothing malformed", () => {
     const say = (more: Record<string, unknown>) => readSignerRequest({ nswp: SIGNER_PROTOCOL, v: 1, id: "a1", ...more });
     expect(say({ t: "score", world: vectors.world, board: "main", score: "12", origin: "https://other.example", tags: [["nswp:world", "https://other.example"]] })).toEqual({ t: "score", id: "a1", world: vectors.world, board: "main", score: 12 });
+    expect(say({ t: "score", world: vectors.world, board: "main", score: 12, title: " Main  board ", format: "time" })).toEqual({ t: "score", id: "a1", world: vectors.world, board: "main", score: 12, title: "Main board", format: "time" });
+    expect(say({ t: "score", world: vectors.world, board: "main", score: 12, title: 7, format: "stars" })).toEqual({ t: "score", id: "a1", world: vectors.world, board: "main", score: 12 });
     expect(say({ t: "score", world: vectors.world, board: "Main", score: 12 })).toBeNull();
     expect(say({ t: "score", world: "x", board: "main", score: 12 })).toBeNull();
     expect(say({ t: "score", world: vectors.world, board: "main" })).toBeNull();

@@ -1008,7 +1008,7 @@ Asked for by the BitPortal session on 2026-11-20 (NSWP-15, kit 0.44.0), on
 the owner's words that day: "Yes, scores first".
 
 ```
-site → signer   { ..., t: "score", world, board, score }     signer → site   { ..., t: "signed", event }
+site → signer   { ..., t: "score", world, board, score, title?, format? }     signer → site   { ..., t: "signed", event }
 ```
 
 - **A score is a note of kind 37306** with no words: `d` is
@@ -1029,8 +1029,40 @@ site → signer   { ..., t: "score", world, board, score }     signer → site  
   declares the kind has it marked `bitlogin:site`, as everything it signs.
 - **The window says so** before Allow.
 
+- **`title` and `format` are optional** (NSWP kit 0.46.0). `title` is what
+  the board is called, one plain line of 60 characters at most; `format`
+  is `"time"` where the score counts thousandths of a second, and anything
+  else is a plain number. Given, they are written as
+  `["board", id, title]` and `["score", n, "time"]`, and into `alt`
+  ("Lantern Run: 42.5 s"), so the score can be shown where the world
+  isn't. NSWP's kit checks that what comes back carries what it asked.
+
 A score is a claim: nothing checks that it was earned. Checked against
-NSWP's vector (`vectors/scores.json`, `signed`, at `a087c0d`).
+NSWP's vectors (`vectors/scores.json`, `signed` and `signedPlain`), as they
+stood on its `on-cards` branch on 2026-11-20, before that was merged.
+
+# SW16e. An achievement held in a world (built on `beta`)
+
+Asked for by the BitPortal session on 2026-11-20 (NSWP-16, kit 0.45.0); the
+owner said "Yes, build it" the same day. Built as a score is.
+
+```
+site → signer   { ..., t: "achieve", world, achievement, title }     signer → site   { ..., t: "signed", event }
+```
+
+- **A note of kind 37307** with no words: `d` is
+  `<world coordinate>/<achievement>`, `a` the world's coordinate, then
+  `achievement`, `title`, `alt`, and `["nswp:world", <origin>]`.
+- **The signer builds all of it** and writes the mark itself. `title` is
+  made one plain line of at most 60 characters; with none left, nothing is
+  signed.
+- **For any site the user allowed** that declared nothing, six a minute and
+  sixty an hour, counted apart from scores and notes. A world that shows
+  more than six at once has the rest refused, and asks again.
+- **`sign` still refuses kind 37307** for a world.
+
+It is a claim: nothing checks that it was earned. Checked against NSWP's
+vector (`vectors/achievements.json`, `signed`, at `cdb91a4`).
 
 # SW17. Not covered
 

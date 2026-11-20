@@ -16,7 +16,8 @@ import { cleanSlot, fitsInSave } from "./saves.js";
 import { cleanMore, type WorldMore } from "./follows.js";
 export { WORLD_MORE } from "./follows.js";
 import { cleanMessage, type ReadMessage, type WrittenMessage } from "./messages.js";
-import { cleanBoard, cleanScore, worldCoordinate } from "./scores.js";
+import { cleanBoard, cleanBoardTitle, cleanScore, worldCoordinate } from "./scores.js";
+import { cleanAchievementId, cleanTitle } from "./achievements.js";
 
 export const SIGNER_PROTOCOL = "nswp-signer";
 export const HANDOFF_PROTOCOL = "nswp-handoff";
@@ -175,7 +176,9 @@ export type SignerRequest =
   /** Follow or unfollow one person: the visitor's newest follow list as the world found it (or null), and the one change. */
   | { t: "follow"; id: string; list: unknown; add?: string; remove?: string }
   /** A score on one of a world's boards (NSWP-15; scores.ts). For any world its visitor allowed: less than a note. */
-  | { t: "score"; id: string; world: string; board: string; score: number }
+  | { t: "score"; id: string; world: string; board: string; score: number; /** What the board is called. */ title?: string; /** "time" where the score counts thousandths of a second. */ format?: "time" }
+  /** An achievement held in a world (NSWP-16; achievements.ts). For any world its visitor allowed, as a score is. */
+  | { t: "achieve"; id: string; world: string; achievement: string; title: string }
   // Private messages, for a world let do that by name (NSWP-14; messages.ts).
   /** Write a message to this reader with these words, and seal it to them and to its writer. */
   | { t: "seal"; id: string; to: string; text: string }
@@ -245,7 +248,10 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
     if (add === remove) return null;
     return { t: "follow", id: d.id, list: d.list, ...(add ? { add: d.add as string } : { remove: d.remove as string }) };
   }
-  if (d.t === "score" && worldCoordinate(d.world) && cleanBoard(d.board) && cleanScore(d.score) !== null) return { t: "score", id: d.id, world: worldCoordinate(d.world), board: cleanBoard(d.board), score: cleanScore(d.score)! };
+  if (d.t === "score" && worldCoordinate(d.world) && cleanBoard(d.board) && cleanScore(d.score) !== null) return { t: "score", id: d.id, world: worldCoordinate(d.world), board: cleanBoard(d.board), score: cleanScore(d.score)!, ...(cleanBoardTitle(d.title) ? { title: cleanBoardTitle(d.title) } : {}), ...(d.format === "time" ? { format: "time" as const } : {}) };
+  if (d.t === "achieve" && worldCoordinate(d.world) && cleanAchievementId(d.achievement) && cleanTitle(d.title)) {
+    return { t: "achieve", id: d.id, world: worldCoordinate(d.world), achievement: cleanAchievementId(d.achievement), title: cleanTitle(d.title) };
+  }
   if (d.t === "seal" && typeof d.to === "string" && HEX64.test(d.to) && cleanMessage(d.text)) return { t: "seal", id: d.id, to: d.to, text: cleanMessage(d.text) };
   if (d.t === "unwrap" && d.event && typeof d.event === "object") return { t: "unwrap", id: d.id, event: d.event };
   if (d.t === "reach" && Array.isArray(d.relays) && d.relays.length <= 8 && d.relays.every((r) => typeof r === "string" && r.length <= 200)) return { t: "reach", id: d.id, relays: d.relays as string[] };
