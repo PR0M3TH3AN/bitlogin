@@ -235,11 +235,16 @@ that moved.
   - [ ] **An extension or remote-signer session** still shows the key
     alone: the profile is read by the worker, which holds no session for
     those.
-  - [ ] **Several accounts kept on one device, and a chooser**
-    (`docs/account-switching.md`, not built). Today "Use a different
-    account" signs the first one out.
+  - [x] **Several accounts kept on one device, and a chooser**
+    (`docs/account-switching.md`, "What is built"). In the widget, the
+    sign-in window, and for a site through `switchAccount()`. On `beta`.
+  - [ ] **Try account switching in Firefox and WebKit, and with password
+    accounts.** It was tried in Chromium with passkey accounts.
   - [ ] **A way for a site to draw its own sign-in and account switcher**
-    over BitLogin's client. Asked for by the owner; not designed.
+    over BitLogin's client. `state()`, `onChange()`, `signIn()`,
+    `switchAccount()` and `signOut()` exist; an application's `state()`
+    carries no name or picture (it is not handed the profile), and nothing
+    documents the whole as one interface.
   - [ ] **From the BitPortal session, undecided:** reserved kinds at a
     local development address; a "taken or not" answer to `want`.
 

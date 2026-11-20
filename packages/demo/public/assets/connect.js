@@ -212,13 +212,16 @@ const ask = () => {
  * The optional lock is on, and locked (§SW12): nothing can be handed over until it is opened, with this device's
  * own unlock where that was set up, or the PIN. A wrong try is counted; one too many signs this browser out.
  */
-const unlock = (lock) => {
+const unlock = (lock, then) => {
   status("A site is asking to sign notes as you. This browser is locked.");
   $("unlock").hidden = false;
   const done = async (result) => {
     if (result.ok) {
       $("unlock").hidden = true;
-      return ask();
+      if (then) return then();
+      // Open. Someone is signed in, or nobody is and one of the accounts kept here is to be chosen.
+      who = await readCachedSession();
+      return who ? ask() : choose();
     }
     if (result.removed) {
       $("unlock").hidden = true;
@@ -256,34 +259,108 @@ const signIn = () => {
     widget.remove();
     ask();
   });
-  $("widget-slot").append(widget);
+  // One widget at a time: this can be reached more than once in a window's life.
+  $("widget-slot").replaceChildren(widget);
 };
 
-/**
- * "Use a different account": this browser is signed out of BitLogin as the account shown, and the ordinary
- * sign-in is offered in its place. Nothing is handed to the site. Sites already allowed as the first account stay
- * allowed as it: what they hold is their own.
- */
-const switchAccount = async () => {
-  if (!who || finished) return;
-  $("ask").hidden = true;
-  $("ask-app").hidden = true;
-  status("Signing this browser out of that account.");
-  try {
-    await (await theWorker()).logout();
-  } catch {
-    $(found.wants ? "ask-app" : "ask").hidden = false;
-    return status("That didn't work, and you are still signed in as the account shown.");
-  }
-  worker?.destroy();
-  worker = null;
+/** Start again as whoever is signed in now: after a switch, or a sign-in as another account. */
+const startOver = () => {
   preparing = null;
   profile = null;
   profileLoaded = Promise.resolve();
+};
+
+/**
+ * The account chooser (docs/account-switching.md): the accounts kept signed in on this device, one row each. A
+ * press switches to it, with no password, and the question comes next. "Sign in as another account" leaves
+ * everyone here kept and offers the ordinary sign-in. The site is told nothing by any of this.
+ */
+const choose = async () => {
+  if (finished) return;
+  $("ask").hidden = true;
+  $("ask-app").hidden = true;
+  $("signin").hidden = true;
+  let accounts = [];
+  try {
+    accounts = await (await theWorker()).accounts();
+  } catch {
+    /* no worker: there is nothing to choose from, and sign-in is offered */
+  }
+  if (accounts.length === 0) return addAccount();
+  $("choose-site").textContent = found.site;
+  $("accounts").replaceChildren(
+    ...accounts.map((account) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "connect-account-row";
+      row.dataset.pubkey = account.pubkey;
+      const pic = document.createElement("span");
+      pic.className = "connect-avatar";
+      const letter = () => pic.replaceChildren(document.createTextNode((account.name || "?").trim().slice(0, 1).toUpperCase()));
+      letter();
+      if (account.picture) {
+        const img = new Image();
+        img.alt = "";
+        img.referrerPolicy = "no-referrer";
+        img.onload = () => pic.replaceChildren(img);
+        img.onerror = letter;
+        img.src = account.picture;
+      }
+      const text = document.createElement("span");
+      text.className = "text";
+      const name = document.createElement("strong");
+      name.textContent = account.name || "An account with no name";
+      const key = document.createElement("span");
+      key.className = "connect-key";
+      key.textContent = `${account.npub.slice(0, 14)}…${account.npub.slice(-6)}${account.active ? " · signed in now" : ""}`;
+      text.append(name, key);
+      row.append(pic, text);
+      row.addEventListener("click", () => switchTo(account.pubkey));
+      const item = document.createElement("li");
+      item.append(row);
+      return item;
+    })
+  );
+  status("Choose the account to use at this site.");
+  $("choose").hidden = false;
+};
+
+const switchTo = async (pubkey) => {
+  $("choose").hidden = true;
+  status("Switching.");
+  let result = null;
+  try {
+    result = await (await theWorker()).switchAccount(pubkey);
+  } catch {
+    result = null;
+  }
+  if (result?.locked) {
+    // Kept under the lock: opened first, and then this is done.
+    const lock = await (await theWorker()).lockStatus().catch(() => null);
+    if (lock?.on) return unlock(lock, () => switchTo(pubkey));
+  }
+  if (!result?.pubkey) {
+    status("That account is no longer kept on this device. Choose another, or sign in to it.");
+    return choose();
+  }
+  who = await readCachedSession();
+  startOver();
+  if (!who) return signIn();
+  ask();
+};
+
+/** Sign in as an account that is not kept here. Everyone kept stays kept, and so does the lock. */
+const addAccount = async () => {
+  $("choose").hidden = true;
+  try {
+    await (await theWorker()).addAccount();
+  } catch {
+    return status("That didn't work. Close this window and try again.");
+  }
   who = null;
-  lockOn = false;
+  startOver();
   signIn();
-  status("You are signed out of that account in this browser. Sign in as the one you want to use.");
+  status("Sign in as the account you want to use at this site.");
 };
 
 const allow = async (button, forFamily = false) => {
@@ -326,8 +403,10 @@ $("allow").addEventListener("click", () => allow($("allow")));
 $("allow-family").addEventListener("click", () => allow($("allow-family"), true));
 $("allow-app").addEventListener("click", () => allow($("allow-app")));
 $("deny-app").addEventListener("click", leave);
-$("switch").addEventListener("click", switchAccount);
-$("switch-app").addEventListener("click", switchAccount);
+$("switch").addEventListener("click", choose);
+$("switch-app").addEventListener("click", choose);
+$("add-account").addEventListener("click", addAccount);
+$("deny-3").addEventListener("click", leave);
 $("deny").addEventListener("click", leave);
 $("deny-2").addEventListener("click", leave);
 
@@ -339,10 +418,16 @@ if (!window.opener) {
     status("No BitLogin signer was found in the page that opened this window, so there is nothing to allow. The site may not support this, or your browser kept the two apart.");
   } else {
     who = await readCachedSession();
-    const lock = who ? await (await theWorker()).lockStatus().catch(() => null) : null;
+    const lock = await (await theWorker()).lockStatus().catch(() => null);
     lockOn = lock?.on === true;
-    if (!who) signIn();
-    else if (lock?.locked) unlock(lock);
+    // Asked for the chooser (a site's "switch account"), or more than one account is kept here and this site has
+    // not been allowed before: which one is asked, never assumed.
+    const kept = await (await theWorker()).accounts().catch(() => []);
+    const firstTime = !loadAllowed().some((entry) => entry.site === found.site);
+    const wantsChooser = location.hash === "#switch" || (kept.length > 1 && firstTime);
+    if (lock?.locked) unlock(lock, wantsChooser ? choose : undefined);
+    else if (wantsChooser && kept.length > 0) choose();
+    else if (!who) signIn();
     else ask();
   }
 }

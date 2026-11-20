@@ -21,7 +21,7 @@
 import type { AppPermissions } from "./embedded/permissions.js";
 import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
-import type { LockStatusResult, SignEventPayload } from "./worker/protocol.js";
+import type { KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 
 export interface HeadlessSignerOptions {
@@ -37,6 +37,19 @@ export interface HeadlessSigner {
    *  if nothing is cached (mount `<bitlogin-auth>` so the user can sign in).
    *  Idempotent. */
   restore(): Promise<{ pubkey: string } | null>;
+  /**
+   * The accounts kept signed in on this device (docs/account-switching.md):
+   * public keys, and what their own profiles call them. Nothing secret.
+   */
+  accounts(): Promise<KeptAccountInfo[]>;
+  /**
+   * Switch to one of them: no password, no relay. This signer then holds
+   * its session. `locked` means the optional lock must be opened first
+   * (`lockOpen`); null means it is no longer kept here.
+   */
+  switchAccount(pubkey: string): Promise<{ pubkey: string } | { locked: true } | null>;
+  /** Make room to sign in as another account: nobody is signed in, and everyone kept stays kept. */
+  addAccount(): Promise<void>;
   /** Whether a session is unlocked and ready to sign. */
   isUnlocked(): Promise<boolean>;
   /** The signed-in public key (hex). Rejects if no session is unlocked. */
@@ -175,6 +188,19 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       const res = await client.restoreSession();
       pubkey = res.restored && res.everydayPublicKey ? res.everydayPublicKey : null;
       return pubkey ? { pubkey } : null;
+    },
+    async accounts() {
+      return (await client.accountsList()).accounts;
+    },
+    async switchAccount(to) {
+      const res = await client.accountsSwitch(to);
+      if (res.locked) return { locked: true };
+      pubkey = res.restored && res.everydayPublicKey ? res.everydayPublicKey : null;
+      return pubkey ? { pubkey } : null;
+    },
+    async addAccount() {
+      await client.accountsAdd();
+      pubkey = null;
     },
     async isUnlocked() {
       if (pubkey) return true;

@@ -22,6 +22,12 @@
 .connect-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .connect-link { background: none; border: 0; padding: .2rem 0 0; color: var(--fg); font: inherit; font-size: .9rem; text-decoration: underline; cursor: pointer; }
 .connect-what { margin: 1.2rem 0 0; }
+/* The account chooser (docs/account-switching.md): one row to press per account kept on this device. */
+.connect .connect-accounts { list-style: none; margin: .8rem 0; padding: 0; display: grid; gap: .5rem; }
+.connect-account-row { display: flex; align-items: center; gap: .7rem; width: 100%; text-align: left; padding: .6rem .8rem; border: 1px solid var(--line-strong);
+  border-radius: 10px; background: var(--ink-softer); color: var(--fg); font: inherit; cursor: pointer; }
+.connect-account-row:hover { border-color: var(--fg); }
+.connect-account-row span.text { display: grid; min-width: 0; overflow-wrap: anywhere; }
 #widget-slot { margin: 1rem 0 .4rem; }
 
 /* What an application asks that deserves a second look (docs/sign-in-window.md §SW9.7). */

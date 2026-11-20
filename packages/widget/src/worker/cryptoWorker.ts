@@ -50,7 +50,8 @@ import {
   type NwcCredential
 } from "@bitlogin/core/vault";
 import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
-import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSessionState } from "./sessionCache.js";
+import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSessionState, clearSessionSlot, keptSlot } from "./sessionCache.js";
+import { describe as describeKept, forget as forgetKept, keep as keepKept, loadKept, saveKept } from "./keptAccounts.js";
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { inFamily, readFamily } from "../embedded/family.js";
@@ -104,6 +105,7 @@ import type {
   LoadProfilePayload,
   LockDevicePayload,
   LockOpenPayload,
+  AccountPayload,
   LockPinPayload,
   LockStatusResult,
   RestoreSessionResult,
@@ -246,7 +248,8 @@ async function lockStatus(): Promise<LockStatusResult> {
   if (!record) return { on: false, locked: false, device: false, triesLeft: 0 };
   return {
     on: true,
-    locked: !lockKey && (await cachedSessionState(store)) === "locked",
+    // Locked with nothing in the active slot too, where other accounts are kept: theirs are sealed under it.
+    locked: !lockKey && ((await cachedSessionState(store)) === "locked" || (await loadKept(store)).length > 0),
     device: !!record.device,
     ...(record.device ? { credentialId: record.device.credentialId } : {}),
     triesLeft: Math.max(0, LOCK_LIMITS.tries - record.tries)
@@ -349,8 +352,13 @@ async function persistSession(): Promise<void> {
   // A sign-in made while the lock was on and locked is the way past a forgotten PIN: it turns the lock off.
   // Nothing is lost by that, and nothing is gained by anyone who could not sign in.
   const lock = await readLock(store);
-  if (lock && !lockKey) await removeLock(store);
-  await saveCachedSession(store, {
+  if (lock && !lockKey) {
+    await removeLock(store);
+    // The other accounts kept here were sealed under that lock, and its key is gone with it. They are signed
+    // in to again the ordinary way.
+    await forgetEveryKeptAccount();
+  }
+  const data = {
     everydayPrivateKey: session.everydayPrivateKey,
     accountId: session.accountId,
     recoveryPublicKey: session.recoveryPublicKey,
@@ -359,13 +367,50 @@ async function persistSession(): Promise<void> {
     ...(session.connectionVaultRoot ? { connectionVaultRoot: session.connectionVaultRoot } : {}),
     ...(session.vaultKnown ? { vaultEnabled: session.connectionVaultRoot !== null } : {}),
     everydayKeyDerived: session.everydayKeyDerived
-  }, lock && lockKey ? lockKey : null);
+  };
+  const sealWith = lock && lockKey ? lockKey : null;
+  await saveCachedSession(store, data, sealWith);
+  // And in a slot of its own, so that signing in as another account does not sign this one out of the device
+  // (docs/account-switching.md). The list of them holds nothing secret.
+  const me = getPublicKeyHex(session.everydayPrivateKey);
+  await saveCachedSession(store, data, sealWith, keptSlot(me));
+  const kept = keepKept(await loadKept(store), me, Date.now() / 1000);
+  for (const gone of kept.dropped) await clearSessionSlot(store, keptSlot(gone));
+  await saveKept(store, kept.list);
   await persistPublicSession();
 }
 
-/** Take up the cached session, with the lock key where the lock is on. */
-async function restoreFromCache(): Promise<RestoreSessionResult> {
-  const cached = await loadCachedSession(store, lockKey);
+/** Every kept account but the list itself is a slot: remove them all, and the list. */
+async function forgetEveryKeptAccount(): Promise<void> {
+  for (const account of await loadKept(store)) await clearSessionSlot(store, keptSlot(account.pubkey));
+  await saveKept(store, []);
+}
+
+/**
+ * The lock's key is about to change (turned on, or off): every kept account but the one signed in is sealed
+ * again under the new one. One that can't be read with the old key is forgotten: it could never be opened.
+ */
+async function resealKeptAccounts(oldKey: Uint8Array | null, newKey: Uint8Array | null): Promise<void> {
+  const me = session.everydayPrivateKey ? getPublicKeyHex(session.everydayPrivateKey) : "";
+  let list = await loadKept(store);
+  for (const account of list) {
+    if (account.pubkey === me) continue;
+    const data = await loadCachedSession(store, oldKey, keptSlot(account.pubkey));
+    if (data) {
+      await saveCachedSession(store, data, newKey, keptSlot(account.pubkey));
+      data.everydayPrivateKey.fill(0);
+      data.connectionVaultRoot?.fill(0);
+    } else {
+      await clearSessionSlot(store, keptSlot(account.pubkey));
+      list = forgetKept(list, account.pubkey);
+    }
+  }
+  await saveKept(store, list);
+}
+
+/** Take up the cached session, with the lock key where the lock is on: the active one, or a kept account's. */
+async function restoreFromCache(slot?: string): Promise<RestoreSessionResult> {
+  const cached = await loadCachedSession(store, lockKey, slot);
   if (!cached) return { restored: false };
   clearSession();
   session.signer = new NostrSigner(cached.everydayPrivateKey);
@@ -550,6 +595,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       requireUnlocked();
       if ((await readLock(store)) && !lockKey) throw new Error("Unlock first.");
       const fresh = await setLockPin(store, (payload as LockPinPayload).pin, lockKey ?? undefined);
+      await resealKeptAccounts(lockKey, fresh);
       if (lockKey) wipe(lockKey);
       lockKey = fresh;
       await persistSession();
@@ -579,6 +625,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     case "lockDisable": {
       requireUnlocked();
       if ((await readLock(store)) && !lockKey) throw new Error("Unlock first.");
+      await resealKeptAccounts(lockKey, null);
       await removeLock(store);
       if (lockKey) wipe(lockKey);
       lockKey = null;
@@ -613,6 +660,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         lastUsed = Date.now();
         const restored = await restoreFromCache();
         if (restored.restored) return { ok: true, left: LOCK_LIMITS.tries, removed: false, ...restored };
+        // Nobody is signed in, and other accounts are kept under this lock: it is open, for one to be chosen.
+        if ((await cachedSessionState(store)) === "none" && (await loadKept(store)).length > 0) return { ok: true, left: LOCK_LIMITS.tries, removed: false, restored: false };
         // The lock opened and there was nothing behind it that could be read: there is no lock to keep.
         await removeLock(store);
         lockNow();
@@ -620,6 +669,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       }
       if (result.removed) {
         lockNow();
+        await forgetEveryKeptAccount();
         await clearCachedSession(store);
         await clearPublicSession(store);
       }
@@ -821,6 +871,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         // Still the same session: a sign-out while relays were answering must not leave any of it behind.
         if (session.signer !== signer) return {};
         session.profile = profiles ? newestProfile(profiles.outcomes.flatMap((outcome) => outcome.events), me) : null;
+        // What the chooser calls this account: as its own profile has it, when last read.
+        if (session.profile && !session.signerOnly) await saveKept(store, describeKept(await loadKept(store), me, session.profile));
         session.relays = writeRelaysFrom(lists.outcomes.flatMap((outcome) => outcome.events), me);
       } finally {
         pool.closeAll();
@@ -1409,11 +1461,73 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       return restoreFromCache();
     }
 
+    // Log out: this account is forgotten on this device. Other accounts kept here stay, and so does the lock
+    // they are sealed under; with none left, everything goes as it always did.
     case "logout": {
+      const me = session.everydayPrivateKey && !session.signerOnly ? getPublicKeyHex(session.everydayPrivateKey) : "";
+      const others = forgetKept(await loadKept(store), me);
+      if (me) await clearSessionSlot(store, keptSlot(me));
+      if (others.length > 0 && me) {
+        await saveKept(store, others);
+        clearSession();
+        await clearSessionSlot(store);
+        await clearPublicSession(store);
+        return {};
+      }
       lockNow();
       await removeLock(store);
+      await forgetEveryKeptAccount();
       await clearCachedSession(store);
       await clearPublicSession(store);
+      return {};
+    }
+
+    // ---- Several accounts on one device (docs/account-switching.md) ----
+
+    // Who is kept here, and which of them is signed in. Public keys and what their own profiles call them.
+    case "accountsList": {
+      const active = session.everydayPrivateKey && !session.signerOnly ? getPublicKeyHex(session.everydayPrivateKey) : "";
+      return { accounts: (await loadKept(store)).map((account) => ({ ...account, active: account.pubkey === active })) };
+    }
+
+    // Switch to a kept account: its own slot is opened, on this device, with no password and no relay. With the
+    // lock on and locked, it says so, and nothing changes.
+    case "accountsSwitch": {
+      if (session.signerOnly) throw new Error("A signer-only session cannot switch accounts.");
+      const pubkey = String((payload as AccountPayload).pubkey ?? "");
+      const list = await loadKept(store);
+      if (!list.some((account) => account.pubkey === pubkey)) return { restored: false };
+      if (!lockKey && (await cachedSessionState(store, keptSlot(pubkey))) === "locked") return { restored: false, locked: true };
+      const restored = await restoreFromCache(keptSlot(pubkey));
+      if (!restored.restored || restored.everydayPublicKey !== pubkey) {
+        // Unreadable, or not the account it was filed as: it is forgotten, and signed in to again the ordinary way.
+        clearSession();
+        await clearSessionSlot(store, keptSlot(pubkey));
+        await saveKept(store, forgetKept(list, pubkey));
+        await clearSessionSlot(store);
+        await clearPublicSession(store);
+        return { restored: false };
+      }
+      await persistSession();
+      return restored;
+    }
+
+    // Make room to sign in as another account: nobody is signed in, and everyone kept stays kept.
+    case "accountsAdd": {
+      if (session.signerOnly) throw new Error("A signer-only session cannot add accounts.");
+      clearSession();
+      await clearSessionSlot(store);
+      await clearPublicSession(store);
+      return {};
+    }
+
+    // Forget one kept account that is not the one signed in. (For that one: log out.)
+    case "accountsRemove": {
+      const pubkey = String((payload as AccountPayload).pubkey ?? "");
+      const active = session.everydayPrivateKey && !session.signerOnly ? getPublicKeyHex(session.everydayPrivateKey) : "";
+      if (pubkey === active) throw new Error("Log out to remove the account that is signed in.");
+      await clearSessionSlot(store, keptSlot(pubkey));
+      await saveKept(store, forgetKept(await loadKept(store), pubkey));
       return {};
     }
 
@@ -1582,7 +1696,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "handoffBegin", "handoffExport", "handoffAccept",
   "signerKeep", "signerRestore", "signerTouch", "signerForget",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass",
-  "takeBack", "signerCheck",
+  "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",

@@ -330,6 +330,22 @@ export interface LockOpenResult extends RestoreSessionResult {
   removed: boolean;
 }
 
+/** One of the accounts kept signed in on this device (docs/account-switching.md). */
+export interface KeptAccountInfo {
+  pubkey: string;
+  npub: string;
+  name?: string;
+  picture?: string;
+  about?: string;
+  at: number;
+  /** The one signed in now. */
+  active: boolean;
+}
+
+export interface AccountPayload {
+  pubkey: string;
+}
+
 export interface RestoreSessionResult {
   restored: boolean;
   /** A session is cached but sealed under the lock: ask for the PIN or the device, then `lockOpen`. */
@@ -480,6 +496,10 @@ export type WorkerActionMap = {
   loadProfile: [LoadProfilePayload, { profile?: Profile; relays?: string[] }];
   takeBack: [TakeBackPayload, TakeBackResult];
   signerCheck: [SignerSitePayload, SignerCheckResult];
+  accountsList: [Record<string, never>, { accounts: KeptAccountInfo[] }];
+  accountsSwitch: [AccountPayload, RestoreSessionResult];
+  accountsAdd: [Record<string, never>, Record<string, never>];
+  accountsRemove: [AccountPayload, Record<string, never>];
   lockStatus: [Record<string, never>, LockStatusResult];
   lockEnable: [LockPinPayload, LockStatusResult];
   lockSetDevice: [LockDevicePayload, LockStatusResult];

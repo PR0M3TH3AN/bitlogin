@@ -965,14 +965,20 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(await fourth.locator("#family").isVisible()).toBe(false);
         expect(await fourth.locator("#allow-family").isVisible()).toBe(false);
         expect(await fourth.locator("#allow").textContent()).toBe("Allow");
-        // "Use a different account": this browser is signed out of BitLogin as that account, the ordinary sign-in
-        // is offered, and nothing is handed to the site.
+        // "Use a different account" opens the chooser: the accounts kept on this device, and a way to sign in as
+        // one that is not. Signing in as another leaves the first kept, and hands nothing to the site.
         await fourth.locator("#switch").click();
-        await fourth.locator("#signin").waitFor({ state: "visible", timeout: 30_000 });
+        await fourth.locator("#choose").waitFor({ state: "visible", timeout: 30_000 });
         expect(await fourth.locator("#ask").isVisible()).toBe(false);
-        expect(await fourth.locator("#status").textContent()).toContain("signed out of that account");
+        expect(await fourth.locator("#accounts .connect-account-row").count()).toBe(1);
+        expect(await fourth.locator(`#accounts [data-pubkey="${me}"]`).count()).toBe(1);
+        await fourth.locator("#add-account").click();
+        await fourth.locator("#signin").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await fourth.locator("#choose").isVisible()).toBe(false);
         expect(await fourth.locator("#widget-slot bitlogin-auth").count()).toBe(1);
+        // Nobody is signed in at the sign-in address now, and the first account is offered by name to come back to.
         expect(await fourth.evaluate(() => (window as any).bitlogin.readCachedSession())).toBeNull();
+        await fourth.locator(`#widget-slot bitlogin-auth [data-continue-as] [data-account="${me}"]`).waitFor({ timeout: 30_000 });
         expect(await four.ask({ t: "state" })).toMatchObject({ unlocked: false });
         // A site allowed as the first account stays allowed as it: what it holds is its own.
         expect(await one.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me });
@@ -989,6 +995,200 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       }
     },
     240_000
+  );
+
+  it(
+    "several accounts are kept on one device, and switched between with no password (account-switching.md)",
+    async () => {
+      const sitePage = `<!doctype html><meta charset="utf-8"><title>a site that asks</title><button id="open">Sign in</button><button id="switch">Switch</button>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  document.getElementById("open").onclick = () => { window.open(SIGNIN + "/connect/index.html", "bitlogin-connect", "popup,width=460,height=660"); };
+  document.getElementById("switch").onclick = () => { window.open(SIGNIN + "/connect/index.html#switch", "bitlogin-connect", "popup,width=460,height=660"); };
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const asking = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(sitePage);
+      });
+      await new Promise<void>((resolve) => asking.listen(0, "127.0.0.1", () => resolve()));
+      const askingAddress = asking.address();
+      const site = `http://127.0.0.1:${typeof askingAddress === "object" && askingAddress ? askingAddress.port : 0}`;
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        const account = await context.newPage();
+        const cdp = await context.newCDPSession(account);
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        const signedInAs = async () => (await account.evaluate(() => window.bitlogin?.activeSession()))?.publicKey ?? null;
+        /** A new account, with a new passkey, from the welcome screen. */
+        const create = async () => {
+          await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+          if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+          await widget.locator('[data-action="goto-passkey"]').click();
+          await widget.locator('[data-action="passkey-register"]').click();
+          await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+          await widget.locator('[data-action="passkey-new"]').click();
+          await completeRecoveryCeremony(widget);
+          await widget.locator(".who .pubkey").waitFor({ timeout: 60_000 });
+          return (await signedInAs())!;
+        };
+
+        // The first account. With one account here, the signed-in view offers to add another.
+        const first = await create();
+        await widget.locator('[data-action="goto-accounts"]', { hasText: "Add another account" }).waitFor({ timeout: 30_000 });
+        const events: string[] = [];
+        await account.exposeFunction("noteEvent", (name: string) => void events.push(name));
+        await account.evaluate(() => {
+          const el = document.querySelector("bitlogin-auth")!;
+          el.addEventListener("bitlogin-login", () => (window as any).noteEvent("login"));
+          el.addEventListener("bitlogin-logout", () => (window as any).noteEvent("logout"));
+        });
+        await widget.locator('[data-action="goto-accounts"]').click();
+        expect(await widget.locator(".account-row").count()).toBe(1);
+        await widget.locator('[data-action="account-add"]').click();
+        // Nobody is signed in, the host was told, and the first account is still kept: it is offered by name.
+        await widget.locator("[data-continue-as] .account-row").waitFor({ timeout: 30_000 });
+        expect(await signedInAs()).toBeNull();
+        expect(await account.evaluate(() => (window as any).bitlogin.readCachedSession())).toBeNull();
+        expect(events).toEqual(["logout"]);
+        expect(await widget.locator(`[data-continue-as] [data-account="${first}"]`).count()).toBe(1);
+
+        // The second account, made the ordinary way. Both are kept now.
+        const second = await create();
+        expect(second).not.toBe(first);
+        await widget.locator('[data-action="goto-accounts"]', { hasText: "Switch account" }).waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="goto-accounts"]').click();
+        expect(await widget.locator(".account-row").count()).toBe(2);
+        expect(await widget.locator(`.account-row.current[data-account="${second}"]`).count()).toBe(1);
+
+        // Switch back to the first: one press, nothing typed, no passkey asked for.
+        events.length = 0;
+        await widget.locator(`button.account-row[data-account="${first}"]`).click();
+        await widget.locator(".who .pubkey", { hasText: encodeNpub(first) }).waitFor({ timeout: 30_000 });
+        expect(await signedInAs()).toBe(first);
+        expect(events).toEqual(["logout", "login"]);
+        expect((await account.evaluate(() => (window as any).bitlogin.readCachedSession())).pubkey).toBe(first);
+        // It signs as the account it says it is.
+        const signed = await account.evaluate(() => (window as any).nostr.signEvent({ kind: 1, created_at: 1, tags: [], content: "as the first" }));
+        expect(signed.pubkey).toBe(first);
+        expect(verifyNostrEvent(signed)).toBe(true);
+        // Loaded again, it is still the one last switched to, and both are still kept.
+        await account.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator(".who .pubkey", { hasText: encodeNpub(first) }).waitFor({ timeout: 30_000 });
+        // Nothing kept for either is the key in the clear.
+        const stored = await account.evaluate(async () => {
+          const db = await new Promise<IDBDatabase>((resolve, reject) => {
+            const open = indexedDB.open("bitlogin");
+            open.onsuccess = () => resolve(open.result);
+            open.onerror = () => reject(open.error);
+          });
+          const out: string[] = [];
+          for (const name of Array.from(db.objectStoreNames)) {
+            const all = await new Promise<unknown[]>((resolve) => {
+              const req = db.transaction(name).objectStore(name).getAll();
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => resolve([]);
+            });
+            out.push(JSON.stringify(all.map((v) => (typeof v === "string" ? v : String(v)))));
+          }
+          return out.join("");
+        });
+        expect(stored).not.toMatch(/everydayPrivateKeyHex|nsec1/u);
+
+        // A site asks, for the first time, with two accounts kept here: the window asks which, and assumes neither.
+        const page = await context.newPage();
+        await page.goto(`${site}/`);
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+        const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await popup.locator("#choose").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await popup.locator("#ask").isVisible()).toBe(false);
+        expect(await popup.locator("#choose-site").textContent()).toBe(site);
+        expect(await popup.locator("#accounts .connect-account-row").count()).toBe(2);
+        // The site has been told nothing.
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+        await popup.locator(`#accounts [data-pubkey="${second}"]`).click();
+        await popup.locator("#ask").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await popup.locator("#who-key").textContent()).toBe(encodeNpub(second));
+        await popup.waitForTimeout(1000);
+        await popup.locator("#allow").click();
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: second });
+        if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 10_000 }).catch(() => popup.close());
+
+        // The site's own "switch account": the window opens at the chooser, and the site is then the other one.
+        const [switching] = await Promise.all([context.waitForEvent("page"), page.click("#switch")]);
+        await switching.locator("#choose").waitFor({ state: "visible", timeout: 30_000 });
+        await switching.locator(`#accounts [data-pubkey="${first}"]`).click();
+        await switching.locator("#ask").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await switching.locator("#who-key").textContent()).toBe(encodeNpub(first));
+        await switching.waitForTimeout(1000);
+        await switching.locator("#allow").click();
+        await page.waitForFunction((pk) => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.pubkey === pk), first, { timeout: 30_000 });
+        const note = await ask({ t: "sign", event: { kind: 1, content: "as the first, at a site", tags: [] } });
+        expect(note.event.pubkey).toBe(first);
+        if (!switching.isClosed()) await switching.waitForEvent("close", { timeout: 10_000 }).catch(() => switching.close());
+
+        // The lock covers every account kept here. Turned on as one, it seals the other too: after "Lock now",
+        // switching to the other asks for the PIN, and then opens it.
+        await account.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator(".who .pubkey", { hasText: encodeNpub(first) }).waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="goto-lock-settings"]').click();
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill("246810");
+        await widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill("246810");
+        await widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        await widget.locator('[data-action="lock-off"]').waitFor({ timeout: 60_000 });
+        await widget.locator('[data-action="goto-dashboard"]').click();
+        await widget.locator('[data-action="lock-now"]').click();
+        await widget.locator('form[data-form="lock-open"]').waitFor({ timeout: 30_000 });
+        expect(await signedInAs()).toBeNull();
+        await widget.locator('form[data-form="lock-open"] input[name="lockPin"]').fill("246810");
+        await widget.locator('form[data-form="lock-open"] button[type="submit"]').click();
+        await widget.locator(".who .pubkey", { hasText: encodeNpub(first) }).waitFor({ timeout: 60_000 });
+        await widget.locator('[data-action="goto-accounts"]').click();
+        await widget.locator(`button.account-row[data-account="${second}"]`).click();
+        await widget.locator(".who .pubkey", { hasText: encodeNpub(second) }).waitFor({ timeout: 30_000 });
+        expect(await signedInAs()).toBe(second);
+
+        // Log out forgets the account that is signed in, on this device, and leaves the other: it is offered.
+        await widget.locator('[data-action="logout"]').click();
+        await widget.locator("[data-continue-as] .account-row").waitFor({ timeout: 30_000 });
+        expect(await widget.locator("[data-continue-as] .account-row").count()).toBe(1);
+        expect(await widget.locator(`[data-continue-as] [data-account="${first}"]`).count()).toBe(1);
+        await widget.locator(`[data-continue-as] [data-account="${first}"]`).click();
+        await widget.locator(".who .pubkey", { hasText: encodeNpub(first) }).waitFor({ timeout: 60_000 });
+        expect(await signedInAs()).toBe(first);
+        // The last one logged out of leaves nothing kept.
+        await widget.locator('[data-action="logout"]').click();
+        await widget.locator('[data-action="goto-login"]').waitFor({ timeout: 30_000 });
+        await account.waitForTimeout(500);
+        expect(await widget.locator("[data-continue-as]").count()).toBe(0);
+        await account.reload({ waitUntil: "domcontentloaded" });
+        await widget.locator('[data-action="goto-login"]').waitFor({ timeout: 30_000 });
+        expect(await widget.locator("[data-continue-as]").count()).toBe(0);
+        expect(await signedInAs()).toBeNull();
+      } finally {
+        await browser.close();
+        asking.close();
+      }
+    },
+    300_000
   );
 
   it(

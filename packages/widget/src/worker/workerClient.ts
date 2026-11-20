@@ -230,6 +230,18 @@ export class WorkerClient {
   loadProfile(payload: LoadProfilePayload = {}) {
     return this.call("loadProfile", payload);
   }
+  accountsList() {
+    return this.call("accountsList", {});
+  }
+  accountsSwitch(pubkey: string) {
+    return this.call("accountsSwitch", { pubkey });
+  }
+  accountsAdd() {
+    return this.call("accountsAdd", {});
+  }
+  accountsRemove(pubkey: string) {
+    return this.call("accountsRemove", { pubkey });
+  }
   takeBack(payload: TakeBackPayload) {
     return this.call("takeBack", payload);
   }

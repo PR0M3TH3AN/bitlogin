@@ -8,6 +8,23 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **Several accounts can be kept signed in on one device, and switched
+  between with one press** (`docs/account-switching.md`, "What is built").
+  Signing in as another account no longer signs the first one out. The
+  signed-in view has "Switch account"; the welcome screen offers "Continue
+  as"; the sign-in window has a chooser, and asks which account when more
+  than one is kept and a site asks for the first time.
+- **Log out now forgets only the account that is signed in.** Other
+  accounts kept on the device stay, and so does the lock they are under.
+- **New for a site:** `switchAccount()` on `createBitLoginClient` opens
+  the window at its chooser (`/connect/#switch`). The site never sees the
+  list of accounts.
+- **New on the headless signer:** `accounts()`, `switchAccount(pubkey)`,
+  `addAccount()`. New on `<bitlogin-auth>`: `switchAccount(pubkey)`.
+- **For a site with its own vendored copy:** new storage keys
+  `bitlogin:kept-session:v1:<pubkey>` and `bitlogin:kept-accounts:v1`,
+  beside the session the widget already kept. Nothing is migrated: an
+  account is kept from its next sign-in or page load.
 - **The widget's signed-in view shows who is signed in:** a picture, the
   name from the account's own signed profile, the line about them and the
   whole npub, where it showed the key alone. So does the sites page. For a
