@@ -8,6 +8,26 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **A site that asks for more than it may have is told so, and so is the
+  user** (`docs/sign-in-window.md` §SW9.3a). The window's plain question
+  now carries a line saying more was asked and will not be given. The
+  answer to `want` carries `taken`; `createBitLoginClient` gives it as
+  `state().canAsk`.
+- **At a local copy of BitLogin, a local site may hold the reserved
+  kinds** (27300, 27302, 27303), so an application that uses them can be
+  tried before it is live. The window says so. BitLogin's real address is
+  unchanged.
+- **A recovery phrase typed with a capital letter is accepted.** It was
+  refused as "not a valid phrase", and a phone capitalises the first word
+  of a field. Every word in the list is in small letters, so no account
+  was ever made from a capitalised phrase and none changes.
+- **"Restore from an export file"** under "More sign-in options": either
+  file that Export identity makes is read and taken to the step that uses
+  it. The recovery export (`.json`) goes to the recovery phrase with the
+  file already loaded; the key file (`.txt`) goes to "Import a Nostr key"
+  with the key already checked. Before, the recovery export could only be
+  given as an optional extra under "Recover account", and the key file
+  could not be loaded at all.
 - **Five things for applications that sign through the window**
   (`docs/sign-in-window.md` §SW9.4 to §SW9.6), after the BitPortal session
   moved its sign-in to it:

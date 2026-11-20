@@ -251,10 +251,19 @@ that moved.
     `state` from the live signer at two world addresses, as Chromium does.
     Not tried: Shields set to aggressive, or cookies blocked. The signer
     now loads itself again once if a file fails to arrive.
+  - [x] **Every way in and every way back, walked in a browser**
+    (2026-11-20): an account BitLogin made and an imported key, each
+    restored on a fresh device by login name and password, by pasted key,
+    by phrase, by phrase with the recovery export, by key file, and (the
+    made one) by phrase alone with every relay emptied. Kept as a test.
+    Found and fixed on the way: a phrase with a capital in it was refused.
+    Chromium only, against the mock relays.
   - [ ] **The password-form test in WebKit fails about one run in several**
     and passes alone. Cause not found.
-  - [ ] **From the BitPortal session, undecided:** reserved kinds at a
-    local development address; a "taken or not" answer to `want`.
+  - [x] **From the BitPortal session, decided by the owner 2026-11-20:**
+    reserved kinds at a local address where BitLogin is itself local; a
+    "taken or not" answer to `want`; and a line in the window when a site
+    asked for more than it may have (§SW9.3a). On `beta`.
 
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound

@@ -12,7 +12,9 @@ import {
   RESERVED_KINDS,
   NEVER_FOR_APPS,
   prepareForApp,
+  isLocalAddress,
   readPeerFor,
+  reservedKindsFor,
   readPeersFor,
   readPermissions,
   type AppPermissions
@@ -260,6 +262,61 @@ describe("a world grant keeps the world it is for (NSWP kind 27303)", () => {
     // The signer's own mark can never be written by the application, in a grant or anywhere.
     const marked = prepareForApp(portal, { ...grant([["nswp:world", "https://garden.example"]]), tags: [...grant([["nswp:world", "https://garden.example"]]).tags, [APP_SITE_TAG, "https://evil.example"]] }, PORTAL, NOW);
     expect(marked!.tags.filter((t) => t[0] === APP_SITE_TAG)).toEqual([[APP_SITE_TAG, PORTAL]]);
+  });
+});
+
+describe("reserved kinds at a local address (a developer's own copy of BitLogin)", () => {
+  const REAL = "https://bitlogin.network";
+  const LOCAL_SIGNIN = "https://192.168.68.84:4311";
+  const LOCAL_SITE = "https://192.168.68.84:4300";
+
+  it("knows this machine and this network from the internet, whatever a name is made to look like", () => {
+    for (const local of ["http://localhost:4300", "https://app.localhost", "http://127.0.0.1:8080", "http://127.9.9.9", "http://[::1]:4300", "https://10.0.0.5", "https://172.16.0.1", "https://172.31.255.255", LOCAL_SITE]) {
+      expect(isLocalAddress(local), local).toBe(true);
+    }
+    for (const not of [
+      "https://portal.bitblocks.network",
+      "https://192.168.68.84.evil.example",
+      "https://127.0.0.1.nip.io",
+      "https://localhost.evil.example",
+      "https://notlocalhost",
+      "https://172.15.0.1",
+      "https://172.32.0.1",
+      "https://11.0.0.1",
+      "https://192.169.0.1",
+      "https://999.1.1.1",
+      "ftp://localhost",
+      "localhost",
+      "",
+      null,
+      7
+    ]) {
+      expect(isLocalAddress(not), String(not)).toBe(false);
+    }
+  });
+
+  it("at BitLogin's real address they are the named site's and nobody else's, local or not", () => {
+    expect(reservedKindsFor("https://portal.bitblocks.network", REAL)).toEqual([27300, 27302, 27303]);
+    expect(reservedKindsFor(LOCAL_SITE, REAL)).toEqual([]);
+    expect(reservedKindsFor("http://localhost:4300", REAL)).toEqual([]);
+    expect(reservedKindsFor("https://evil.example", REAL)).toEqual([]);
+    // With no address at all (a test, a script): the same.
+    expect(reservedKindsFor(LOCAL_SITE, "")).toEqual([]);
+  });
+
+  it("at a local copy, a local site may hold them, and a site on the internet still may not", () => {
+    expect(reservedKindsFor(LOCAL_SITE, LOCAL_SIGNIN)).toEqual([27300, 27302, 27303]);
+    expect(reservedKindsFor("http://localhost:4300", "http://localhost:4311")).toEqual([27300, 27302, 27303]);
+    expect(reservedKindsFor("https://evil.example", LOCAL_SIGNIN)).toEqual([]);
+    expect(reservedKindsFor("https://192.168.68.84.evil.example", LOCAL_SIGNIN)).toEqual([]);
+    // A named site keeps exactly what it was given, wherever BitLogin runs.
+    expect(reservedKindsFor("https://bitvid.network", LOCAL_SIGNIN)).toEqual([]);
+  });
+
+  it("where this code runs with no address of its own, as here, nothing local is assumed", () => {
+    const set = readPermissions({ name: "Local", sign: [1, 27300] })!;
+    expect(mayHold(LOCAL_SITE, set)).toBe(false);
+    expect(prepareForApp(set, { kind: 27300, content: "", tags: [] }, LOCAL_SITE, NOW)).toBeNull();
   });
 });
 

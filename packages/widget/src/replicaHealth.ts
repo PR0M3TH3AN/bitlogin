@@ -165,7 +165,8 @@ export function buildKeyBackupText(params: { npub: string; nsec: string; created
     "",
     "This key is the identity itself. If relays ever drop your BitLogin account,",
     "your recovery phrase alone cannot bring it back, but this key can: choose",
-    '"Import a Nostr key" under "More sign-in options", or use it in any Nostr app.',
+    '"Restore from an export file" under "More sign-in options" and pick this file,',
+    'or paste the key under "Import a Nostr key", or use it in any Nostr app.',
     ""
   ].join("\n");
 }

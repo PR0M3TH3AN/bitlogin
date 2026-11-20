@@ -12,7 +12,7 @@
  */
 import type { HeadlessSigner } from "../headless.js";
 import { handoffMessage, readHandoffMessage } from "./policy.js";
-import { describePermissions, knownAppName, mayHold, type AppPermissions, type PermissionWords } from "./permissions.js";
+import { describePermissions, heldAsLocal, knownAppName, mayHold, RESERVED_KINDS, type AppPermissions, type PermissionWords } from "./permissions.js";
 import { familyDomain, inFamily, knownFamily } from "./family.js";
 import { familyOf } from "./publicSuffix.js";
 
@@ -48,6 +48,18 @@ export interface FoundSigner {
   readonly family: string;
   /** Whether BitLogin knows that family: then it is kept thirty days, and otherwise seven. */
   readonly knownFamily: boolean;
+  /**
+   * The site asked for more than a note and a reaction, and may not have it
+   * at this address: so `wants` is null, and what Allow gives is the plain
+   * grant. Say so on the page, or the user is shown a smaller question than
+   * the one the site asked with no word of it.
+   */
+  readonly turnedDown: boolean;
+  /**
+   * `wants` includes kinds reserved to a named address, held here only
+   * because this BitLogin and the site are both local copies. Say so.
+   */
+  readonly local: boolean;
 }
 
 export interface FindSignerOptions {
@@ -103,6 +115,7 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       const { world, recipient } = msg;
       // Checked again here, on the page that shows it: a set this site may not hold is no request at all.
       const wants = msg.wants && mayHold(world, msg.wants) ? msg.wants : null;
+      const turnedDown = msg.turnedDown === true || (!!msg.wants && !wants);
       const family = wants ? "" : familyOf(world);
       resolve({
         site: world,
@@ -110,6 +123,8 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
         known: knownAppName(world) !== null,
         family,
         knownFamily: family ? knownFamily(family) : false,
+        turnedDown,
+        local: !!wants && heldAsLocal(world) && [...wants.sign, ...wants.read].some((kind) => RESERVED_KINDS.includes(kind)),
         async grant(session, name, remember, forFamily) {
           // What is sealed is exactly what this page was given to show: the set, for the site the browser named,
           // and its family only where the user chose that, with "remember" left on.

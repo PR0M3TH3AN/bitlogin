@@ -15,7 +15,8 @@
  */
 import { createServer, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -1237,6 +1238,568 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
+    "a file saved from Export identity is taken back in by \"Restore from an export file\"",
+    async () => {
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext({ acceptDownloads: true });
+        const account = await context.newPage();
+        const cdp = await context.newCDPSession(account);
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="toggle-more"]').click();
+        // The way back in is offered beside the other ways to sign in.
+        expect(await widget.locator('[data-action="goto-restore-file"]').count()).toBe(1);
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".who .pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        // Both files, saved the ordinary way from Export identity.
+        await widget.locator('[data-action="goto-export"]').first().click();
+        const [exportDownload] = await Promise.all([account.waitForEvent("download"), widget.locator('[data-action="download-recovery-export"]').click()]);
+        expect(exportDownload.suggestedFilename()).toBe("bitlogin-recovery-export.json");
+        const exportPath = await exportDownload.path();
+        await widget.locator('[data-action="reveal-nsec"]').click();
+        await widget.locator('[data-action="download-key-backup"]').waitFor({ timeout: 30_000 });
+        const [keyDownload] = await Promise.all([account.waitForEvent("download"), widget.locator('[data-action="download-key-backup"]').click()]);
+        expect(keyDownload.suggestedFilename()).toBe("bitlogin-private-key.txt");
+        const keyPath = await keyDownload.path();
+        // The screen says how each is brought back.
+        expect(await widget.evaluate((el) => el.shadowRoot!.textContent)).toContain("Restore from an export file");
+
+        await widget.locator('[data-action="goto-dashboard"]').click();
+        await widget.locator('[data-action="logout"]').click();
+        await widget.locator('[data-action="goto-login"]').waitFor({ timeout: 30_000 });
+        const openRestore = async () => {
+          if ((await widget.locator('[data-action="goto-restore-file"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+          await widget.locator('[data-action="goto-restore-file"]').click();
+          await widget.locator('input[name="restoreFile"]').waitFor({ timeout: 30_000 });
+        };
+
+        // The recovery export: it is read, and the recovery phrase is asked for, with the file already loaded.
+        await openRestore();
+        await widget.locator('input[name="restoreFile"]').setInputFiles(exportPath);
+        await widget.locator('form[data-form="recover-phrase"]').waitFor({ timeout: 30_000 });
+        expect(await widget.locator(".notice.info").textContent()).toContain("Loaded recovery export");
+        // The file alone restores nothing: nobody is signed in.
+        expect(await account.evaluate(() => window.bitlogin?.activeSession() ?? null)).toBeNull();
+
+        // The key file: the identity it holds is shown, and it is the account's own, before anything is made.
+        await widget.locator('[data-action="goto-welcome"]').first().click();
+        await openRestore();
+        await widget.locator('input[name="restoreFile"]').setInputFiles(keyPath);
+        await widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
+        expect((await widget.locator(".credential-box").textContent())?.trim()).toBe(encodeNpub(me));
+        // The key itself is not put on the page.
+        expect(await widget.evaluate((el) => el.shadowRoot!.innerHTML)).not.toMatch(/nsec1[a-z0-9]{20,}/u);
+        expect(await account.evaluate(() => window.bitlogin?.activeSession() ?? null)).toBeNull();
+
+        // A file that is neither is refused, in words, and nothing happens.
+        await widget.locator('[data-action="goto-welcome"]').first().click();
+        await openRestore();
+        await widget.locator('input[name="restoreFile"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("shopping list") });
+        await widget.locator(".notice.error", { hasText: "not a file BitLogin" }).waitFor({ timeout: 30_000 });
+        expect(await widget.locator('input[name="restoreFile"]').count()).toBe(1);
+      } finally {
+        await browser.close();
+      }
+    },
+    180_000
+  );
+
+  it(
+    "every way in and every way back: a created account and an imported key, restored by password, phrase, key and file",
+    async () => {
+      const browser = await playwright!.chromium.launch();
+      const tag = getPublicKeyHex(generatePrivateKey()).slice(0, 6);
+      /** A device that has never seen the account: its own storage, nothing kept. */
+      const device = async () => {
+        const context = await browser.newContext({ acceptDownloads: true });
+        const page = await context.newPage();
+        await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = page.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        const more = async (action: string) => {
+          if ((await widget.locator(`[data-action="${action}"]`).count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+          await widget.locator(`[data-action="${action}"]`).click();
+        };
+        const who = async () => (await page.evaluate(() => window.bitlogin?.activeSession() ?? null))?.publicKey ?? null;
+        const signedIn = async () => {
+          await widget.locator(".who .pubkey").waitFor({ timeout: 90_000 });
+          return (await who())!;
+        };
+        const error = () => widget.locator(".notice.error").first();
+        let lastError = "";
+        /** The name, the generated password, and the rest of setting an account up. For an imported key, the key step too. */
+        const setUp = async (name: string, imported: boolean) => {
+          await widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(name);
+          await widget.locator('form[data-form="create-name"] button[type="submit"]').click();
+          await widget.locator("#credential-box").waitFor({ timeout: 30_000 });
+          const password = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          await widget.locator("#saved-check").check();
+          await widget.locator('form[data-form="create-credential"] button[type="submit"]').click();
+          const phrase = (await completeRecoveryCeremony(widget)).join(" ");
+          if (imported) {
+            await widget.locator("#key-saved-check").waitFor({ timeout: 60_000 });
+            await widget.locator("#key-saved-check").check();
+            await widget.locator('form[data-form="save-key"] button[type="submit"]').click();
+          }
+          return { name, password, phrase, pubkey: await signedIn() };
+        };
+        const create = async (name: string) => {
+          await widget.locator('[data-action="goto-create"]').click();
+          return setUp(name, false);
+        };
+        const importKey = async (key: string, name: string) => {
+          await more("goto-import");
+          await widget.locator('form[data-form="import-key"] input[name="importKey"]').fill(key);
+          await widget.locator('form[data-form="import-key"] button[type="submit"]').click();
+          await widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
+          const shown = ((await widget.locator(".credential-box").textContent()) ?? "").trim();
+          await widget.locator('[data-action="import-continue"]').click();
+          return { shown, ...(await setUp(name, true)) };
+        };
+        const login = async (name: string, password: string) => {
+          await widget.locator('[data-action="goto-login"]').click();
+          await widget.locator('form[data-form="login"] input[name="loginName"]').fill(name);
+          await widget.locator('form[data-form="login"] input[name="password"]').fill(password);
+          await widget.locator('form[data-form="login"] button[type="submit"]').click();
+        };
+        /** Enter the phrase, with the recovery export where one is given. Says which step came next. */
+        const recover = async (phrase: string, exportPath?: string): Promise<"found" | "rebuild" | "error"> => {
+          await more("goto-recover");
+          await widget.locator('form[data-form="recover-phrase"] input[name="phrase"]').fill(phrase);
+          if (exportPath) {
+            await widget.locator('input[name="offlineExportFile"]').setInputFiles(exportPath);
+            await widget.locator(".notice.info", { hasText: "Loaded recovery export" }).waitFor({ timeout: 30_000 });
+            await widget.locator('form[data-form="recover-phrase"] input[name="phrase"]').fill(phrase);
+          }
+          await widget.locator('form[data-form="recover-phrase"] button[type="submit"]').click();
+          const next = await Promise.race([
+            widget.locator('form[data-form="recover-new-credentials"]').waitFor({ timeout: 90_000 }).then(() => "found" as const),
+            widget.locator('[data-action="rebuild-confirm"]').waitFor({ timeout: 90_000 }).then(() => "rebuild" as const),
+            error().waitFor({ timeout: 90_000 }).then(() => "error" as const)
+          ]);
+          if (next === "error") lastError = ((await error().textContent()) ?? "").trim();
+          return next;
+        };
+        /** After the phrase was accepted: a new login name, the new generated password, and in. */
+        const finishRecovery = async (name: string) => {
+          await widget.locator('form[data-form="recover-new-credentials"] input[name="newLoginName"]').fill(name);
+          const password = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          await widget.locator('form[data-form="recover-new-credentials"] button[type="submit"]').click();
+          return { name, password, pubkey: await signedIn() };
+        };
+        /** Both files from Export identity, and the key as it is shown. */
+        const exportAll = async () => {
+          await widget.locator('[data-action="goto-export"]').first().click();
+          const [exportDownload] = await Promise.all([page.waitForEvent("download"), widget.locator('[data-action="download-recovery-export"]').click()]);
+          await widget.locator('[data-action="reveal-nsec"]').click();
+          await widget.locator('[data-action="download-key-backup"]').waitFor({ timeout: 30_000 });
+          const nsec = ((await widget.locator("#credential-box").textContent()) ?? "").trim();
+          const [keyDownload] = await Promise.all([page.waitForEvent("download"), widget.locator('[data-action="download-key-backup"]').click()]);
+          // Kept past this device's life: a browser's own copy of a download goes when its context is closed.
+          const kept = mkdtempSync(join(saved, "files-"));
+          const files = { exportPath: join(kept, exportDownload.suggestedFilename()), keyPath: join(kept, keyDownload.suggestedFilename()), nsec };
+          await exportDownload.saveAs(files.exportPath);
+          await keyDownload.saveAs(files.keyPath);
+          await widget.locator('[data-action="goto-dashboard"]').click();
+          return files;
+        };
+        const restoreFile = async (path: string) => {
+          await more("goto-restore-file");
+          await widget.locator('input[name="restoreFile"]').setInputFiles(path);
+        };
+        /** It signs as who it says it is: the last word on whether an account really came back. */
+        const signs = async () => {
+          const event = await page.evaluate(() => (window as any).nostr.signEvent({ kind: 1, created_at: 1, tags: [], content: "back" }));
+          return verifyNostrEvent(event) ? (event.pubkey as string) : null;
+        };
+        return { context, page, widget, more, who, signedIn, error, said: () => lastError, create, importKey, login, recover, finishRecovery, exportAll, restoreFile, signs, close: () => context.close() };
+      };
+      const dropEverything = () => relays.forEach((relay) => relay.wipeAllData());
+      const saved = mkdtempSync(join(tmpdir(), "bitlogin-restore-"));
+
+      try {
+        // ================= An account BitLogin made: a login name and a generated password. =================
+        const first = await device();
+        const made = await first.create(`made${tag}`);
+        expect(made.password.length).toBeGreaterThan(20);
+        expect(made.phrase.split(" ")).toHaveLength(12);
+        expect(await first.signs()).toBe(made.pubkey);
+        const madeFiles = await first.exportAll();
+        expect(madeFiles.nsec).toMatch(/^nsec1[a-z0-9]{58}$/u);
+        await first.close();
+
+        // 1. Another device, the login name and password.
+        let d = await device();
+        await d.login(made.name, made.password);
+        expect(await d.signedIn()).toBe(made.pubkey);
+        expect(await d.signs()).toBe(made.pubkey);
+        await d.close();
+
+        // A wrong password signs nobody in, and says so. So does a name nobody has.
+        d = await device();
+        await d.login(made.name, `${made.password}x`);
+        await d.error().waitFor({ timeout: 90_000 });
+        expect(await d.who()).toBeNull();
+        await d.close();
+
+        // 2. The key itself, pasted under "Import a Nostr key", is the same identity under a new login.
+        d = await device();
+        const rewrapped = await d.importKey(madeFiles.nsec, `rewrap${tag}`);
+        expect(rewrapped.shown).toBe(encodeNpub(made.pubkey));
+        expect(rewrapped.pubkey).toBe(made.pubkey);
+        expect(await d.signs()).toBe(made.pubkey);
+        await d.close();
+
+        // 3. The recovery phrase, while relays still hold the account. Written carelessly: capitals and extra spaces.
+        d = await device();
+        const careless = await d.recover(`  ${made.phrase.toUpperCase().replace(/ /gu, "   ")} `);
+        expect(careless === "error" ? d.said() : careless).toBe("found");
+        const recovered = await d.finishRecovery(`recov${tag}`);
+        expect(recovered.pubkey).toBe(made.pubkey);
+        expect(await d.signs()).toBe(made.pubkey);
+        await d.close();
+        // The new login it set works on another device.
+        d = await device();
+        await d.login(recovered.name, recovered.password);
+        expect(await d.signedIn()).toBe(made.pubkey);
+        await d.close();
+
+        // A phrase that is not one is refused; so is a real one that belongs to nobody (it would only rebuild).
+        d = await device();
+        expect(await d.recover("these are not twelve words from the list at all sorry no")).toBe("error");
+        expect(await d.who()).toBeNull();
+        await d.close();
+
+        // 4. Every relay drops everything. The phrase and the recovery export file bring the whole account back.
+        dropEverything();
+        d = await device();
+        expect(await d.recover(made.phrase, madeFiles.exportPath)).toBe("found");
+        const fromFile = await d.finishRecovery(`file${tag}`);
+        expect(fromFile.pubkey).toBe(made.pubkey);
+        expect(await d.signs()).toBe(made.pubkey);
+        await d.close();
+
+        // The same, through "Restore from an export file": the file first, then the phrase.
+        dropEverything();
+        d = await device();
+        await d.restoreFile(madeFiles.exportPath);
+        await d.widget.locator('form[data-form="recover-phrase"]').waitFor({ timeout: 30_000 });
+        expect(await d.widget.locator(".notice.info").textContent()).toContain("Loaded recovery export");
+        await d.widget.locator('form[data-form="recover-phrase"] input[name="phrase"]').fill(made.phrase);
+        await d.widget.locator('form[data-form="recover-phrase"] button[type="submit"]').click();
+        await d.widget.locator('form[data-form="recover-new-credentials"]').waitFor({ timeout: 90_000 });
+        expect((await d.finishRecovery(`file2${tag}`)).pubkey).toBe(made.pubkey);
+        await d.close();
+
+        // The export file with somebody else's phrase restores nothing.
+        dropEverything();
+        d = await device();
+        const strangerDevice = await device();
+        const stranger = await strangerDevice.create(`other${tag}`);
+        await strangerDevice.close();
+        dropEverything();
+        const wrongPhrase = await d.recover(stranger.phrase, madeFiles.exportPath);
+        expect(wrongPhrase).not.toBe("found");
+        expect(await d.who()).toBeNull();
+        await d.close();
+
+        // 5. Every relay drops everything, and there is no file. The phrase alone rebuilds the identity it made.
+        dropEverything();
+        d = await device();
+        expect(await d.recover(made.phrase)).toBe("rebuild");
+        expect(((await d.widget.locator(".credential-box").textContent()) ?? "").trim()).toBe(encodeNpub(made.pubkey));
+        await d.widget.locator('[data-action="rebuild-confirm"]').click();
+        await d.widget.locator('form[data-form="recover-new-credentials"]').waitFor({ timeout: 90_000 });
+        const rebuilt = await d.finishRecovery(`rebuilt${tag}`);
+        expect(rebuilt.pubkey).toBe(made.pubkey);
+        expect(await d.signs()).toBe(made.pubkey);
+        await d.close();
+        // And what it rebuilt is an account again: signed in to by name and password on another device.
+        d = await device();
+        await d.login(rebuilt.name, rebuilt.password);
+        expect(await d.signedIn()).toBe(made.pubkey);
+        await d.close();
+
+        // 6. The key file, through "Restore from an export file", with every relay empty.
+        dropEverything();
+        d = await device();
+        await d.restoreFile(madeFiles.keyPath);
+        await d.widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
+        expect(((await d.widget.locator(".credential-box").textContent()) ?? "").trim()).toBe(encodeNpub(made.pubkey));
+        await d.widget.locator('[data-action="import-continue"]').click();
+        const fromKeyFile = await d.widget.locator('form[data-form="create-name"]').waitFor({ timeout: 30_000 }).then(async () => {
+          await d.widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(`keyfile${tag}`);
+          await d.widget.locator('form[data-form="create-name"] button[type="submit"]').click();
+          await d.widget.locator("#credential-box").waitFor({ timeout: 30_000 });
+          await d.widget.locator("#saved-check").check();
+          await d.widget.locator('form[data-form="create-credential"] button[type="submit"]').click();
+          await completeRecoveryCeremony(d.widget);
+          await d.widget.locator("#key-saved-check").waitFor({ timeout: 60_000 });
+          await d.widget.locator("#key-saved-check").check();
+          await d.widget.locator('form[data-form="save-key"] button[type="submit"]').click();
+          return d.signedIn();
+        });
+        expect(fromKeyFile).toBe(made.pubkey);
+        expect(await d.signs()).toBe(made.pubkey);
+        await d.close();
+
+        // ================= A key from outside, imported and wrapped. =================
+        dropEverything();
+        const outside = generatePrivateKey();
+        const outsidePub = getPublicKeyHex(outside);
+        const second = await device();
+        const wrapped = await second.importKey(encodeNsec(outside), `wrap${tag}`);
+        expect(wrapped.shown).toBe(encodeNpub(outsidePub));
+        expect(wrapped.pubkey).toBe(outsidePub);
+        expect(await second.signs()).toBe(outsidePub);
+        const wrappedFiles = await second.exportAll();
+        // What Export identity shows is the key that was imported, unchanged.
+        expect(wrappedFiles.nsec).toBe(encodeNsec(outside));
+        await second.close();
+
+        // The same key as 64 hex characters is the same identity.
+        d = await device();
+        await d.more("goto-import");
+        await d.widget.locator('form[data-form="import-key"] input[name="importKey"]').fill(Array.from(outside, (b) => b.toString(16).padStart(2, "0")).join(""));
+        await d.widget.locator('form[data-form="import-key"] button[type="submit"]').click();
+        await d.widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
+        expect(((await d.widget.locator(".credential-box").textContent()) ?? "").trim()).toBe(encodeNpub(outsidePub));
+        await d.close();
+        // Something that is no key is refused.
+        d = await device();
+        await d.more("goto-import");
+        await d.widget.locator('form[data-form="import-key"] input[name="importKey"]').fill("nsec1notakeyatall");
+        await d.widget.locator('form[data-form="import-key"] button[type="submit"]').click();
+        await d.error().waitFor({ timeout: 30_000 });
+        expect(await d.widget.locator('[data-action="import-continue"]').count()).toBe(0);
+        await d.close();
+
+        // 1. Another device, its login name and password.
+        d = await device();
+        await d.login(wrapped.name, wrapped.password);
+        expect(await d.signedIn()).toBe(outsidePub);
+        expect(await d.signs()).toBe(outsidePub);
+        await d.close();
+
+        // 2. Its recovery phrase, while relays hold the account: the imported key comes back, not a new one.
+        d = await device();
+        expect(await d.recover(wrapped.phrase)).toBe("found");
+        expect((await d.finishRecovery(`wraprec${tag}`)).pubkey).toBe(outsidePub);
+        expect(await d.signs()).toBe(outsidePub);
+        await d.close();
+
+        // 3. Every relay drops everything. The phrase alone cannot bring an imported key back, and does not
+        //    pretend to: what it offers to rebuild is a different identity, shown, with a warning. Not taken.
+        dropEverything();
+        d = await device();
+        expect(await d.recover(wrapped.phrase)).toBe("rebuild");
+        const offered = ((await d.widget.locator(".credential-box").textContent()) ?? "").trim();
+        expect(offered).toMatch(/^npub1/u);
+        expect(offered).not.toBe(encodeNpub(outsidePub));
+        expect(await d.widget.locator(".notice.warn", { hasText: "Only continue if this is your npub" }).count()).toBe(1);
+        expect(await d.who()).toBeNull();
+        await d.close();
+
+        // 4. Still nothing on any relay: the phrase with the recovery export file brings the imported key back.
+        d = await device();
+        expect(await d.recover(wrapped.phrase, wrappedFiles.exportPath)).toBe("found");
+        expect((await d.finishRecovery(`wrapfile${tag}`)).pubkey).toBe(outsidePub);
+        expect(await d.signs()).toBe(outsidePub);
+        await d.close();
+
+        // 5. The key file, through "Restore from an export file", wraps the same identity again.
+        dropEverything();
+        d = await device();
+        await d.restoreFile(wrappedFiles.keyPath);
+        await d.widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
+        expect(((await d.widget.locator(".credential-box").textContent()) ?? "").trim()).toBe(encodeNpub(outsidePub));
+        await d.close();
+
+        // 6. A passkey, with "I already have a Nostr key": the same identity behind a passkey.
+        dropEverything();
+        d = await device();
+        const cdp = await d.context.newCDPSession(d.page);
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        await d.more("goto-passkey");
+        await d.widget.locator('[data-action="passkey-register"]').click();
+        await d.widget.locator('[data-action="passkey-import"]').waitFor({ timeout: 30_000 });
+        await d.widget.locator('[data-action="passkey-import"]').click();
+        await d.widget.locator('form[data-form="import-key"] input[name="importKey"]').fill(encodeNsec(outside));
+        await d.widget.locator('form[data-form="import-key"] button[type="submit"]').click();
+        await d.widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
+        await d.widget.locator('[data-action="import-continue"]').click();
+        await completeRecoveryCeremony(d.widget);
+        await d.widget.locator("#key-saved-check").waitFor({ timeout: 60_000 });
+        await d.widget.locator("#key-saved-check").check();
+        await d.widget.locator('form[data-form="save-key"] button[type="submit"]').click();
+        expect(await d.signedIn()).toBe(outsidePub);
+        expect(await d.signs()).toBe(outsidePub);
+        // Signed out and back in with the passkey alone.
+        await d.widget.locator('[data-action="logout"]').click();
+        await d.widget.locator('[data-action="goto-login"]').waitFor({ timeout: 30_000 });
+        await d.more("goto-passkey");
+        await d.widget.locator('[data-action="passkey-auth"]').click();
+        expect(await d.signedIn()).toBe(outsidePub);
+        await d.close();
+      } finally {
+        await browser.close();
+        rmSync(saved, { recursive: true, force: true });
+      }
+    },
+    900_000
+  );
+
+  it(
+    "a site that asks for more than it may have is told so at once, and so is the user in the window",
+    async () => {
+      const sitePage = `<!doctype html><meta charset="utf-8"><title>a site that asks for a lot</title><button id="open">Sign in</button>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  document.getElementById("open").onclick = () => { window.open(SIGNIN + "/connect/index.html", "bitlogin-connect", "popup,width=460,height=660"); };
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      // One site at a public address, answered here; one at a local address, served here.
+      const PUBLIC = "https://app.asks-test.example";
+      const asking = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(sitePage);
+      });
+      await new Promise<void>((resolve) => asking.listen(0, "127.0.0.1", () => resolve()));
+      const askingAddress = asking.address();
+      const LOCAL = `http://127.0.0.1:${typeof askingAddress === "object" && askingAddress ? askingAddress.port : 0}`;
+      // A pass, a terminal and a world grant: kinds kept, at BitLogin's real address, for one named site.
+      const lots = { name: "Asks A Lot", sign: [1, 27300, 27302, 27303] };
+      const plain = { name: "Asks A Little", sign: [1, 7] };
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        await context.route(`${PUBLIC}/`, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: sitePage }));
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".who .pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        const visit = async (site: string) => {
+          const page = await context.newPage();
+          await page.goto(`${site}/`);
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+          const open = async () => {
+            const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+            return popup;
+          };
+          return { page, ask, open };
+        };
+
+        // At a public address: the kinds are not this site's to ask for. It is told so in the answer to `want`,
+        // before any window. A set it may have is taken.
+        const pub = await visit(PUBLIC);
+        expect(await pub.ask({ t: "want", permissions: plain })).toMatchObject({ t: "state", unlocked: false, taken: true });
+        expect(await pub.ask({ t: "want", permissions: lots })).toMatchObject({ t: "state", unlocked: false, taken: false });
+        // A plain question about state says nothing of it.
+        expect("taken" in (await pub.ask({ t: "state" }))).toBe(false);
+        // The window shows the plain question, and says in words that more was asked and will not be given.
+        const turned = await pub.open();
+        await turned.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await turned.locator("#ask").isVisible()).toBe(true);
+        expect(await turned.locator("#ask-app").isVisible()).toBe(false);
+        expect(await turned.locator("#turned-down").isVisible()).toBe(true);
+        expect(await turned.locator("#turned-down").textContent()).toContain("asked for more than it may have");
+        await turned.waitForTimeout(1000);
+        await turned.locator("#allow").click();
+        await pub.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        // What it got is the plain grant: a note, and none of what it asked for.
+        const got = await pub.ask({ t: "state" });
+        expect(got).toMatchObject({ unlocked: true, pubkey: me });
+        expect(got.permissions).toBeUndefined();
+        expect((await pub.ask({ t: "sign", event: { kind: 1, content: "a note", tags: [] } })).t).toBe("signed");
+        for (const kind of [27300, 27302, 27303]) expect((await pub.ask({ t: "sign", event: { kind, content: "", tags: [] } })).t, String(kind)).toBe("refused");
+
+        // It falls back on the same page: a smaller set, asked after the one that was turned down, is taken and
+        // takes its place. The window then shows that set as an application's, with no word of the first.
+        if (!turned.isClosed()) await turned.waitForEvent("close", { timeout: 10_000 }).catch(() => turned.close());
+        await pub.ask({ t: "lock" });
+        expect(await pub.ask({ t: "want", permissions: lots })).toMatchObject({ taken: false });
+        expect(await pub.ask({ t: "want", permissions: plain })).toMatchObject({ taken: true });
+        const fellBack = await pub.open();
+        await fellBack.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await fellBack.locator("#ask").isVisible()).toBe(false);
+        expect(await fellBack.locator("#turned-down").isVisible()).toBe(false);
+        await fellBack.close();
+
+        // A site that asked for nothing more is shown the plain question and no such line.
+        await pub.page.reload();
+        await pub.page.waitForFunction(() => typeof (window as any).ask === "function");
+        const plainWindow = await pub.open();
+        await plainWindow.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await plainWindow.locator("#turned-down").isVisible()).toBe(false);
+        await plainWindow.close();
+
+        // At a local address, with BitLogin itself a local copy (as it is in this test): the same set is taken,
+        // shown in full as an application's, and the window says why it may be asked for here.
+        const local = await visit(LOCAL);
+        expect(await local.ask({ t: "want", permissions: lots })).toMatchObject({ t: "state", taken: true });
+        const dev = await local.open();
+        await dev.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await dev.locator("#ask").isVisible()).toBe(false);
+        expect(await dev.locator("#app-local").isVisible()).toBe(true);
+        expect(await dev.locator("#app-local").textContent()).toContain("local copy of BitLogin");
+        // The three are listed among what deserves a second look.
+        expect(await dev.locator("#app-sensitive li").count()).toBe(3);
+        await dev.waitForTimeout(1000);
+        await dev.locator("#allow-app").click();
+        await local.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        const pass = await local.ask({ t: "sign", event: { kind: 27300, content: "", tags: [["nswp:session", "b".repeat(64)], ["nswp:origin", LOCAL], ["expiration", "9999999999"]] } });
+        expect(pass.t).toBe("signed");
+        expect(pass.event).toMatchObject({ kind: 27300, pubkey: me });
+        expect(verifyNostrEvent(pass.event)).toBe(true);
+      } finally {
+        await browser.close();
+        asking.close();
+      }
+    },
+    240_000
+  );
+
+  it(
     "a different passkey derives a DIFFERENT account (PRF is per-credential)",
     async () => {
       const browser = await playwright!.chromium.launch();
@@ -1451,7 +2014,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const sign = (event: Record<string, unknown>) => attempt("signEvent", event);
 
         // Not allowed yet: nobody is signed in to it, and nothing is signed.
-        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false });
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, canAsk: true });
         expect(await sign({ kind: 1, content: "before", tags: [] })).toEqual({ ok: false, name: "BitLoginRefused" });
 
         // The window shows the address, the name it gave itself, and everything it asked, the sensitive apart.
@@ -1549,7 +2112,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 
         // The application now wants more than was approved: it is not signed in until the user is asked again.
         await page.goto(`${site}/?more`);
-        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, needsMore: true });
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, needsMore: true, canAsk: true });
         expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
 
         // Nothing the application heard was a key.
@@ -1560,7 +2123,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await page.evaluate(() => (window as any).isReady);
         expect((await attempt("signOut")).ok).toBe(true);
         await page.reload();
-        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false });
+        expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, canAsk: true });
         expect((await sign({ kind: 1, content: "after", tags: [] })).ok).toBe(false);
         expect(errors).toEqual([]);
       } finally {

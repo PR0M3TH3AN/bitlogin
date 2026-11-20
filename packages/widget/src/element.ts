@@ -33,6 +33,7 @@ import {
 import { askLockDevice, createLockDevice } from "./lockDevice.js";
 import type { KeptAccountInfo, LockOpenResult, LockStatusResult } from "./worker/protocol.js";
 import type { Profile } from "./embedded/profile.js";
+import { readRestoreFile, RESTORE_FILE_LIMITS } from "./restoreFile.js";
 
 type Screen =
   | "welcome"
@@ -42,6 +43,7 @@ type Screen =
   | "passkey"
   | "passkey-create"
   | "import-key"
+  | "restore-file"
   | "create-name"
   | "create-credential"
   | "confirm-phrase"
@@ -987,6 +989,13 @@ export class BitLoginAuthElement extends HTMLElement {
         this.importPreviewNpub = "";
         this.goto("import-key");
         return;
+      case "goto-restore-file":
+        this.offlineExportFile = null;
+        this.offlineExportFileNotice = undefined;
+        this.importKey = "";
+        this.importPreviewNpub = "";
+        this.goto("restore-file");
+        return;
       case "preview-import":
         return this.handlePreviewImport();
       case "import-continue":
@@ -1225,6 +1234,7 @@ export class BitLoginAuthElement extends HTMLElement {
    */
   private async onFileChange(e: Event): Promise<void> {
     const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement && target.name === "restoreFile" && target.type === "file") return this.onRestoreFile(target);
     if (!(target instanceof HTMLInputElement) || target.name !== "offlineExportFile" || target.type !== "file") return;
     const file = target.files?.[0];
     if (!file) {
@@ -1244,6 +1254,51 @@ export class BitLoginAuthElement extends HTMLElement {
           ? `Couldn't read that file: ${err.message}`
           : `Couldn't read that file: ${String(err)}`;
     }
+    this.render();
+  }
+
+  /**
+   * "Restore from an export file": either file that Export identity makes is read, and the user is taken to the
+   * step that uses it. A recovery export goes to the recovery phrase, which it is useless without. A key file
+   * goes to "Import a Nostr key" with the key already checked, where the identity it holds is shown before
+   * anything is made. The file itself is never kept, and a key read from one is held as a pasted one is.
+   */
+  private async onRestoreFile(input: HTMLInputElement): Promise<void> {
+    const file = input.files?.[0];
+    if (!file) return;
+    this.errorMessage = undefined;
+    if (file.size > RESTORE_FILE_LIMITS.bytes) {
+      this.errorMessage = "That file is too large to be a BitLogin export.";
+      return this.render();
+    }
+    let read: ReturnType<typeof readRestoreFile>;
+    try {
+      read = readRestoreFile(await file.text());
+    } catch {
+      read = { kind: "unknown", why: "The file could not be read." };
+    }
+    if (read.kind === "recovery-export") {
+      this.offlineExportFile = read.file;
+      this.offlineExportFileNotice = `Loaded recovery export from ${new Date(read.file.created_at * 1000).toLocaleString()}. Enter the recovery phrase for that account to restore it.`;
+      this.rebuildPreview = null;
+      this.recoverPhraseInput = "";
+      return this.goto("recover-phrase");
+    }
+    if (read.kind === "key") {
+      this.setBusy(true);
+      try {
+        const preview = await this.worker.previewImportKey({ nsecOrHex: read.key });
+        this.importKey = read.key;
+        this.importPreviewNpub = preview.npub;
+        this.busy = false;
+        return this.goto("import-key");
+      } catch (err) {
+        this.importKey = "";
+        this.importPreviewNpub = "";
+        return this.fail(err);
+      }
+    }
+    this.errorMessage = read.why;
     this.render();
   }
 
@@ -2360,6 +2415,7 @@ export class BitLoginAuthElement extends HTMLElement {
               ${optionRow("goto-bunker", OPTION_ICONS.remote, "Remote signer", "Scan a code with Amber or another signer app")}
               ${optionRow("goto-import", OPTION_ICONS.importKey, "Import a Nostr key", "Wrap an existing identity in a login name and password")}
               ${optionRow("goto-recover", OPTION_ICONS.recover, "Recover account", "Sign back in with your 12-word recovery phrase")}
+              ${optionRow("goto-restore-file", OPTION_ICONS.recover, "Restore from an export file", "Use a file saved from Export identity")}
             </div>`
           : "";
         return `
@@ -2464,6 +2520,17 @@ export class BitLoginAuthElement extends HTMLElement {
           <p class="small">Check this is the profile you expect. Your private key stays in your signer — each signature is requested over relays, and your signer can require approval or be disconnected at any time. This session lasts until you log out or leave the page; BitLogin account features (wallet connections, password rotation, recovery) stay with BitLogin accounts.</p>
           ${this.renderError()}
           <button class="primary" type="button" data-action="bunker-continue">This is me — continue</button>
+        `;
+
+      case "restore-file":
+        return `
+          ${this.renderScreenHead("Restore from an export file")}
+          <p class="sub">Choose a file you saved from "Export identity". BitLogin reads it on this device and takes you to the next step.</p>
+          ${this.renderError()}
+          <label for="restoreFile">Export file</label>
+          <input type="file" name="restoreFile" id="restoreFile" accept=".json,.txt,application/json,text/plain" ${this.busy ? "disabled" : ""} />
+          <p class="small"><strong>Recovery export</strong> (bitlogin-recovery-export.json): restores the whole account, saved wallet connections included, even if no relay holds it any more. You will be asked for that account's 12-word recovery phrase: the file is sealed, and can't be opened without it.</p>
+          <p class="small"><strong>Key file</strong> (bitlogin-private-key.txt): holds your private key. BitLogin shows you the identity it belongs to, and you choose a new login name and password for it. It brings back the identity, not the old account's login name or saved wallet connections.</p>
         `;
 
       case "import-key": {
@@ -2948,6 +3015,7 @@ export class BitLoginAuthElement extends HTMLElement {
           <label>Public key (npub)</label>
           <div class="credential-box">${escapeHtml(this.session?.npub ?? "")}</div>
           <button class="secondary" type="button" data-action="download-recovery-export">Download recovery export</button>
+          <p class="small">To bring an account back with a file saved here: on the sign-in screen, open "More sign-in options" and choose "Restore from an export file". The recovery export needs your recovery phrase too; the key file does not.</p>
           ${this.renderError()}
           <button class="secondary" type="button" data-action="reveal-nsec">Reveal private key (nsec)</button>
           ${
