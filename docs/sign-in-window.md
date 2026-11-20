@@ -362,6 +362,12 @@ half of what it asked for fails in ways its user cannot see.
   signer's own is put on, so what comes back has exactly one. A site that
   could write the mark could say it was another site. An application that
   wants to name a world in an event uses a tag of another name.
+- **One exception: a world grant (kind 27303) keeps its `nswp:world`.**
+  There the tag is the grant's subject, the one world a terminal may be
+  brought to, and NSWP's Bridge requires exactly one. It is kept only in
+  that kind, which is signed only for the address it is reserved to; it
+  must be exactly one tag naming an origin, or the grant is not signed;
+  and the event still carries the signer's own `bitlogin:site`.
 - **Size:** 100,000 characters of content, 2,500 tags.
 
 ## SW9.5 Encrypting and reading

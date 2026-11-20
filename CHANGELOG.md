@@ -17,6 +17,9 @@ would plausibly want. Newest first.
     rate, 30 a minute and 300 an hour, where they were 60 and 1,200.
   - The embedded signer's page loads itself again, once, if one of its
     files fails to arrive (a page caught in the middle of a deploy).
+  - A world grant (kind 27303) keeps its one `nswp:world` tag, which names
+    the world the grant is for. It was taken off, so the grant could not
+    be signed through the window. Every other kind is as before.
   - Written down, not changed: a tag named `nswp:world` or `bitlogin:site`
     is taken off what an application sends; and a `created_at` more than
     ten minutes off is replaced, so read it from the event that comes back.

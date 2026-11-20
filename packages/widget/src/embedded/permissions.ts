@@ -72,6 +72,8 @@ export const KNOWN_APPS: Readonly<Record<string, { name: string; reserved?: read
 
 /** Kinds that only a named address may ask for. */
 export const RESERVED_KINDS: readonly number[] = [27300, 27302, 27303];
+/** NSWP's world grant: a terminal on the user's computer, brought to one world they are building. */
+const KIND_WORLD_GRANT = 27303;
 
 /** The name BitLogin knows an address by, or null. */
 export function knownAppName(site: string): string | null {
@@ -243,8 +245,16 @@ export function prepareForApp(perms: AppPermissions, input: unknown, siteInput: 
   for (const tag of e.tags) {
     if (!Array.isArray(tag) || tag.length === 0 || tag.length > APP_SIGN_LIMITS.tagItems) return null;
     if (!tag.every((item) => typeof item === "string" && item.length <= APP_SIGN_LIMITS.tagChars)) return null;
-    // The mark is the signer's to write, under either of its names.
-    if (tag[0] === APP_SITE_TAG || tag[0] === "nswp:world") continue;
+    // The mark is the signer's to write, under either of its names. One exception: in a world grant (27303),
+    // "nswp:world" is not the mark of the site that asked. It is the grant's subject, the one world a terminal
+    // may be brought to, and NSWP's Bridge requires exactly one. That kind is signed only for the address it is
+    // reserved to (checked above), and still carries the signer's own mark.
+    if (tag[0] === APP_SITE_TAG) continue;
+    if (tag[0] === "nswp:world") {
+      if (e.kind !== KIND_WORLD_GRANT) continue;
+      // Exactly one, naming an origin and nothing else. A grant that is not that is not signed at all.
+      if (tag.length !== 2 || cleanOrigin(tag[1]) !== tag[1] || tags.some((kept) => kept[0] === "nswp:world")) return null;
+    }
     tags.push([...(tag as string[])]);
   }
   if (e.kind === KIND_APP_DATA && !allowedAppData(perms, tags)) return null;

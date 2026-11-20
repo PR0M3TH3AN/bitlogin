@@ -227,6 +227,42 @@ describe("encrypting and reading", () => {
   });
 });
 
+describe("a world grant keeps the world it is for (NSWP kind 27303)", () => {
+  const PORTAL = "https://portal.bitblocks.network";
+  const portal = readPermissions({ name: "BitPortal", sign: [1, 27300, 27302, 27303] })!;
+  const grant = (world: string[][]) => ({ kind: 27303, content: "", tags: [["nswp:session", OTHER], ["nswp:bridge", ME], ...world, ["expiration", "1794003600"]] });
+
+  it("is signed with its one nswp:world, which is the grant's subject and not the signer's mark", () => {
+    const out = prepareForApp(portal, grant([["nswp:world", "https://garden.example"]]), PORTAL, NOW);
+    expect(out!.tags).toEqual([["nswp:session", OTHER], ["nswp:bridge", ME], ["nswp:world", "https://garden.example"], ["expiration", "1794003600"], [APP_SITE_TAG, PORTAL]]);
+    // Prepared again, as the worker does, it is the same.
+    expect(prepareForApp(portal, out, PORTAL, NOW)!.tags).toEqual(out!.tags);
+  });
+
+  it("is refused whole where that tag is not exactly one origin", () => {
+    for (const world of [
+      [["nswp:world", "https://a.example"], ["nswp:world", "https://b.example"]],
+      [["nswp:world", "https://a.example/path"]],
+      [["nswp:world", "https://a.example", "extra"]],
+      [["nswp:world", "not an address"]],
+      [["nswp:world"]]
+    ]) {
+      expect(prepareForApp(portal, grant(world), PORTAL, NOW), JSON.stringify(world)).toBeNull();
+    }
+  });
+
+  it("is still the signer's to write in every other kind, and the grant only at the address it is reserved to", () => {
+    for (const kind of [1, 27300, 27302]) {
+      const out = prepareForApp(portal, { kind, content: "", tags: [["nswp:world", "https://evil.example"]] }, PORTAL, NOW);
+      expect(out!.tags, String(kind)).toEqual([[APP_SITE_TAG, PORTAL]]);
+    }
+    expect(prepareForApp(portal, grant([["nswp:world", "https://garden.example"]]), SITE, NOW)).toBeNull();
+    // The signer's own mark can never be written by the application, in a grant or anywhere.
+    const marked = prepareForApp(portal, { ...grant([["nswp:world", "https://garden.example"]]), tags: [...grant([["nswp:world", "https://garden.example"]]).tags, [APP_SITE_TAG, "https://evil.example"]] }, PORTAL, NOW);
+    expect(marked!.tags.filter((t) => t[0] === APP_SITE_TAG)).toEqual([[APP_SITE_TAG, PORTAL]]);
+  });
+});
+
 describe("limits", () => {
   it("counts what applications sign on timers apart from what the world sees", () => {
     expect(limitClass(27235)).toBe("quiet");
