@@ -16,6 +16,31 @@ const shortKey = (hex) => `${hex.slice(0, 8)}…${hex.slice(-4)}`;
 
 const me = await readCachedSession().catch(() => null);
 
+/**
+ * Who is signed in here: the name and picture from their own signed profile, and the whole key, so one account is
+ * not mistaken for another. The key and the name this address knows are shown at once; the profile when relays
+ * answer. Written as text; a picture that does not load gives way to a letter.
+ */
+const showMe = (profile) => {
+  if (!me) return;
+  const name = profile?.name || me.name || "";
+  $("me").hidden = false;
+  $("me-name").textContent = name || "An account with no name";
+  $("me-key").textContent = me.npub;
+  const pic = $("me-pic");
+  const letter = () => pic.replaceChildren(document.createTextNode((name || "?").trim().slice(0, 1).toUpperCase()));
+  letter();
+  if (profile?.picture) {
+    const img = new Image();
+    img.alt = "";
+    img.referrerPolicy = "no-referrer";
+    img.onload = () => pic.replaceChildren(img);
+    img.onerror = letter;
+    img.src = profile.picture;
+  }
+};
+showMe(null);
+
 const say = (text) => {
   $("said").textContent = text;
   $("said").hidden = !text;
@@ -136,3 +161,20 @@ $("all").addEventListener("click", async () => {
   }
   $("all").disabled = false;
 });
+
+// Their profile, behind everything else: read by BitLogin's worker and believed only as far as its signature goes.
+if (me) {
+  let session = null;
+  try {
+    session = await createHeadlessSigner({
+      vaultRelays: relayList(document.documentElement.dataset.vaultRelays),
+      discoveryRelays: relayList(document.documentElement.dataset.discoveryRelays)
+    });
+    const restored = await session.restore();
+    if (restored && restored.pubkey === me.pubkey) showMe(await session.loadProfile());
+  } catch {
+    /* no relay answered, or the lock is on: the key and the name stay as they are */
+  } finally {
+    session?.destroy();
+  }
+}

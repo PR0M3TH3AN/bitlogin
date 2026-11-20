@@ -58,8 +58,9 @@ describe("element wiring", () => {
       widgetSource.indexOf("private noteSignerClaim"),
     );
     expect(dispatchBody).toContain("setActiveSession(this");
-    // Both logout branches, DOM removal, and locking (the optional lock, §SW12) clear it.
+    // Both logout branches, DOM removal, locking (the optional lock, §SW12), and leaving one account for another
+    // on this device (endSession, docs/account-switching.md) clear it.
     const clearCount = widgetSource.split("clearActiveSession(this)").length - 1;
-    expect(clearCount).toBe(4);
+    expect(clearCount).toBe(5);
   });
 });

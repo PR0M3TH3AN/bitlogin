@@ -72,6 +72,8 @@ export const KNOWN_APPS: Readonly<Record<string, { name: string; reserved?: read
 
 /** Kinds that only a named address may ask for. */
 export const RESERVED_KINDS: readonly number[] = [27300, 27302, 27303];
+/** NSWP's world grant: a terminal on the user's computer, brought to one world they are building. */
+const KIND_WORLD_GRANT = 27303;
 
 /** The name BitLogin knows an address by, or null. */
 export function knownAppName(site: string): string | null {
@@ -177,7 +179,9 @@ const isAddressable = (kind: number): boolean => kind >= 30000 && kind < 40000;
 
 /** Which count a signature of this kind is taken from. */
 export function limitClass(kind: number): Exclude<LimitClass, "read"> {
-  if (SENSITIVE_KINDS.includes(kind) && kind !== KIND_RELAY_PROOF) return "sensitive";
+  // The reserved kinds (a pass, a terminal on the user's computer, access granted to a world) are shown in the
+  // window as deserving a second look, and are counted that way too.
+  if ((SENSITIVE_KINDS.includes(kind) && kind !== KIND_RELAY_PROOF) || RESERVED_KINDS.includes(kind)) return "sensitive";
   if (PROOF_KINDS.includes(kind) || isAddressable(kind)) return "quiet";
   return "public";
 }
@@ -241,8 +245,16 @@ export function prepareForApp(perms: AppPermissions, input: unknown, siteInput: 
   for (const tag of e.tags) {
     if (!Array.isArray(tag) || tag.length === 0 || tag.length > APP_SIGN_LIMITS.tagItems) return null;
     if (!tag.every((item) => typeof item === "string" && item.length <= APP_SIGN_LIMITS.tagChars)) return null;
-    // The mark is the signer's to write, under either of its names.
-    if (tag[0] === APP_SITE_TAG || tag[0] === "nswp:world") continue;
+    // The mark is the signer's to write, under either of its names. One exception: in a world grant (27303),
+    // "nswp:world" is not the mark of the site that asked. It is the grant's subject, the one world a terminal
+    // may be brought to, and NSWP's Bridge requires exactly one. That kind is signed only for the address it is
+    // reserved to (checked above), and still carries the signer's own mark.
+    if (tag[0] === APP_SITE_TAG) continue;
+    if (tag[0] === "nswp:world") {
+      if (e.kind !== KIND_WORLD_GRANT) continue;
+      // Exactly one, naming an origin and nothing else. A grant that is not that is not signed at all.
+      if (tag.length !== 2 || cleanOrigin(tag[1]) !== tag[1] || tags.some((kept) => kept[0] === "nswp:world")) return null;
+    }
     tags.push([...(tag as string[])]);
   }
   if (e.kind === KIND_APP_DATA && !allowedAppData(perms, tags)) return null;
@@ -283,6 +295,19 @@ export function readPeerFor(perms: AppPermissions, me: string, event: { kind?: u
   if (event.pubkey !== me) return event.pubkey;
   const to = tagValues(tags, "p")[0];
   return to !== undefined && HEX64.test(to) ? to : me;
+}
+
+/**
+ * The keys an event's content may be opened against, in the order to try them. One, as `readPeerFor` has it:
+ * and, for an event the user signed themselves that names somebody in a "p" tag, their own key after that. A
+ * note an application saved for the user alone is sealed to the user's own key whatever tags it carries, and a
+ * "p" tag on it used to make it unreadable. Nothing more is read by this: the event is one the set may read, and
+ * the user's own key is what opens it where there is no "p" tag at all.
+ */
+export function readPeersFor(perms: AppPermissions, me: string, event: { kind?: unknown; pubkey?: unknown; tags?: unknown }): string[] {
+  const first = readPeerFor(perms, me, event);
+  if (!first) return [];
+  return event.pubkey === me && first !== me ? [first, me] : [first];
 }
 
 // ---- In words, for the window (§SW9.7)

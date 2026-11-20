@@ -133,6 +133,11 @@ Unlocking is not agreeing to everything. `embedded/policy.ts` is the list.
 - **It lasts** until the site is told to lock (the user's own doing, from
   the site: signing out of it), or thirty days from Allow. Loading the
   site's page again does not end it: §SW11.
+- **It loads itself again, once, if one of its files fails to arrive.** A
+  deploy replaces the signer's files together, and a page caught between
+  the old and the new would otherwise sit silent in a site that is waiting
+  for it. The mark that it has done so is in its own address (`?again=1`);
+  a second failure is left as it is.
 - **Nothing is addressed to "any origin".** Every message the signer sends
   goes to the site's address as the browser gave it, or to this origin. A
   site learns the signer is there by asking `state` once the frame has
@@ -344,10 +349,25 @@ half of what it asked for fails in ways its user cannot see.
   upload and delete the user's files wherever they are.
 - **The time** is the site's if it is within ten minutes of the signer's
   clock, and the signer's own otherwise. Applications replace their own
-  events and need the later one to win.
+  events and need the later one to win. An application that sent a time
+  further off than that gets back an event with another: **read
+  `created_at` from the event that comes back, never from the one that
+  was sent.** This stops an application dating a note in the past or the
+  future as the user.
 - **The mark.** Every event is tagged with the site that asked,
   `["bitlogin:site", "<origin>"]`, except a seal (kind 13), which must have
   no tags. A world's notes keep the tag NSWP gave them.
+- **The mark is the signer's to write.** Any tag named `bitlogin:site` or
+  `nswp:world` on what an application sends is taken off before the
+  signer's own is put on, so what comes back has exactly one. A site that
+  could write the mark could say it was another site. An application that
+  wants to name a world in an event uses a tag of another name.
+- **One exception: a world grant (kind 27303) keeps its `nswp:world`.**
+  There the tag is the grant's subject, the one world a terminal may be
+  brought to, and NSWP's Bridge requires exactly one. It is kept only in
+  that kind, which is signed only for the address it is reserved to; it
+  must be exactly one tag naming an origin, or the grant is not signed;
+  and the event still carries the signer's own `bitlogin:site`.
 - **Size:** 100,000 characters of content, 2,500 tags.
 
 ## SW9.5 Encrypting and reading
@@ -363,6 +383,12 @@ A handed-over session refuses both today. For an approved application:
   the right key (the author's, or for the user's own event the key it was
   addressed to). An application approved to read its own drafts cannot read
   the user's Cashu tokens, because those are another kind.
+- **The user's own event that names somebody** (a `p` tag) is tried
+  against that key and then against the user's own. A note an application
+  saved for the user alone is sealed to their own key whatever tags it
+  carries; a `p` tag on one used to make it unreadable (found by the
+  BitPortal session, 2026-11-19). Nothing more can be read this way: it is
+  still one event, of a kind and a prefix the set may read.
 - **`peers`** covers what is not in an event: an answer from the BitUnlock
   service arrives as a sealed envelope, not a Nostr event. Raw decrypting is
   allowed only against a key the user was shown.
@@ -383,8 +409,13 @@ Counted across page loads (§SW11), per site, by what is being signed:
 |---|---|---|
 | Proofs (27235, 24242, 22242) and the application's own data | 300 | 6,000 |
 | Anything public and Ordinary | 60 | 1,200 |
-| Sensitive | 30 | 300 |
+| Sensitive, and the reserved kinds (27300, 27302, 27303) | 30 | 300 |
 | Reading | 600 | 12,000 |
+
+The reserved kinds were counted as public until 2026-11-19. They are a
+pass that says who the user is, a terminal on a computer of theirs, and
+access granted to a world: the window lists them as deserving a second
+look, and they are now counted that way.
 
 An application cannot raise them. They are sized to the bursts in §SW9.1,
 with room, and are the owner's to tune.

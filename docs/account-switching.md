@@ -1,9 +1,10 @@
 # BitLogin Multi-Account Switching
 
-**Status:** Experimental design
-**Document version:** 0.1
-**Date:** July 22, 2026
-**Implementation status:** Not implemented
+**Status:** A first version is built on `beta` (2026-11-19). See "What is
+built" at the end: it is narrower than the design below, which is kept as
+written.
+**Document version:** 0.2
+**Date:** July 22, 2026; built November 19, 2026
 
 ## 1. Summary
 
@@ -323,3 +324,62 @@ The initial feature is complete when:
 6. Add account-aware relay, messaging, app-state, entitlement, and Connection
    Vault modules.
 7. Add tests for rapid switching, reload restoration, and cross-account leakage.
+
+---
+
+## What is built (2026-11-19, on `beta`)
+
+Asked for by the owner on 2026-11-19, after the sign-in window signed them
+in to a world as an account they did not mean to use.
+
+**How it is kept.** Each account that signs in on a device gets a slot of
+its own beside the active one (`worker/sessionCache.ts`, `keptSlot`):
+the same record, encrypted under the same non-extractable device key, and
+sealed under the optional lock where the lock is on. A list beside them
+(`worker/keptAccounts.ts`) says which slots there are and what to call
+them: the public key, and the name, picture and line from the account's
+own signed profile as last read. It holds nothing secret. Eight accounts at
+most; the one least lately used goes first.
+
+**What a user can do.**
+
+- **Sign in as another account** without signing the first out: "Add
+  another account" on the signed-in view. Any ordinary sign-in keeps the
+  account it replaces.
+- **Switch** between kept accounts with one press: no password, no relay.
+  A host page hears `bitlogin-logout` and then `bitlogin-login`.
+- **Come back** to a kept account from the welcome screen ("Continue as").
+- **Log out** forgets the signed-in account on that device and leaves the
+  others. "Remove from this device" does the same for one that is not
+  signed in.
+- **In the sign-in window** (`/connect/`): "Use a different account" opens
+  a chooser. Where more than one account is kept and the asking site has
+  not been allowed before, the chooser comes first: which account is
+  asked, never assumed.
+- **A site** can open that chooser: `switchAccount()` on
+  `createBitLoginClient`, or the window at `/connect/#switch`. The site
+  never sees the list, only the account that was allowed.
+
+**The lock** (`sign-in-window.md` §SW12) covers every kept account. Turning
+it on, off, or changing the PIN seals every slot again. Locked, switching
+asks for the PIN first. A password sign-in made while it is locked still
+turns the lock off, as before; the other kept accounts were sealed under
+it, so they are forgotten and signed in to again the ordinary way. Too
+many wrong tries forgets every kept account.
+
+**Where it stops short of the design above.**
+
+- **No device-wide "sign out of everything".** Each account is logged out
+  of in turn.
+- **Sites keep the account they were allowed as.** Switching at the
+  sign-in address does not change who a site signs as: the site asks again
+  (its own "switch account"), and the user allows it as the other one.
+  This is deliberate: a site is told nothing it was not allowed.
+- **Extension and remote-signer sessions are not kept.** They hold no key
+  here to keep.
+- **A kept account is named by its profile.** One with no profile shows as
+  "An account with no name" and its key. The login name is not kept.
+- **Tried in Chromium only,** with passkey accounts, against the mock
+  relays.
+- **Nothing is shared between tabs live.** A second open tab learns of a
+  switch when it is next loaded.

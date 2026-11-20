@@ -8,6 +8,46 @@ would plausibly want. Newest first.
 
 ## 2026-11-19 (later, on `beta` only)
 
+- **Five things for applications that sign through the window**
+  (`docs/sign-in-window.md` §SW9.4 to §SW9.6), after the BitPortal session
+  moved its sign-in to it:
+  - `decryptEvent` on the user's own event that carries a `p` tag now also
+    tries the user's own key. A saved note with a `p` tag was unreadable.
+  - The reserved kinds (27300, 27302, 27303) are counted at the sensitive
+    rate, 30 a minute and 300 an hour, where they were 60 and 1,200.
+  - The embedded signer's page loads itself again, once, if one of its
+    files fails to arrive (a page caught in the middle of a deploy).
+  - A world grant (kind 27303) keeps its one `nswp:world` tag, which names
+    the world the grant is for. It was taken off, so the grant could not
+    be signed through the window. Every other kind is as before.
+  - Written down, not changed: a tag named `nswp:world` or `bitlogin:site`
+    is taken off what an application sends; and a `created_at` more than
+    ten minutes off is replaced, so read it from the event that comes back.
+- **Several accounts can be kept signed in on one device, and switched
+  between with one press** (`docs/account-switching.md`, "What is built").
+  Signing in as another account no longer signs the first one out. The
+  signed-in view has "Switch account"; the welcome screen offers "Continue
+  as"; the sign-in window has a chooser, and asks which account when more
+  than one is kept and a site asks for the first time.
+- **Log out now forgets only the account that is signed in.** Other
+  accounts kept on the device stay, and so does the lock they are under.
+- **New for a site:** `switchAccount()` on `createBitLoginClient` opens
+  the window at its chooser (`/connect/#switch`). The site never sees the
+  list of accounts.
+- **New on the headless signer:** `accounts()`, `switchAccount(pubkey)`,
+  `addAccount()`. New on `<bitlogin-auth>`: `switchAccount(pubkey)`.
+- **For a site with its own vendored copy:** new storage keys
+  `bitlogin:kept-session:v1:<pubkey>` and `bitlogin:kept-accounts:v1`,
+  beside the session the widget already kept. Nothing is migrated: an
+  account is kept from its next sign-in or page load.
+- **The widget's signed-in view shows who is signed in:** a picture, the
+  name from the account's own signed profile, the line about them and the
+  whole npub, where it showed the key alone. So does the sites page. For a
+  BitLogin account only: an extension or remote-signer session still shows
+  the key. **For a site with its own vendored copy:** the worker asks up
+  to eight relays for the profile once per sign-in, and the picture is
+  fetched from its https address. A page whose policy forbids remote
+  images (`img-src`) shows a letter in its place; nothing breaks.
 - **The Allow screen shows who you are signing in as, and the buttons
   come first** (asked for by the owner after the window signed them in to
   a world as an account they did not mean). Under the site's address: the

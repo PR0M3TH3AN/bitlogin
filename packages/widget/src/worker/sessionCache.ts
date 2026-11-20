@@ -76,9 +76,9 @@ async function lockAes(lockKey: Uint8Array, usage: "encrypt" | "decrypt"): Promi
 }
 
 /** What is cached: nothing, a session that can be restored, or one sealed under the lock. */
-export async function cachedSessionState(store: SessionStore): Promise<"none" | "open" | "locked"> {
+export async function cachedSessionState(store: SessionStore, slot: string = SESSION_KEY): Promise<"none" | "open" | "locked"> {
   try {
-    const raw = await store.get(SESSION_KEY);
+    const raw = await store.get(slot);
     if (!raw) return "none";
     const parsed = JSON.parse(raw) as unknown;
     return isLockedSession(parsed) ? "locked" : isEncryptedSession(parsed) ? "open" : "none";
@@ -121,7 +121,7 @@ function isEncryptedSession(value: unknown): value is EncryptedSession {
   );
 }
 
-export async function saveCachedSession(store: SessionStore, data: CachedSessionData, lockKey?: Uint8Array | null): Promise<void> {
+export async function saveCachedSession(store: SessionStore, data: CachedSessionData, lockKey?: Uint8Array | null, slot: string = SESSION_KEY): Promise<void> {
   const stored: PlainSession = {
     everydayPrivateKeyHex: Array.from(data.everydayPrivateKey, (byte) => byte.toString(16).padStart(2, "0")).join(""),
     accountId: data.accountId,
@@ -146,7 +146,7 @@ export async function saveCachedSession(store: SessionStore, data: CachedSession
     if (typeof store.getOrCreateDeviceKey !== "function") {
       // Never retain the legacy plaintext format when secure key storage is
       // unavailable (for example, an old/private browser implementation).
-      await store.delete(SESSION_KEY);
+      await store.delete(slot);
       return;
     }
     const key = await store.getOrCreateDeviceKey(SESSION_DEVICE_KEY);
@@ -159,24 +159,24 @@ export async function saveCachedSession(store: SessionStore, data: CachedSession
       ciphertext: toBase64(new Uint8Array(ciphertext))
     };
     if (!lockKey) {
-      await store.set(SESSION_KEY, JSON.stringify(encrypted));
+      await store.set(slot, JSON.stringify(encrypted));
       return;
     }
     // The lock is on: the record is sealed once more, under the lock key.
     const lockIv = crypto.getRandomValues(new Uint8Array(12));
     const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv: lockIv }, await lockAes(lockKey, "encrypt"), new TextEncoder().encode(JSON.stringify(encrypted)));
     const locked: LockedSession = { v: 3, iv: toBase64(lockIv), ciphertext: toBase64(new Uint8Array(sealed)) };
-    await store.set(SESSION_KEY, JSON.stringify(locked));
+    await store.set(slot, JSON.stringify(locked));
   } catch {
     // With the lock on, a session that could not be sealed is not left behind unsealed.
-    if (lockKey) await store.delete(SESSION_KEY).catch(() => {});
+    if (lockKey) await store.delete(slot).catch(() => {});
   }
 }
 
-export async function loadCachedSession(store: SessionStore, lockKey?: Uint8Array | null): Promise<CachedSessionData | null> {
+export async function loadCachedSession(store: SessionStore, lockKey?: Uint8Array | null, slot: string = SESSION_KEY): Promise<CachedSessionData | null> {
   let raw: string | undefined;
   try {
-    raw = await store.get(SESSION_KEY);
+    raw = await store.get(slot);
   } catch {
     return null;
   }
@@ -193,7 +193,7 @@ export async function loadCachedSession(store: SessionStore, lockKey?: Uint8Arra
     if (!isEncryptedSession(encrypted) || typeof store.getOrCreateDeviceKey !== "function") {
       // A v1 record contains a plaintext private key. Remove it rather than
       // silently preserving the insecure cache; the user can sign in once.
-      await store.delete(SESSION_KEY);
+      await store.delete(slot);
       return null;
     }
     const key = await store.getOrCreateDeviceKey(SESSION_DEVICE_KEY);
@@ -235,6 +235,22 @@ export async function loadCachedSession(store: SessionStore, lockKey?: Uint8Arra
   } catch {
     // Corrupt or unrecognized cache entry -- treat as "no session," not an error.
     return null;
+  }
+}
+
+/**
+ * Where a kept account's session lives (docs/account-switching.md): a slot of its own beside the active one, in
+ * the same form and under the same device key, and sealed under the lock where the lock is on.
+ */
+export const KEPT_SESSION_PREFIX = "bitlogin:kept-session:v1:";
+export const keptSlot = (pubkey: string): string => KEPT_SESSION_PREFIX + pubkey;
+
+/** Remove one slot and leave the device key: other accounts are kept under it. */
+export async function clearSessionSlot(store: SessionStore, slot: string = SESSION_KEY): Promise<void> {
+  try {
+    await store.delete(slot);
+  } catch {
+    // ignore
   }
 }
 

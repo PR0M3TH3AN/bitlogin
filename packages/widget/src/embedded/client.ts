@@ -68,6 +68,15 @@ export interface BitLoginClient {
    * application, false if they closed the window or said no.
    */
   signIn(): Promise<boolean>;
+  /**
+   * Open the sign-in window at its account chooser, so the user can carry
+   * on here as another of the accounts kept on their device, or sign in as
+   * one that is not. Call it from the user's own press. Resolves once the
+   * window has closed: true if someone is signed in here then (the same
+   * account or another: read `state()`), false if nobody is. The
+   * application never sees the list of accounts, only the one chosen.
+   */
+  switchAccount(): Promise<boolean>;
   /** Sign out of this application: the signer forgets this site. */
   signOut(): Promise<void>;
   getPublicKey(): Promise<string>;
@@ -234,6 +243,20 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
               stop();
               resolve(current.signedIn);
             });
+        }, 400);
+      });
+    },
+    async switchAccount() {
+      await introduce();
+      const opened = window.open(`${at}/connect/#switch`, "bitlogin-connect", "popup,width=480,height=760");
+      if (!opened) return false;
+      return new Promise<boolean>((resolve) => {
+        const watch = setInterval(() => {
+          if (!opened.closed) return;
+          clearInterval(watch);
+          void request({ t: "state" })
+            .catch(() => undefined)
+            .then(() => resolve(current.signedIn));
         }, 400);
       });
     },

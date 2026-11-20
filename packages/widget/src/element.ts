@@ -31,7 +31,8 @@ import {
   passkeySupported
 } from "./passkey.js";
 import { askLockDevice, createLockDevice } from "./lockDevice.js";
-import type { LockOpenResult, LockStatusResult } from "./worker/protocol.js";
+import type { KeptAccountInfo, LockOpenResult, LockStatusResult } from "./worker/protocol.js";
+import type { Profile } from "./embedded/profile.js";
 
 type Screen =
   | "welcome"
@@ -51,6 +52,7 @@ type Screen =
   | "recover-rebuild"
   | "recover-new-credentials"
   | "dashboard"
+  | "accounts"
   | "change-password"
   | "export"
   | "health"
@@ -115,6 +117,17 @@ export class BitLoginAuthElement extends HTMLElement {
   private offlineExportFileNotice: string | undefined;
 
   private session: { publicKey: string; npub: string; accountId?: string; method: SignerMethod } | null = null;
+  /**
+   * The signed-in account's own signed profile (kind 0), as the worker fetched and checked it: so the signed-in
+   * view can show a name and a picture, and one account is not mistaken for another. Kept with the key it is
+   * for, and shown only for that key. Null until relays answer, and where there is none.
+   */
+  private profile: { pubkey: string; found: Profile | null } | null = null;
+  private profileAsked = "";
+  /** The accounts kept signed in on this device (docs/account-switching.md), as the worker lists them. */
+  private accounts: KeptAccountInfo[] = [];
+  /** An account that was chosen while the lock was locked: switched to once it is open. */
+  private pendingSwitch = "";
 
   // ---- Alternative-method sessions (docs/login-methods.md §LM4, §LM5, §LM7) ----
   // `pending*` state holds a candidate between "the signer answered" and the user
@@ -371,6 +384,99 @@ export class BitLoginAuthElement extends HTMLElement {
     this.releaseSigner();
     this.dispatchEvent(new CustomEvent("bitlogin-logout"));
     this.goto("welcome");
+    void this.refreshAccounts();
+  }
+
+  /** The accounts kept on this device, read again from the worker; the view is drawn again where it shows them. */
+  private async refreshAccounts(): Promise<void> {
+    try {
+      this.accounts = (await this.worker.accountsList()).accounts;
+    } catch {
+      this.accounts = [];
+    }
+    if (this.screen === "welcome" || this.screen === "accounts" || this.screen === "dashboard") this.render();
+  }
+
+  /** The account in hand is no longer the one signed in here: the host is told, and nothing of it is left. */
+  private endSession(): void {
+    const had = Boolean(this.session);
+    this.session = null;
+    this.passkeySession = false;
+    this.phraseRebuildsIdentity = false;
+    this.loginName = "";
+    this.sessionWarnings = [];
+    this.lastSignedEventJson = "";
+    clearActiveSession(this);
+    this.releaseSigner();
+    if (had) this.dispatchEvent(new CustomEvent("bitlogin-logout"));
+  }
+
+  /**
+   * Switch to another account kept on this device (docs/account-switching.md): no password, no relay. A host
+   * hears bitlogin-logout for the one and bitlogin-login for the other. With the lock locked, it is opened first.
+   */
+  async switchAccount(pubkey: string): Promise<void> {
+    if (!pubkey || this.altSigner || pubkey === this.session?.publicKey) return this.goto(this.session ? "dashboard" : "welcome");
+    this.errorMessage = undefined;
+    let result;
+    try {
+      result = await this.worker.accountsSwitch(pubkey);
+    } catch {
+      this.errorMessage = "That account could not be opened here.";
+      return this.render();
+    }
+    if (result.locked) {
+      this.pendingSwitch = pubkey;
+      this.lock = await this.worker.lockStatus().catch(() => null);
+      return this.showLocked();
+    }
+    this.pendingSwitch = "";
+    if (!result.restored || !result.everydayPublicKey) {
+      // What was kept for it could not be read, and is gone. The account itself is untouched.
+      this.endSession();
+      this.goto("welcome");
+      this.errorMessage = "That account is no longer kept on this device. Sign in to it the ordinary way.";
+      return this.refreshAccounts();
+    }
+    this.endSession();
+    this.takeRestored(result);
+    void this.refreshAccounts();
+  }
+
+  /** Make room to sign in as another account. Everyone kept here stays kept. */
+  private async addAccount(): Promise<void> {
+    await this.worker.accountsAdd();
+    this.endSession();
+    this.goto("welcome");
+    void this.refreshAccounts();
+  }
+
+  /** A picture, or the first letter of a name where there is none or it can't be fetched. */
+  private renderAvatar(name: string, picture?: string): string {
+    const letter = (name || "?").trim().slice(0, 1).toUpperCase();
+    return picture ? `<img data-avatar="${escapeHtml(letter)}" src="${escapeHtml(picture)}" alt="" referrerpolicy="no-referrer" />` : escapeHtml(letter);
+  }
+
+  /** The accounts kept here, as rows to press. `others` leaves out the one signed in. */
+  private renderAccountRows(others: boolean): string {
+    return this.accounts
+      .filter((account) => !(others && account.active))
+      .map((account) => {
+        const short = `${account.npub.slice(0, 12)}…${account.npub.slice(-6)}`;
+        const row = `
+          <span class="who-pic" aria-hidden="true">${this.renderAvatar(account.name ?? "", account.picture)}</span>
+          <span class="who-text">
+            <span class="who-name">${escapeHtml(account.name || "An account with no name")}</span>
+            <span class="pubkey">${escapeHtml(short)}</span>
+          </span>`;
+        return account.active
+          ? `<div class="account-row current" data-account="${escapeHtml(account.pubkey)}">${row}<span class="small">Signed in</span></div>`
+          : `<div class="account-line">
+               <button class="account-row" type="button" data-action="account-switch" data-pubkey="${escapeHtml(account.pubkey)}" data-account="${escapeHtml(account.pubkey)}">${row}</button>
+               ${others ? "" : `<button class="link" type="button" data-action="account-remove" data-pubkey="${escapeHtml(account.pubkey)}">Remove from this device</button>`}
+             </div>`;
+      })
+      .join("");
   }
 
   /**
@@ -678,6 +784,7 @@ export class BitLoginAuthElement extends HTMLElement {
    * detail shape: which method granted the session and what it can do (§LM3). The
    * pre-existing `publicKey` field is unchanged for hosts written before `method`. */
   private dispatchLogin(): void {
+    void this.refreshAccounts();
     const capabilities: SignerCapabilities = this.altSigner?.capabilities ?? {
       nip44: true,
       nip04: true,
@@ -1025,6 +1132,17 @@ export class BitLoginAuthElement extends HTMLElement {
         return this.handleRevealNsec();
       case "logout":
         return this.logout();
+      case "goto-accounts":
+        void this.refreshAccounts();
+        this.goto("accounts");
+        return;
+      case "account-switch":
+        return this.switchAccount(target.dataset.pubkey ?? "");
+      case "account-add":
+        return this.addAccount();
+      case "account-remove":
+        await this.worker.accountsRemove(target.dataset.pubkey ?? "").catch(() => {});
+        return this.refreshAccounts();
       case "lock-now":
         return this.lockNowPressed();
       case "goto-lock-settings":
@@ -1606,10 +1724,24 @@ export class BitLoginAuthElement extends HTMLElement {
   /** What an unlock came back with: in, wrong with tries left, or removed. */
   private async afterUnlock(result: LockOpenResult): Promise<void> {
     this.busy = false;
+    const chosen = this.pendingSwitch;
+    if (result.ok && chosen && chosen !== result.everydayPublicKey) {
+      // It was opened to switch to another account: the lock is open now, so that is done.
+      this.lock = await this.worker.lockStatus();
+      if (result.everydayPublicKey) this.takeRestored(result);
+      return this.switchAccount(chosen);
+    }
+    this.pendingSwitch = "";
     if (result.ok && result.everydayPublicKey) {
       this.lock = await this.worker.lockStatus();
       this.takeRestored(result);
       return;
+    }
+    if (result.ok) {
+      // Open, with nobody signed in: the accounts kept here can be chosen from.
+      this.lock = await this.worker.lockStatus();
+      this.goto("welcome");
+      return this.refreshAccounts();
     }
     if (result.removed) {
       this.lock = null;
@@ -1704,6 +1836,7 @@ export class BitLoginAuthElement extends HTMLElement {
     try {
       const result = await this.worker.restoreSession();
       this.lock = await this.worker.lockStatus().catch(() => null);
+      void this.refreshAccounts();
       if (result.locked) return this.goto("unlock");
       if (!result.restored || !result.everydayPublicKey) return;
       this.session = {
@@ -2028,7 +2161,52 @@ export class BitLoginAuthElement extends HTMLElement {
   private render(): void {
     const successOverlay = this.pendingSuccessLabel ? this.renderSuccessOverlay(this.pendingSuccessLabel) : "";
     this.root.innerHTML = `<div class="card">${this.renderScreen()}${successOverlay}</div>`;
+    // A picture that can't be fetched (it is gone, or the host page's policy forbids it) gives way to a letter.
+    for (const img of this.root.querySelectorAll<HTMLImageElement>("img[data-avatar]")) {
+      img.addEventListener("error", () => img.replaceWith(document.createTextNode(img.dataset.avatar ?? "?")), { once: true });
+    }
     this.exposeParts();
+  }
+
+  /**
+   * Who is signed in, for the signed-in view: a picture (or a letter), the name from their own signed profile,
+   * and the whole key. The profile is asked for once per account, behind the view; the view is drawn again when
+   * it arrives. Everything from a profile is escaped, and a picture is only ever an https address the worker
+   * cleaned.
+   */
+  private renderWho(): string {
+    const session = this.session;
+    if (!session) return "";
+    if (session.method === "bitlogin" && this.profileAsked !== session.publicKey) {
+      this.profileAsked = session.publicKey;
+      void this.fetchProfile(session.publicKey);
+    }
+    const found = this.profile?.pubkey === session.publicKey ? this.profile.found : null;
+    const name = found?.name || (session.method === "bitlogin" ? this.loginName : "") || "";
+    const picture = this.renderAvatar(name, found?.picture);
+    return `
+      <div class="who">
+        <span class="who-pic" aria-hidden="true">${picture}</span>
+        <div class="who-text">
+          ${name ? `<p class="who-name">${escapeHtml(name)}</p>` : ""}
+          ${found?.about ? `<p class="small who-about">${escapeHtml(found.about)}</p>` : ""}
+          <p class="pubkey">${escapeHtml(session.npub)}</p>
+        </div>
+      </div>`;
+  }
+
+  private async fetchProfile(pubkey: string): Promise<void> {
+    try {
+      const found = (await this.worker.loadProfile({})).profile ?? null;
+      // Signed out, or signed in as someone else, while relays were answering: it is not theirs to show.
+      if (this.session?.publicKey !== pubkey) return;
+      this.profile = { pubkey, found };
+      if (found && this.screen === "dashboard") this.render();
+    } catch {
+      // No relay answered, or the worker is locked: the key is shown without a name, and it is asked again
+      // the next time someone signs in.
+      if (this.profileAsked === pubkey) this.profileAsked = "";
+    }
   }
 
   /**
@@ -2188,6 +2366,15 @@ export class BitLoginAuthElement extends HTMLElement {
           ${this.renderBrandLockup()}
           <p class="sub">A portable Nostr identity with a familiar login name and password.</p>
           ${this.renderError()}
+          ${
+            this.accounts.length > 0 && !this.session
+              ? `<div class="account-list" data-continue-as>
+                   <p class="small">Continue as an account kept on this device:</p>
+                   ${this.renderAccountRows(true)}
+                 </div>
+                 <div class="divider"></div>`
+              : ""
+          }
           <button class="primary" data-action="goto-login">Sign in</button>
           <button class="secondary" data-action="goto-create">Create account</button>
           <button class="options-toggle ${this.moreOptionsOpen ? "open" : ""}" type="button" data-action="toggle-more" aria-expanded="${this.moreOptionsOpen}">
@@ -2525,7 +2712,8 @@ export class BitLoginAuthElement extends HTMLElement {
         return `
           <h2>Signed in</h2>
           ${this.renderWarnings()}
-          <p class="pubkey">${escapeHtml(this.session?.npub ?? "")}</p>
+          ${this.renderWho()}
+          ${method === "bitlogin" ? `<button class="link" type="button" data-action="goto-accounts">${this.accounts.length > 1 ? "Switch account" : "Add another account"}</button>` : ""}
           ${keyBackupNotice}
           ${passkeyStanding}
           ${this.renderError()}
@@ -2541,6 +2729,16 @@ export class BitLoginAuthElement extends HTMLElement {
           <button class="secondary" type="button" data-action="logout">Log out</button>
         `;
       }
+
+      case "accounts":
+        return `
+          ${this.renderScreenHead("Accounts on this device", "goto-dashboard")}
+          <p class="sub">Each is a separate account, with its own password and recovery phrase. Switching needs no password: they are kept on this device.</p>
+          ${this.renderError()}
+          <div class="account-list">${this.renderAccountRows(false)}</div>
+          <button class="secondary" type="button" data-action="account-add">Add another account</button>
+          <p class="small">To remove the account that is signed in, log out of it.</p>
+        `;
 
       case "unlock":
         return `
