@@ -448,6 +448,24 @@ Diff that file before and after to confirm what actually changed, then
 commit, test, and deploy through your site's normal process — the whole
 point of vendoring is that this is a reviewed step, not an automatic one.
 
+**One script for any site.** A site with no vendor script of its own (or one
+that wants to drop its own) can use BitLogin's:
+
+```bash
+# from a clean BitLogin checkout at the commit you want
+node scripts/vendor.mjs /path/to/site/vendor/bitlogin                # every file
+node scripts/vendor.mjs /path/to/site/vendor/bitlogin --set widget   # no sign-in window
+node scripts/vendor.mjs /path/to/site/vendor/bitlogin --check        # verify, change nothing
+```
+
+It refuses a BitLogin checkout with uncommitted changes, builds, copies the
+files, deletes only BitLogin's own stale files in that folder, and writes
+`<folder>.integrity.json` in the format the sites above already check.
+`--set widget` is for a site that only embeds `<bitlogin-auth>` and the
+headless signer: the widget, the session reader, the worker (which the
+widget names at run time, so it is always included) and every chunk they
+load.
+
 ## What's implemented
 
 This build covers the protocol's Phase 0 (cryptographic core + test vectors)
