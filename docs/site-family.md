@@ -155,7 +155,9 @@ Less than a site's own grant, where the two differ:
   stranger's page learns who the person is and can sign notes and room
   passes for itself. Bounded by: the wording at Allow; seven days unless
   the family is known; no application kinds and no reserved kinds; the
-  family's shared counts; take-back.
+  family's shared counts; take-back. A known family (SF9.3) is kept thirty
+  days, so its entry is sound only while every name under it is run by
+  the same owner.
 - **A wrong Public Suffix List.** An old list may miss a new hosting
   suffix, which would offer a family across strangers' sites. Bounded by:
   partitioning (SF2) in every current browser; reviewed list updates; the
@@ -193,7 +195,12 @@ Less than a site's own grant, where the two differ:
    `bitblocks.network`, changed only by a release. It decides how long a
    family is kept and nothing else: any domain may still be a family
    (SF9.1). This answers the BitPortal session's ask to add the reference
-   worlds to `KNOWN_APPS`, and covers worlds not yet made.
+   worlds to `KNOWN_APPS`, and covers worlds not yet made. **The entry
+   assumes every name under `bitblocks.network` is the owner's.** If a
+   world run by someone else is ever hosted there, the entry is reviewed,
+   and removed or narrowed, in the same release. Otherwise that world would
+   get `state`, passes and notes for thirty days without a prompt.
+   (Caution from the BitPortal session, 2026-11-19.)
 4. **Does taking back one member end the whole family grant?**
    **Decided 2026-11-19: yes** (SF6).
 
