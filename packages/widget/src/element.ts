@@ -2560,9 +2560,19 @@ export class BitLoginAuthElement extends HTMLElement {
         const previewed = !!this.importPreviewNpub;
         return `
           ${this.renderScreenHead("Import an existing Nostr key")}
-          <p class="sub">Use a Nostr identity you already have with a BitLogin login. Read this first: importing puts an encrypted copy of your private key on public relays.</p>
+          <p class="sub">Use a Nostr identity you already have with a BitLogin login.</p>
+          <div class="notice info" data-import-instead>
+            <strong>Most people should start a fresh account instead.</strong>
+            <p class="small">Importing puts an encrypted copy of your private key on public relays, for good. If you don't want that, don't import it:</p>
+            <ul class="risk-list">
+              <li><strong>Start a fresh account.</strong> BitLogin makes a new key for it, and your existing key is never involved. This is what we recommend for a key you care about.</li>
+              <li><strong>Keep your key where it is.</strong> Sign in with a browser extension or a remote signer: they sign for you, and BitLogin never holds or stores the key.</li>
+            </ul>
+            <button class="secondary" type="button" data-action="goto-create">Create a fresh account instead</button>
+            <button class="secondary" type="button" data-action="goto-welcome">Other ways to sign in</button>
+          </div>
           <div class="notice warn" data-import-risk>
-            <strong>What happens to your key if you import it</strong>
+            <strong>If you import anyway: what happens to your key</strong>
             <ul class="risk-list">
               <li><strong>It is stored on public Nostr relays, encrypted.</strong> BitLogin has no server. So that you can sign in from any device, it encrypts your private key and publishes it to relays as notes: one opened by your login (a generated password, or your passkey), and one opened by a 12-word recovery phrase.</li>
               <li><strong>Anyone can download those notes.</strong> Nothing can limit how many guesses someone makes against them. What protects your key is the strength of the generated password and phrase, and the encryption itself.</li>
@@ -2570,15 +2580,6 @@ export class BitLoginAuthElement extends HTMLElement {
               <li><strong>A Nostr key can't be changed.</strong> If this one is exposed, the identity is lost for good: its name, its followers and everything it signed.</li>
               <li><strong>Pasting a key into a web page is a risk of its own.</strong> Only do it on a BitLogin address you trust, and clear your clipboard afterward. BitLogin can't protect copies of this key that already exist elsewhere.</li>
             </ul>
-          </div>
-          <div class="notice info" data-import-instead>
-            <strong>If you don't want your key stored on relays, even encrypted, don't import it.</strong>
-            <ul class="risk-list">
-              <li><strong>Start a fresh account.</strong> BitLogin makes a new key for it, and your existing key is never involved. This is what we recommend for a key you care about.</li>
-              <li><strong>Keep your key where it is.</strong> Sign in with a browser extension or a remote signer: they sign for you, and BitLogin never holds or stores the key.</li>
-            </ul>
-            <button class="secondary" type="button" data-action="goto-create">Create a fresh account instead</button>
-            <button class="secondary" type="button" data-action="goto-welcome">Other ways to sign in</button>
           </div>
           ${this.renderError()}
           <form data-form="import-key">
