@@ -1658,6 +1658,15 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await widget.locator('form[data-form="import-key"] button[type="submit"]').click();
           await widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
           const shown = ((await widget.locator(".credential-box").textContent()) ?? "").trim();
+          // Nobody imports a key without being told where it will be kept, and saying they read it.
+          const risk = (await widget.locator("[data-import-risk]").textContent()) ?? "";
+          for (const said of ["stored on public Nostr relays, encrypted", "Anyone can download", "can't be taken back", "can't be changed"]) expect(risk, said).toContain(said);
+          expect(await widget.locator("[data-import-instead]").textContent()).toContain("Start a fresh account");
+          await widget.locator('[data-action="import-continue"]').click();
+          await widget.locator(".notice.error").waitFor({ timeout: 30_000 });
+          expect(await widget.locator(".notice.error").textContent()).toContain("Tick the box");
+          expect(await widget.locator('form[data-form="create-name"]').count()).toBe(0);
+          await widget.locator("#import-ack-check").check();
           await widget.locator('[data-action="import-continue"]').click();
           return { shown, ...(await setUp(name, true)) };
         };
@@ -1831,6 +1840,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await d.restoreFile(madeFiles.keyPath);
         await d.widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
         expect(((await d.widget.locator(".credential-box").textContent()) ?? "").trim()).toBe(encodeNpub(made.pubkey));
+        await d.widget.locator("#import-ack-check").check();
         await d.widget.locator('[data-action="import-continue"]').click();
         const fromKeyFile = await d.widget.locator('form[data-form="create-name"]').waitFor({ timeout: 30_000 }).then(async () => {
           await d.widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(`keyfile${tag}`);
@@ -1935,6 +1945,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await d.widget.locator('form[data-form="import-key"] input[name="importKey"]').fill(encodeNsec(outside));
         await d.widget.locator('form[data-form="import-key"] button[type="submit"]').click();
         await d.widget.locator('[data-action="import-continue"]').waitFor({ timeout: 30_000 });
+        await d.widget.locator("#import-ack-check").check();
         await d.widget.locator('[data-action="import-continue"]').click();
         await completeRecoveryCeremony(d.widget);
         await d.widget.locator("#key-saved-check").waitFor({ timeout: 60_000 });
@@ -2207,6 +2218,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await widget.locator('[data-action="goto-import"]').click();
         await widget.locator('form[data-form="import-key"] input[name="importKey"]').fill(importedNsec);
         await widget.locator('form[data-form="import-key"] button[type="submit"]').click();
+        await widget.locator("#import-ack-check").check();
         await widget.locator('[data-action="import-continue"]').click();
         await startPasswordSignUp(widget, "importer");
         await completeRecoveryCeremony(widget);

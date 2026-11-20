@@ -8,6 +8,13 @@ would plausibly want. Newest first.
 
 ## 2026-11-20 (on `beta` only)
 
+- **Importing a key says plainly where the key will be kept** (`docs/spec.md`
+  §28.1). The import screen now states that an encrypted copy is published
+  to public relays, that anyone can download it, that it can't be taken
+  back, and that a Nostr key can't be changed. It recommends a fresh
+  account or a signer that never stores the key, and the user must tick
+  that they understand before going on. A site that drives the widget's
+  import flow in its own tests needs to tick `#import-ack-check`.
 - **A world can keep saves with its visitor's account** (NSWP-12;
   `docs/sign-in-window.md` §SW16a). The embedded signer answers `save`,
   `find` and `open` for a site that declared nothing. A save is an

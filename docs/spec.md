@@ -1723,6 +1723,15 @@ The client may allow the user to import an existing raw `nsec`, hexadecimal priv
 
 An imported key is not derived from the new account's recovery phrase and cannot be rebuilt from it (§17.6). The client must say so at import and require the private-key backup of §15.7.
 
+**The risk is said before the key is taken, and is never hidden (owner, 2026-11-20).** Before the user can go on, the import screen must say in plain words:
+
+* that an encrypted copy of the private key will be published to public relays, opened by the login (a generated password, or a passkey) and by the recovery phrase;
+* that anyone can download it and nothing limits guesses against it (§9, §11.3);
+* that it cannot be taken back: a relay may keep its copy after a password change or after the account is abandoned;
+* that a Nostr key cannot be changed, so an exposed one is lost for good.
+
+It must recommend a fresh account for anyone who does not want their key on relays, and name the methods that never store the key (a signer extension, a remote signer). The user must tick an acknowledgement, for the key shown, before the import goes on; a client must not tick it for them.
+
 Wrapping the key in new capsules must never touch anything the identity already had published under its own name. In particular, the initial-profile-publication step (§15.8) applies its existing-event check here specifically: an imported identity commonly already has a real kind `0` profile and/or relay lists, and the client must leave all of that exactly as it found it rather than replacing it with BitLogin defaults.
 
 ## 28.2 NIP-49 export
