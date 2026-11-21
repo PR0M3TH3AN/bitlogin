@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
-import { cleanLightningAddress, invoiceFromAddress, invoiceSats, lightningAddressOfProfile, PAY_LIMIT, readPayLimit, readWorld, writePayLimit } from "./lightning.js";
+import { cleanLightningAddress, cleanPayLimit, invoiceFromAddress, invoiceSats, lightningAddressOfProfile, overPayLimit, PAY_LIMIT, readWorld, tipNote } from "./lightning.js";
 import { belongsTo, bestReceipt, cleanCoordinate, localService, readListing, readReceipt, receiptGood, UNLOCK_SERVICES } from "./listing.js";
 import { completePurchase, createUnlockClient, PurchaseError, readPlan, type BuyerKeys } from "./unlock.js";
 import { startMockUnlock, type MockUnlock } from "./mockUnlock.js";
@@ -64,7 +64,8 @@ describe("a tip, and the limit on a payment with no receipt (docs/paying.md)", (
   });
 
   it("asks an address for an invoice of exactly the amount, and pays no other", async () => {
-    const { invoice } = await invoiceFromAddress(service.address("alice"), 21, local);
+    const { invoice, note: none } = await invoiceFromAddress(service.address("alice"), 21, local);
+    expect(none).toBe("");
     expect(invoiceSats(invoice)).toBe(21);
     // An address that answers with a larger invoice is not paid.
     service.overcharge = 5;
@@ -89,21 +90,36 @@ describe("a tip, and the limit on a payment with no receipt (docs/paying.md)", (
     expect(await readWorld("https://gone.example", { fetch: async () => new Response("no", { status: 404 }) })).toEqual({ tip: "", publishers: [] });
   });
 
-  it("keeps the person's limit, and falls back to a thousand sats", () => {
-    const kept = new Map<string, string>();
-    const storage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v) };
-    expect(PAY_LIMIT.default).toBe(1000);
-    expect(readPayLimit(storage, "a")).toBe(1000);
-    expect(writePayLimit(storage, "a", 5000)).toBe(true);
-    expect(readPayLimit(storage, "a")).toBe(5000);
-    // Another account's is its own, and nonsense changes nothing.
-    expect(readPayLimit(storage, "b")).toBe(1000);
-    for (const bad of [0, -1, 1.5, 2_000_000, "5000", null]) expect(writePayLimit(storage, "a", bad)).toBe(false);
-    expect(readPayLimit(storage, "a")).toBe(5000);
-    kept.set("bitlogin:pay-limit:v1:a", "99999999");
-    expect(readPayLimit(storage, "a")).toBe(1000);
-    expect(readPayLimit(null, "a")).toBe(1000);
-    expect(writePayLimit(null, "a", 10)).toBe(false);
+  it("holds a payment with no receipt to a limit that is one of a few steps", () => {
+    expect(PAY_LIMIT).toEqual({ default: 1000, steps: [1000, 10_000, 100_000, 0] });
+    for (const step of PAY_LIMIT.steps) expect(cleanPayLimit(step)).toBe(step);
+    for (const bad of [5000, -1, 1.5, "1000", null, undefined, 1_000_000]) expect(cleanPayLimit(bad)).toBe(1000);
+    expect(overPayLimit(1000, 1000)).toBe(false);
+    expect(overPayLimit(1001, 1000)).toBe(true);
+    // 0 is "no limit".
+    expect(overPayLimit(1_000_000, 0)).toBe(false);
+  });
+
+  it("sends a note with a tip only where the address takes one, and no longer than it takes", async () => {
+    expect(tipNote("Ada", "https://gallery.example")).toBe("A tip from Ada, in gallery.example");
+    expect(tipNote("", "https://gallery.example")).toBe("A tip, in gallery.example");
+    expect(tipNote(`Ada${String.fromCodePoint(0x202e)}\n`, "nonsense")).toBe("A tip from Ada");
+    const asked: string[] = [];
+    const address = (commentAllowed?: number) => async (url: string) => {
+      asked.push(url);
+      if (url.includes("/.well-known/lnurlp/")) return new Response(JSON.stringify({ tag: "payRequest", callback: "https://pay.example/cb", minSendable: 1000, maxSendable: 10_000_000, ...(commentAllowed === undefined ? {} : { commentAllowed }) }));
+      return new Response(JSON.stringify({ pr: "lnbc210n1mockzz" }));
+    };
+    const note = "A tip from Ada, in gallery.example";
+    expect(await invoiceFromAddress("bob@pay.example", 21, { fetch: address(255), note })).toEqual({ invoice: "lnbc210n1mockzz", note });
+    expect(new URL(asked.at(-1)!).searchParams.get("comment")).toBe(note);
+    expect((await invoiceFromAddress("bob@pay.example", 21, { fetch: address(12), note })).note).toBe("A tip from A");
+    // It takes none, or says nothing: none is sent, and the tip still goes.
+    for (const allowed of [undefined, 0, 4]) {
+      expect((await invoiceFromAddress("bob@pay.example", 21, { fetch: address(allowed), note })).note).toBe("");
+      expect(new URL(asked.at(-1)!).searchParams.has("comment")).toBe(false);
+    }
+    expect((await invoiceFromAddress("bob@pay.example", 21, { fetch: address(255) })).note).toBe("");
   });
 });
 
@@ -120,7 +136,7 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     const services = [localService(service.named)!];
     const made = service.listing({ d: "season-pass", priceSats: 500, title: `Season pass${String.fromCodePoint(0x202e)}`, tags: [["nswp:for", `37300:${"cd".repeat(32)}:foundry`], ["nswp:term", "86400"]] });
     expect(cleanCoordinate(made.coordinate)).toBe(made.coordinate);
-    expect(readListing(made.event, made.coordinate, services)).toEqual({ coordinate: made.coordinate, seller: made.seller.getPublicKey(), title: "Season pass", priceSats: 500, service: services[0], for: `37300:${"cd".repeat(32)}:foundry`, termSeconds: 86400 });
+    expect(readListing(made.event, made.coordinate, services)).toEqual({ coordinate: made.coordinate, seller: made.seller.getPublicKey(), title: "Season pass", priceSats: 500, service: services[0], for: `37300:${"cd".repeat(32)}:foundry`, termSeconds: 86400, nswp: true });
     // Not for the real service's list, not under another coordinate, and not once a word is changed.
     expect(readListing(made.event, made.coordinate)).toBeNull();
     expect(readListing(made.event, `30078:${"ef".repeat(32)}:season-pass`, services)).toBeNull();
@@ -129,7 +145,9 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     // Someone else's listing with the seller's name on it.
     const other = service.listing({ d: "season-pass", priceSats: 1 });
     expect(readListing(other.event, made.coordinate, services)).toBeNull();
-    for (const bad of ["30078:xyz:a", "1:" + "ab".repeat(32) + ":a", "30078:" + "ab".repeat(32) + ":", 5]) expect(cleanCoordinate(bad)).toBe("");
+    for (const bad of ["30078:xyz:a", "1:" + "ab".repeat(32) + ":a", "30078:" + "ab".repeat(32) + ":", "30078:" + "ab".repeat(32) + "::a", "30078:" + "ab".repeat(32) + ":a\nb", "30078:" + "ab".repeat(32) + ":" + "a".repeat(257), 5]) expect(cleanCoordinate(bad)).toBe("");
+    // As BitUnlock takes a name: up to 256 characters, spaces and colons inside it.
+    for (const good of ["a", "example:relay runner", "a".repeat(256)]) expect(cleanCoordinate(`30078:${"ab".repeat(32)}:${good}`)).toBe(`30078:${"ab".repeat(32)}:${good}`);
   });
 
   it("buys: a quote, each part paid once, the unlock, a receipt a world can check", async () => {

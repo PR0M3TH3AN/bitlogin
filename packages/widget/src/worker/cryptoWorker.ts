@@ -65,6 +65,7 @@ import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, r
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/mints.js";
 import { keepReceipts, loadReceipts } from "./receiptStore.js";
+import { loadPaySettings, savePaySettings } from "./paySettings.js";
 import { lightningAddressOfProfile } from "../pay/lightning.js";
 import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
 import { blossomAuth, loadDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
@@ -1939,6 +1940,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     // The receipts kept with the account: in this browser first, then on its relays, each sealed to its own key.
+    case "paySettingsLoad":
+    case "paySettingsSave":
     case "receiptsLoad":
     case "receiptsKeep": {
       const { signer } = requireUnlocked();
@@ -1959,6 +1962,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const pool = new RelayPool([...new Set([...mine, ...vaultRelayUrls])].slice(0, 16));
       try {
         const deps = { signer, store, relays: pool };
+        if (action === "paySettingsLoad") return await loadPaySettings(deps);
+        if (action === "paySettingsSave") return await savePaySettings(deps, payload);
         return action === "receiptsLoad" ? await loadReceipts(deps) : await keepReceipts(deps, (payload as { receipts?: unknown }).receipts);
       } finally {
         pool.closeAll();
@@ -2199,7 +2204,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent",
-  "payProfile", "payListing", "unlockAuth", "receiptsLoad", "receiptsKeep",
+  "payProfile", "payListing", "unlockAuth", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
   "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",

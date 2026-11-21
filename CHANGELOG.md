@@ -22,6 +22,10 @@ would plausibly want. Newest first.
   1,000 sats will now hear `refused`.** The page for `pay` says that
   nothing will be recorded as the person's.
 - The panel takes `mode: "library"`: what the person has bought.
+- The limit is one of four steps (1,000, 10,000, 100,000, none) and is
+  kept with the account. A tip carries a note to the person tipped where
+  their lightning address takes one. A listing for something in a world
+  priced under 500 sats is not shown for sale.
 
 ## 2026-11-21 (on `main`)
 

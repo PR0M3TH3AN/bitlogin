@@ -24,6 +24,7 @@ import { WorkerClient } from "./worker/workerClient.js";
 import type { RankedMint } from "./ecash/mints.js";
 import type { DriveSave, DriveState, RankedServer } from "./worker/driveStore.js";
 import type { KeptReceipt, ReceiptsState } from "./worker/receiptStore.js";
+import type { PaySettings } from "./worker/paySettings.js";
 import type { EcashRoll, EcashState, KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import type { WorldMore } from "./embedded/follows.js";
@@ -131,6 +132,9 @@ export interface HeadlessSigner {
     auth(request: { url: string; method: "GET" | "POST"; payload?: string }): Promise<string>;
     receipts(): Promise<ReceiptsState>;
     keep(receipts: KeptReceipt[]): Promise<ReceiptsState>;
+    /** The most a site may ask for at once with no receipt, in sats (0: no limit), kept with the account. */
+    settings(): Promise<PaySettings>;
+    setLimit(limitSats: number): Promise<PaySettings>;
   };
   /**
    * The account's ecash wallet (docs/ecash.md), for BitLogin's own pages: what it holds, its mints, and the
@@ -340,6 +344,14 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       async keep(receipts) {
         await requirePubkey();
         return client.receiptsKeep(receipts);
+      },
+      async settings() {
+        await requirePubkey();
+        return client.paySettingsLoad();
+      },
+      async setLimit(limitSats) {
+        await requirePubkey();
+        return client.paySettingsSave(limitSats);
       }
     },
     drive: {

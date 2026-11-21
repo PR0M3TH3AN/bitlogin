@@ -334,9 +334,12 @@ const askPay = async () => {
   // The wallet is the signed-in account's: its session is taken up first.
   const session = await prepare().catch(() => null);
   if (!session) return void answered(null);
+  // Their own name goes in the note with a tip, where they have one: relays are given a moment to say.
+  if (tip) await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
   await openEcash({
     worker: session,
-    pubkey: who.pubkey,
+    // Only the name in their own public profile: never the name they sign in by, which is theirs alone.
+    name: profile?.name || "",
     resize: (size) => toClient({ t: "size", size }),
     request: tip ? { site: found.site, tip } : { site: found.site, invoice: found.ask.invoice },
     done: (paid) => void answered(!paid ? null : tip ? { tipped: { sats: tip.sats, ...(paid.preimage ? { preimage: paid.preimage } : {}) } } : { paid }, tip ? "Sent." : "Paid.")
@@ -405,7 +408,7 @@ const showEcash = async () => {
   $("account").hidden = true;
   status("");
   const { openEcash } = await import("./ecash-ui.js");
-  await openEcash({ worker: await theWorker(), pubkey: who?.pubkey ?? "", resize: (size) => toClient({ t: "size", size }), done: () => showAccount() });
+  await openEcash({ worker: await theWorker(), resize: (size) => toClient({ t: "size", size }), done: () => showAccount() });
 };
 
 const askWallet = () => {
@@ -426,9 +429,24 @@ const askWallet = () => {
     .catch(() => answered(null));
 };
 
+/**
+ * BitLogin's page is being shown for a site that is signed in already (it put a question): its signer is handed the
+ * person's receipts for that site's own listings again (docs/paying.md), behind the question, so something bought
+ * on another device reaches it without anything special being done. The signer keeps only its own account's.
+ */
+const handOverReceipts = () => {
+  if (who.pubkey !== found.askedAs) return;
+  const forSite = found;
+  void prepare()
+    .then(async (session) => (await import("./shop-ui.js")).receiptsFor(session, who.pubkey, forSite.site, { always: true }))
+    .then((held) => held.length && forSite.hold(held))
+    .catch(() => {});
+};
+
 const ask = () => {
   if (!found || !who || finished) return;
   $("signin").hidden = true;
+  if (found.ask) handOverReceipts();
   if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" || found.ask.what === "tip" ? void askPay() : found.ask.what === "buy" ? void askBuy() : found.ask.what === "save" || found.ask.what === "pick" ? void askFile() : void askSign();
   toClient({ t: "size", size: "menu" });
   void prepare().catch(() => {});

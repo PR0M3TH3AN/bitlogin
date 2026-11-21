@@ -29,30 +29,15 @@ export const cleanSats = (input: unknown): number => (typeof input === "number" 
 /**
  * The most BitLogin pays in one payment that leaves no receipt: a bare
  * invoice a site asked to have paid, or a tip. The person's own to change, on
- * BitLogin's page, and kept in this browser. A purchase has no such limit:
- * it leaves a receipt.
+ * BitLogin's page, in a few steps and not to any number: 0 is "no limit".
+ * Kept with the account (worker/paySettings.ts). A purchase has no such
+ * limit: it leaves a receipt.
  */
-export const PAY_LIMIT = { default: 1000, min: 1, max: TIP_SATS.max } as const;
-const LIMIT_KEY = "bitlogin:pay-limit:v1:";
-type SmallStore = Pick<Storage, "getItem" | "setItem">;
-export function readPayLimit(storage: SmallStore | null | undefined, pubkey: string): number {
-  try {
-    const kept = Number(storage?.getItem(LIMIT_KEY + pubkey));
-    return Number.isSafeInteger(kept) && kept >= PAY_LIMIT.min && kept <= PAY_LIMIT.max ? kept : PAY_LIMIT.default;
-  } catch {
-    return PAY_LIMIT.default;
-  }
-}
-/** Keep a new limit. False where it is not one, or the browser keeps nothing: then the old limit stands. */
-export function writePayLimit(storage: SmallStore | null | undefined, pubkey: string, sats: unknown): boolean {
-  if (typeof sats !== "number" || !Number.isSafeInteger(sats) || sats < PAY_LIMIT.min || sats > PAY_LIMIT.max) return false;
-  try {
-    storage?.setItem(LIMIT_KEY + pubkey, String(sats));
-    return !!storage;
-  } catch {
-    return false;
-  }
-}
+export const PAY_LIMIT = { default: 1000, steps: [1000, 10_000, 100_000, 0] } as const;
+/** A limit as it may be kept: one of the steps, or the default. */
+export const cleanPayLimit = (input: unknown): number => ((PAY_LIMIT.steps as readonly unknown[]).includes(input) ? (input as number) : PAY_LIMIT.default);
+/** Whether a payment of this many sats, with no receipt, is over the limit. */
+export const overPayLimit = (sats: number, limit: number): boolean => limit !== 0 && sats > limit;
 
 /**
  * How many sats a Lightning invoice asks for, read from its first part. Null
@@ -162,7 +147,7 @@ export async function readWorld(origin: string, options: { fetch?: Fetch; local?
  * LUD-16). What comes back is checked before it is shown to anyone: it must
  * be an invoice, and for this amount and no other.
  */
-export async function invoiceFromAddress(address: string, sats: number, options: { fetch?: Fetch; local?: boolean } = {}): Promise<{ invoice: string }> {
+export async function invoiceFromAddress(address: string, sats: number, options: { fetch?: Fetch; local?: boolean; /** A note to go with the payment, where the address takes one (LUD-12). */ note?: string } = {}): Promise<{ invoice: string; /** The note that went with it, as it was sent. Empty where the address takes none. */ note: string }> {
   const local = options.local === true;
   const clean = cleanLightningAddress(address, { local });
   const amount = cleanSats(sats);
@@ -180,10 +165,43 @@ export async function invoiceFromAddress(address: string, sats: number, options:
     throw new TipError("refused-amount", "That lightning address doesn't take a payment of this size. Nothing was spent.");
   }
   callback.searchParams.set("amount", String(msat));
+  // A note goes only where the address says it takes one, and no longer than it takes. Cut short, never refused.
+  const room = typeof offer.commentAllowed === "number" && Number.isSafeInteger(offer.commentAllowed) ? Math.min(offer.commentAllowed, 280) : 0;
+  const note = room >= 8 ? cleanNote(options.note).slice(0, room) : "";
+  if (note) callback.searchParams.set("comment", note);
   const answer = await getJson(fetcher, callback.href);
   const invoice = typeof answer?.pr === "string" ? answer.pr.trim().toLowerCase() : "";
   if (!invoice || invoice.length > 2000 || !/^ln(bc|tb|tbs|bcrt)[0-9a-z]+$/u.test(invoice)) throw new TipError("unreachable", "That lightning address gave no invoice. Nothing was spent.");
   // The one check that matters: an address that answers with a larger invoice is not paid.
   if (invoiceSats(invoice) !== amount) throw new TipError("wrong-invoice", "That lightning address answered with an invoice for a different amount. Nothing was spent.");
-  return { invoice };
+  return { invoice, note };
+}
+
+/** A note as it may be sent: one line of plain words. */
+export function cleanNote(input: unknown): string {
+  return typeof input === "string"
+    ? Array.from(input.normalize("NFC"))
+        .filter((ch) => {
+          const c = ch.codePointAt(0)!;
+          return c >= 0x20 && c !== 0x7f && !(c >= 0x200b && c <= 0x200f) && !(c >= 0x202a && c <= 0x202e) && !(c >= 0x2066 && c <= 0x2069);
+        })
+        .join("")
+        .trim()
+        .slice(0, 280)
+    : "";
+}
+
+/**
+ * The note that tells a person who tipped them, and where (owner, 2026-11-21): privately, with the payment, and to
+ * nobody else. `from` is left out where the tipper said to leave their name off, or has none.
+ */
+export function tipNote(from: string, world: string): string {
+  let host = "";
+  try {
+    host = new URL(world).host;
+  } catch {
+    host = "";
+  }
+  const name = cleanNote(from).slice(0, 60);
+  return cleanNote(`${name ? `A tip from ${name}` : "A tip"}${host ? `, in ${host}` : ""}`);
 }

@@ -1111,6 +1111,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           // address in that person's own signed profile, shows the name and the address, and pays exactly that much.
           const alice = new NostrSigner(generatePrivateKey());
           await publish([alice.signEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify({ name: "Alice", lud16: unlock.address("alice") }) })]);
+          unlock.commentAllowed = 120;
           await propose({ t: "tip", to: alice.getPublicKey(), sats: 21 }, "t1");
           await asking("t1");
           await showFor();
@@ -1122,6 +1123,18 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           expect(await panel.locator("#ecash-no-receipt").textContent()).toBe("No receipt: nothing will be recorded as yours.");
           expect(await panel.locator("#ecash-no-receipt").isVisible()).toBe(true);
           expect(await panel.locator("#ecash-pay-yes").textContent()).toBe("Send 21 sats");
+          // The person tipped is told who and in which world, by a note with the payment: the name in the tipper's own
+          // public profile. The tipper may leave their name off, and then the note that goes is the shorter one.
+          const worldHost = new URL(world).host;
+          const withName = (await panel.locator("#ecash-note-text").textContent()) ?? "";
+          expect(withName.startsWith("A tip from pk-")).toBe(true);
+          expect(withName.endsWith(`, in ${worldHost}`)).toBe(true);
+          expect(unlock.comments).toEqual([withName]);
+          await panel.locator("#ecash-note-name").uncheck();
+          await panel.locator("#ecash-note-text").filter({ hasText: /^A tip, in / }).waitFor({ timeout: 30_000 });
+          expect(await panel.locator("#ecash-note-text").textContent()).toBe(`A tip, in ${worldHost}`);
+          expect(unlock.comments).toEqual([withName, `A tip, in ${worldHost}`]);
+          expect(await panel.locator("#ecash-pay-amount").textContent()).toBe("21");
           if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/tip.png` });
           await page.waitForTimeout(1000);
           await panel.locator("#ecash-pay-yes").click();
@@ -1142,6 +1155,15 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await panel.locator("#ecash-back").click();
           expect((await waitFor("t2")).t).toBe("refused");
           expect(mint.paid).toHaveLength(2);
+          // The limit is the person's to change, in their wallet, in a few steps: and it is kept with the account.
+          await page.evaluate(() => (window as any).showPanel({ mode: "wallet" }));
+          await panel.locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#ecash-limit").inputValue()).toBe("1000");
+          expect(await panel.locator("#ecash-limit option").allTextContents()).toEqual(["1,000 sats", "10,000 sats", "100,000 sats", "No limit"]);
+          await panel.locator("#ecash-limit").selectOption("10000");
+          await panel.locator('#ecash-limit-form button[type="submit"]').click();
+          await panel.locator("#ecash-limit-note").filter({ hasText: "at most 10,000 sats" }).waitFor({ timeout: 30_000 });
+          expect(relays.every((relay) => relay.storedEventKinds().includes(30078))).toBe(true);
           // Not a tip at all: not put to anyone.
           expect((await ask({ t: "tip", sats: 0 })).t).toBe("no answer");
           expect((await ask({ t: "tip", sats: 5, to: "nobody" })).t).toBe("no answer");

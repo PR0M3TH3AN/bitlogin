@@ -85,8 +85,10 @@ const kept = async (worker, pubkey) => {
  * listings that are the site's own (sold by a key it publishes with, or bought through it), and no others. None
  * where the person turned that off.
  */
-export async function receiptsFor(worker, pubkey, site) {
-  if (!tellsWorlds(pubkey) || !hasAny(pubkey)) return [];
+export async function receiptsFor(worker, pubkey, site, { always = false } = {}) {
+  // At sign-in, an account not known to hold any receipt has nothing looked up. Where BitLogin's page is shown for
+  // a site that is signed in already, they are always looked up: something bought on another device is found then.
+  if (!tellsWorlds(pubkey) || (!always && !hasAny(pubkey))) return [];
   await load();
   const [mine, world] = await Promise.all([kept(worker, pubkey), lib.readWorld(site, { local })]);
   const now = Date.now() / 1000;
@@ -144,7 +146,12 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
       const item = mine.receipts.find((entry) => entry.receipt.event.id === held.event.id);
       const world = await lib.readWorld(request.site, { local });
       // Its own listing, and the person lets worlds be told: the receipt is handed over as `have` would hand it.
-      if (tellsWorlds(pubkey) && lib.belongsTo(held.listing, { publishers: world.publishers, site: request.site }, item?.via)) return finish({ receipt: held.event });
+      if (tellsWorlds(pubkey) && lib.belongsTo(held.listing, { publishers: world.publishers, site: request.site }, item?.via)) {
+        // Said for a moment, so a press isn't met with nothing.
+        stop(`You already have this. ${lasts(held)} Nothing was charged.`);
+        $("shop-nav").hidden = true;
+        return void setTimeout(() => finish({ receipt: held.event }), 1300);
+      }
       $("shop-held-title").textContent = item?.title || held.listing.slice(71);
       $("shop-held-lasts").textContent = lasts(held);
       show("held");
@@ -162,6 +169,8 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     const found = await worker.pay.listing(request.listing, policies.flatMap((policy) => policy?.relays ?? []));
     listing = lib.readListing(found.event, request.listing, services);
     if (!listing) return stop(found.event ? "This site asked to sell something BitLogin can't check: its listing isn't signed by its seller, or names a service BitLogin doesn't buy from. Nothing was spent." : found.answered ? "This site asked to sell something no relay knows of. Nothing was spent." : "No relay answered just now, so what is for sale couldn't be looked up. Nothing was spent.");
+    // Nothing in a world is sold under the floor (owner, 2026-11-21): the service's fee would be too large a part of it.
+    if (lib.underFloor(listing)) return stop(`This is listed at ${sats(listing.priceSats)}, under the ${sats(lib.LEAST_PRICE_SATS)} that is the least anything in a world is sold for. Nothing was spent.`);
     const at = clients.findIndex(({ service }) => service.pubkey === listing.service.pubkey);
     if (!policies[at]) return stop(`${host(listing.service.endpoint)}, which sells this, didn't answer. Nothing was spent.`);
     client = clients[at].client;

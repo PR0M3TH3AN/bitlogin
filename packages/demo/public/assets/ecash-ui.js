@@ -22,25 +22,23 @@ let wallet = null;
  * Open the wallet's screens.
  *   worker   the page's headless signer, with a full session
  *   resize   tell a client the size this would like
- *   pubkey   whose wallet this is: the limit on a payment with no receipt is kept for each account
+ *   name     the name in their own profile, for the note that goes with a tip, where they have one
  *   request  where a site asked to be paid: { site, invoice }, or to send a tip: { site, tip: { to?, sats } }.
  *            Then `done` is called once, with the answer.
  *   done     ({ invoice, preimage? } | null) for a request; () for the wallet opened on its own, when Back is pressed at home
  */
-export async function openEcash({ worker, pubkey = "", resize, request, done }) {
+export async function openEcash({ worker, name = "", resize, request, done }) {
   if (request) request = { ...request };
   /** A local copy of BitLogin may ask a lightning address on this machine. The real address never does. */
   const local = /^(localhost|127\.0\.0\.1)$/u.test(location.hostname);
-  const storage = () => {
-    try {
-      return window.localStorage;
-    } catch {
-      return null;
-    }
-  };
-  const limit = () => lib.readPayLimit(storage(), pubkey);
+  /** The most a site may ask for at once with no receipt, kept with the account. 0: no limit. Read when the wallet opens. */
+  let limitSats = 1000;
+  const limit = () => limitSats;
+  const over = (asked) => lib.overPayLimit(asked, limit());
+  const limitWords = () => (limit() === 0 ? "no limit" : sats(limit()));
   /** Whom a tip is for, once found: the name in their own profile, and the lightning address it goes to. */
   let tipTo = null;
+  const ownName = name;
   const views = [...document.querySelectorAll("#ecash [data-ecash]")];
   let funding = null;
   let polling = null;
@@ -129,7 +127,7 @@ export async function openEcash({ worker, pubkey = "", resize, request, done }) 
     $("ecash-back").textContent = "Close";
   };
   const overLimit = (asked) =>
-    stop(`This site asked for ${sats(asked)}, with no receipt. The most you allow for that is ${sats(limit())}, so nothing was spent. You can change that limit in your wallet, then ask again from the site.`);
+    stop(`This site asked for ${sats(asked)}, with no receipt. The most you allow for that is ${limitWords()}, so nothing was spent. You can change that limit in your wallet, then ask again from the site.`);
   /**
    * A tip (docs/paying.md): the site named who and how much, and nothing else. The lightning address is found here,
    * from that person's own signed profile, or for the site itself from its own /.well-known/nswp.json, and an
@@ -137,7 +135,7 @@ export async function openEcash({ worker, pubkey = "", resize, request, done }) 
    */
   const startTip = async () => {
     const { to, sats: asked } = request.tip;
-    if (asked > limit()) return overLimit(asked);
+    if (over(asked)) return overLimit(asked);
     if (wallet.state().mints.length === 0) return show("setup");
     try {
       let name = "";
@@ -150,8 +148,12 @@ export async function openEcash({ worker, pubkey = "", resize, request, done }) 
         address = (await lib.readWorld(request.site, { local })).tip;
         if (!address) return stop("This site names no lightning address for tips. Nothing was spent.");
       }
-      tipTo = { name, address, person: !!to };
-      request.invoice = (await lib.invoiceFromAddress(address, asked, { local })).invoice;
+      // The person tipped is told who, and in which world, by a note with the payment, where their address takes
+      // one. The tipper may leave their name off: then the invoice is asked for again, with the shorter note.
+      tipTo = { name, address, person: !!to, note: "", named: tipTo ? tipTo.named : true };
+      const got = await lib.invoiceFromAddress(address, asked, { local, note: lib.tipNote(tipTo.named ? ownName : "", request.site) });
+      tipTo.note = got.note;
+      request.invoice = got.invoice;
     } catch (err) {
       return stop(err?.message || "That tip couldn't be set up. Nothing was spent.");
     }
@@ -173,7 +175,7 @@ export async function openEcash({ worker, pubkey = "", resize, request, done }) 
     }
     // A payment a site asked for leaves no receipt, so it is held to the person's own limit. A tip is also held to
     // the amount the site named: the mint's reading of the invoice has to agree.
-    if (request && quoted.amount > limit()) return overLimit(quoted.amount);
+    if (request && over(quoted.amount)) return overLimit(quoted.amount);
     if (request?.tip && quoted.amount !== request.tip.sats) return stop("That lightning address answered with an invoice for a different amount. Nothing was spent.");
     const need = quoted.amount + quoted.feeReserve;
     const have = wallet.balance(quoted.mint);
@@ -184,6 +186,11 @@ export async function openEcash({ worker, pubkey = "", resize, request, done }) 
     $("ecash-pay-to").hidden = !tipTo;
     $("ecash-pay-to").textContent = tipTo?.address ?? "";
     $("ecash-no-receipt").hidden = !request;
+    $("ecash-note-row").hidden = !tipTo?.note;
+    $("ecash-note-text").textContent = tipTo?.note ?? "";
+    $("ecash-note-name-row").hidden = !ownName;
+    $("ecash-note-name").checked = tipTo?.named !== false;
+    $("ecash-note-name").disabled = false;
     $("ecash-pay-no").textContent = request?.tip ? "Don't send" : "Don't pay";
     $("ecash-pay-amount").textContent = quoted.amount.toLocaleString();
     $("ecash-pay-fee").textContent = sats(quoted.feeReserve);
@@ -364,17 +371,38 @@ export async function openEcash({ worker, pubkey = "", resize, request, done }) 
     if (request) return void goOn();
     home();
   };
-  $("ecash-limit-form").onsubmit = (e) => {
+  $("ecash-limit-form").onsubmit = async (e) => {
     e.preventDefault();
-    const kept = lib.writePayLimit(storage(), pubkey, Number($("ecash-limit").value));
+    busy(e.target, true);
+    try {
+      const kept = await worker.pay.setLimit(Number($("ecash-limit").value));
+      limitSats = kept.limitSats;
+      $("ecash-limit-note").textContent = `Saved${kept.unsaved ? " in this browser. Your relays didn't take it yet: it is sent again next time" : ""}. ${limit() === 0 ? "A site can ask you for any amount at once with no receipt. You still see it and press before anything is paid." : `A site can ask you for at most ${sats(limit())} at once with no receipt.`}`;
+    } catch {
+      $("ecash-limit-note").textContent = "That couldn't be saved, so the limit is as it was.";
+    }
     $("ecash-limit").value = String(limit());
-    $("ecash-limit-note").textContent = kept ? `Saved. A site can ask you for at most ${sats(limit())} at once with no receipt.` : "That couldn't be kept in this browser, so the limit is as it was.";
+    busy(e.target, false);
+  };
+  // Their name left off the note, or put back: the invoice is asked for again, since the note is part of it.
+  $("ecash-note-name").onchange = async () => {
+    if (!tipTo || !request?.tip) return;
+    tipTo.named = $("ecash-note-name").checked;
+    $("ecash-note-name").disabled = true;
+    $("ecash-pay-yes").disabled = true;
+    request.invoice = "";
+    await startTip();
   };
 
   try {
     lib ??= await import("../vendor/bitlogin/bitlogin-ecash.js");
     wallet = lib.createEcashWallet(worker.ecash);
     await wallet.open();
+    // The limit is the account's. Where it can't be read, the default stands: never "no limit" by accident.
+    limitSats = await worker.pay
+      .settings()
+      .then((kept) => lib.cleanPayLimit(kept.limitSats))
+      .catch(() => lib.PAY_LIMIT.default);
   } catch (err) {
     show("done");
     $("ecash-done-text").textContent = "Your wallet couldn't be opened. Nothing was changed.";

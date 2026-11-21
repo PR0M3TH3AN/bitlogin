@@ -187,11 +187,16 @@
       <button id="ecash-go-mint" class="connect-link" type="button">Add another mint</button>
       <h2 class="ecash-sub">Payments that leave no receipt</h2>
       <form id="ecash-limit-form" class="ecash-form">
-        <label for="ecash-limit">The most a site can ask you to pay at once when nothing is recorded as yours: a tip, or an invoice it made. In sats.</label>
-        <input id="ecash-limit" type="number" inputmode="numeric" min="1" max="1000000" step="1" required />
+        <label for="ecash-limit">The most a site can ask you to pay at once when nothing is recorded as yours: a tip, or an invoice it made.</label>
+        <select id="ecash-limit">
+          <option value="1000">1,000 sats</option>
+          <option value="10000">10,000 sats</option>
+          <option value="100000">100,000 sats</option>
+          <option value="0">No limit</option>
+        </select>
         <button class="btn secondary" type="submit">Save this limit</button>
       </form>
-      <p id="ecash-limit-note" class="ecash-quiet">Kept in this browser. Something you buy with a receipt has no such limit: you are shown its price before you pay.</p>
+      <p id="ecash-limit-note" class="ecash-quiet">Kept with your account. Something you buy with a receipt has no such limit: you are shown its price before you pay.</p>
     </div>
 
     <div data-ecash="fund" hidden>
@@ -241,6 +246,11 @@
         <div><dt>From</dt><dd id="ecash-pay-mint"></dd></div>
         <div><dt>You hold there</dt><dd id="ecash-pay-have"></dd></div>
       </dl>
+      <div id="ecash-note-row" hidden>
+        <p class="ecash-quiet">This note goes with it, to them and nobody else:</p>
+        <p id="ecash-note-text" class="ecash-plain"></p>
+        <label class="shop-check" id="ecash-note-name-row"><input id="ecash-note-name" type="checkbox" checked /> <span>Say it is from me</span></label>
+      </div>
       <p id="ecash-no-receipt" class="ecash-quiet" hidden>No receipt: nothing will be recorded as yours.</p>
       <p id="ecash-short" class="connect-warning" hidden></p>
       <div class="cta-row">

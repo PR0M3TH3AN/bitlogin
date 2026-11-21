@@ -46,6 +46,10 @@ export interface MockUnlock {
   address(name: string): string;
   /** Next: answer a tip with an invoice for this many sats more than asked. */
   overcharge: number;
+  /** How long a note its lightning addresses take with a payment. 0: none. */
+  commentAllowed: number;
+  /** Every note that came with a tip. */
+  comments: string[];
   /** Next unlock: give no receipt with it (it is then among the buyer's receipts). */
   omitReceipt: boolean;
   /** Receipts taken back, by order. */
@@ -76,6 +80,8 @@ export async function startMockUnlock(wallet: { invoice(sats: number): string; p
     pubkey: service.getPublicKey(),
     named: "",
     overcharge: 0,
+    commentAllowed: 0,
+    comments: [],
     omitReceipt: false,
     revoked: new Set(),
     orders: new Map(),
@@ -154,11 +160,12 @@ export async function startMockUnlock(wallet: { invoice(sats: number): string; p
     }
     // A lightning address (LUD-16), for tips.
     if (method === "GET" && path.startsWith("/.well-known/lnurlp/")) {
-      return { tag: "payRequest", callback: `${self.url}/lnurl/pay/${path.split("/").pop()}`, minSendable: 1000, maxSendable: 100_000_000, metadata: "[]" };
+      return { tag: "payRequest", callback: `${self.url}/lnurl/pay/${path.split("/").pop()}`, minSendable: 1000, maxSendable: 100_000_000, metadata: "[]", ...(self.commentAllowed ? { commentAllowed: self.commentAllowed } : {}) };
     }
     if (method === "GET" && path.startsWith("/lnurl/pay/")) {
       const sats = Number(url.searchParams.get("amount")) / 1000 + self.overcharge;
       self.overcharge = 0;
+      if (url.searchParams.has("comment")) self.comments.push(url.searchParams.get("comment")!);
       return { pr: wallet.invoice(sats), routes: [] };
     }
     const buyer = buyerOf(method, url.toString(), authorization, raw);

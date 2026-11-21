@@ -532,6 +532,8 @@ import type { RankedMint } from "../ecash/mints.js";
 export type { RankedMint };
 
 // ---- A person's files (docs/files.md; worker/driveStore.ts) ----
+import type { PaySettings } from "./paySettings.js";
+export type { PaySettings };
 import type { KeptReceipt, ReceiptsState } from "./receiptStore.js";
 export type { KeptReceipt, ReceiptsState };
 import type { DriveSave, DriveState, RankedServer } from "./driveStore.js";
@@ -612,6 +614,9 @@ export type WorkerActionMap = {
   payListing: [{ coordinate: string; relays: string[] }, { event: NostrEvent | null; answered: boolean }];
   /** A buyer's permission note (NIP-98) for one request to a selling service BitLogin knows. */
   unlockAuth: [{ url: string; method: "GET" | "POST"; payload?: string }, { token: string }];
+  /** The person's own limit on a payment with no receipt, kept with the account. */
+  paySettingsLoad: [Record<string, never>, PaySettings];
+  paySettingsSave: [{ limitSats: number }, PaySettings];
   receiptsLoad: [Record<string, never>, ReceiptsState];
   receiptsKeep: [{ receipts: KeptReceipt[] }, ReceiptsState];
   ecashLoad: [Record<string, never>, EcashState];

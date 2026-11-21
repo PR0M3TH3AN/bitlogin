@@ -371,6 +371,12 @@ export class WorkerClient {
   unlockAuth(payload: WorkerActionMap["unlockAuth"][0]) {
     return this.call("unlockAuth", payload);
   }
+  paySettingsLoad() {
+    return this.call("paySettingsLoad", {});
+  }
+  paySettingsSave(limitSats: number) {
+    return this.call("paySettingsSave", { limitSats });
+  }
   receiptsLoad() {
     return this.call("receiptsLoad", {});
   }

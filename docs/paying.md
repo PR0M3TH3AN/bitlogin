@@ -73,8 +73,14 @@ The application client has the same three: `client.tip({ to?, sats },
 5. On a press, the ecash wallet pays. The site hears `paid`, and nothing
    of where it went.
 
-No note is sent with the payment yet. How the person tipped is told is
-still open in the plan.
+**The person tipped is told, privately** (owner, 2026-11-21): a note goes
+with the payment where their lightning address says it takes one (LUD-12,
+`commentAllowed`), cut to the length it takes: "A tip from <name>, in
+<the world's host>". The name is the one in the tipper's own public
+profile, never the name they sign in by. The page shows the note before the
+press, with a tick, "Say it is from me", that takes the name off. An
+address that takes no note gets none, and the tip still goes. No Nostr
+message is sent.
 
 ## PY4. A purchase
 
@@ -82,8 +88,10 @@ All of it runs on BitLogin's page, as the buyer:
 
 1. **Already held?** The account's receipts are read first. A good receipt
    for this listing is handed back and nothing is charged. If the listing
-   is the site's own (PY6) that needs no press; otherwise the person is
-   asked "Show this site your receipt for it?".
+   is the site's own (PY6) that needs no press: the page says "You already
+   have this" for a moment. Otherwise the person is asked "Show this site
+   your receipt for it?". Several receipts for one timed listing may be
+   held, one for each purchase: any that has not run out will do.
 2. **The service's policy** is fetched from each service BitLogin knows
    and checked to be that service's own signed word. It names the relays
    listings are on.
@@ -94,6 +102,9 @@ All of it runs on BitLogin's page, as the buyer:
    something bought on another device is found, kept, and not sold twice.
 5. **An unfinished order** for this listing, paid in part or whole, is
    taken up again. Otherwise a quote is asked for.
+   A listing for something in a world (one carrying a tag that begins
+   `nswp:`) priced **under 500 sats is not shown for sale** (owner,
+   2026-11-21). BitUnlock holds the same floor at registration.
 6. **The plan is believed only as far as it matches:** this listing, this
    buyer, parts that add up, a total no more than the listed price, and
    for each part a Lightning invoice for exactly that part. Then the mint
@@ -118,10 +129,14 @@ publicly yet. The receipt says, and the page reads it out afterwards.
 
 - One limit for `pay` and `tip` together: **1,000 sats** in one payment,
   unless the person changes it.
-- Changed in the wallet, under "Payments that leave no receipt". Not on
-  the screen where a site is asking: a site can't walk someone through
-  raising it.
-- Kept in the browser, for each account. Another browser starts at 1,000.
+- Changed in the wallet, under "Payments that leave no receipt", in steps
+  and not to any number: 1,000, 10,000, 100,000, or no limit. Not on the
+  screen where a site is asking: a site can't walk someone through raising
+  it.
+- **Kept with the account:** in the browser first, then one sealed record
+  on its relays (kind 30078, `d` = `bitlogin-pay-settings`), so it follows
+  them to another device. The newer wins. Where it can't be read, 1,000
+  stands: never "no limit" by accident.
 - Over it, nothing is looked up or spent, the page says what the limit is,
   and the site hears `refused`.
 
@@ -148,7 +163,9 @@ opened. This is the first, small part of `portable-entitlements.md`.
 reach no selling service and never signs a buyer's note. So BitLogin's
 page hands it receipts, by message, the way it hands over the session:
 
-- at sign-in, once the person presses Allow, and after each purchase;
+- at sign-in, once the person presses Allow; after each purchase; and
+  whenever BitLogin's page is shown for a site that is signed in already
+  (it put a question), so something bought on another device reaches it;
 - only receipts for **that site's own listings**: sold by a key in the
   site's own `/.well-known/nswp.json` `publishers`, or bought through that
   site. A site is never told what was bought elsewhere;
@@ -207,8 +224,9 @@ it, which a `buy` or opening Purchases does.
   the owner's lawyer. A plan part that is neither the seller's nor the
   service's is shown as "To another party".
 - **A token locked to a recipient's key**, paying from a wallet
-  connection, a visitor's own issuers, refunds in the interface, a note to
-  the person tipped.
+  connection, a visitor's own issuers, refunds in the interface.
+- **The floor's screen** is not in a browser test: the rule is tested, the
+  words that say it are not.
 - **Buying with no ecash wallet** stops with "Open my wallet". The
   purchase is asked for again from the site afterwards.
 - **LUD-06's check of the invoice's description** against the address's
@@ -217,6 +235,12 @@ it, which a `buy` or opening Purchases does.
 
 ## PY10. Trying it
 
+- `packages/widget/src/pay/vectors/` holds BitUnlock's published test
+  vectors for a product listing and a receipt's words, fetched unchanged
+  from `https://api.bitunlock.network/test-vectors/` on 2026-11-21, and
+  `vectors.test.ts` reads both with the code that ships. Its payment-plan
+  and delivery vectors were not served there that day, so they are not
+  tested against.
 - `packages/widget/src/pay/mockUnlock.ts` is a selling service for tests:
   BitUnlock's buyer-side API with real signatures, its permission notes
   checked as the real service checks them, and a lightning address. Tests

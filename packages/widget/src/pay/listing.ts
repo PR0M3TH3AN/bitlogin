@@ -46,9 +46,12 @@ export function localService(input: unknown): UnlockService | null {
   }
 }
 
-/** A listing's coordinate: `30078:<seller>:<name>`. Empty for anything else. */
+/**
+ * A listing's coordinate: `30078:<seller>:<name>`. Empty for anything else. The name is as BitUnlock takes it: 1 to
+ * 256 characters, not beginning with a colon, and all on one line.
+ */
 export function cleanCoordinate(input: unknown): string {
-  return typeof input === "string" && input.length <= 330 && /^30078:[0-9a-f]{64}:[^:\s][^\s]{0,255}$/u.test(input) ? input : "";
+  return typeof input === "string" && /^30078:[0-9a-f]{64}:[^:\r\n][^\r\n]{0,255}$/u.test(input) ? input : "";
 }
 export const sellerOf = (coordinate: string): string => coordinate.slice(6, 70);
 
@@ -63,7 +66,17 @@ export interface Listing {
   for: string;
   /** How long it lasts, in seconds, where the listing says. 0: it doesn't say. */
   termSeconds: number;
+  /** Whether it is a listing for something in a world: it carries a tag that begins `nswp:`. */
+  nswp: boolean;
 }
+
+/**
+ * The least something in a world may be sold for (owner, 2026-11-21): under it, BitUnlock's fee of ten sats at
+ * least is too large a part of the price. BitUnlock holds the same floor when a listing is registered.
+ */
+export const LEAST_PRICE_SATS = 500;
+/** Whether a listing is under that floor. Only a listing for something in a world is held to it. */
+export const underFloor = (listing: Pick<Listing, "nswp" | "priceSats">): boolean => listing.nswp && listing.priceSats < LEAST_PRICE_SATS;
 
 const tag = (event: { tags: string[][] }, name: string): string => {
   const found = event.tags.find((t) => t[0] === name);
@@ -112,7 +125,8 @@ export function readListing(event: unknown, coordinate: string, services: readon
     priceSats,
     service: { ...service },
     for: /^3730[0-9]:[0-9a-f]{64}:[^\s]{1,200}$/u.test(tag(e, "nswp:for")) ? tag(e, "nswp:for") : "",
-    termSeconds: /^[1-9][0-9]{0,9}$/u.test(term) ? Number(term) : 0
+    termSeconds: /^[1-9][0-9]{0,9}$/u.test(term) ? Number(term) : 0,
+    nswp: e.tags.some((t) => typeof t[0] === "string" && t[0].startsWith("nswp:"))
   };
 }
 
