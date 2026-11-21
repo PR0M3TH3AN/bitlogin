@@ -13,6 +13,7 @@
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import { readPermissions, type AppPermissions } from "./permissions.js";
 import { cleanSlot, fitsInSave } from "./saves.js";
+import { cleanInvoice } from "../ecash/nip60.js";
 import { cleanMore, type WorldMore } from "./follows.js";
 export { WORLD_MORE } from "./follows.js";
 import { cleanMessage, type ReadMessage, type WrittenMessage } from "./messages.js";
@@ -61,6 +62,18 @@ export const ORDINARY_KINDS: readonly number[] = [1, 7];
  */
 export const NEVER_KINDS: readonly number[] = [4, 13, 14, 15, 1059, 1060, 13194, 22242, 23194, 23195, 24133, 27235, 27300, 27301, 30078];
 
+/**
+ * The careful kinds a world may have put to the person, each time, on a page of BitLogin's own (§SW20): a profile,
+ * a deletion, and the list of relays they use. Not a follow list: a whole list signed for a site could unfollow
+ * everyone, and following is done one person at a time (follows.ts). Nothing else that is "careful" is askable.
+ */
+export const ASKED_KINDS: readonly number[] = [0, 5, 10002];
+
+/** How many times a site may put something to the person: this many in a minute, and this many in an hour. */
+export const ASK_LIMITS = { burst: 2, perMs: 60_000, hourly: 10 } as const;
+/** How long a question waits for the person before it is dropped, in milliseconds. */
+export const ASK_WAIT_MS = 5 * 60_000;
+
 export function signClass(kind: unknown): SignClass {
   if (typeof kind !== "number" || !Number.isInteger(kind) || kind < 0 || kind > 65535) return "never";
   if (NEVER_KINDS.includes(kind)) return "never";
@@ -108,10 +121,22 @@ export interface UnsignedForSite {
  * for anything else.
  */
 export function prepareForSite(input: unknown, site: string, nowSeconds: number): UnsignedForSite | null {
+  return prepare(input, site, nowSeconds, (kind) => signClass(kind) === "ordinary");
+}
+
+/**
+ * The same, for a careful kind that may be put to the person (§SW20). It signs nothing and allows nothing: it is
+ * what BitLogin's own page will show them, word for word, and what is signed if they say yes there.
+ */
+export function prepareAsked(input: unknown, site: string, nowSeconds: number): UnsignedForSite | null {
+  return prepare(input, site, nowSeconds, (kind) => signClass(kind) === "careful" && ASKED_KINDS.includes(kind as number));
+}
+
+function prepare(input: unknown, site: string, nowSeconds: number, kindAllowed: (kind: unknown) => boolean): UnsignedForSite | null {
   const origin = cleanOrigin(site);
   if (!origin || !input || typeof input !== "object") return null;
   const e = input as { kind?: unknown; content?: unknown; tags?: unknown };
-  if (signClass(e.kind) !== "ordinary") return null;
+  if (!kindAllowed(e.kind)) return null;
   if (typeof e.content !== "string" || [...e.content].length > SIGN_LIMITS.contentChars) return null;
   if (!Array.isArray(e.tags) || e.tags.length > SIGN_LIMITS.tags) return null;
   const tags: string[][] = [];
@@ -158,6 +183,14 @@ export type SignerRequest =
   | { t: "state"; id: string }
   | { t: "lock"; id: string }
   | { t: "sign"; id: string; event: unknown }
+  // Put to the person each time, on a page of BitLogin's own (§SW20). Answered "asking" at once, and later
+  // "signed" / "wallet" or "refused", under the same id, once they have answered there.
+  /** A careful kind: a profile, a deletion, a relay list. */
+  | { t: "propose"; id: string; event: unknown }
+  /** A wallet connection for this world to use. */
+  | { t: "wallet"; id: string }
+  /** A Lightning invoice, paid from the person's own ecash wallet if they say so (docs/ecash.md). The site never sees the wallet. */
+  | { t: "pay"; id: string; invoice: string }
   /** A room pass for this site, naming the given session key (§SW16). Everything else in it is the signer's. */
   | { t: "pass"; id: string; session: string }
   // What a world keeps for its visitor (NSWP-12; saves.ts). Not for an application.
@@ -212,6 +245,12 @@ export type SignerReply =
       taken?: boolean;
     }
   | { t: "signed"; id: string; event: NostrEvent }
+  /** Answers `propose` and `wallet` at once: the question is waiting for the person. Show BitLogin's panel or window. */
+  | { t: "asking"; id: string }
+  /** Answers `wallet`, once the person agreed: the connection this world may use. */
+  | { t: "wallet"; id: string; uri: string }
+  /** Answers `pay`, once it was paid: the proof of payment, where the mint gave one. Nothing about the wallet. */
+  | { t: "paid"; id: string; preimage?: string }
   | { t: "text"; id: string; text: string }
   /** Answers `seal`: the message as written (never signed), and its two seals: for the reader, then for the writer. */
   | { t: "sealed"; id: string; message: WrittenMessage; seals: [NostrEvent, NostrEvent] }
@@ -236,6 +275,9 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.t === "state") return { t: "state", id: d.id };
   if (d.t === "lock") return { t: "lock", id: d.id };
   if (d.t === "sign" && d.event && typeof d.event === "object") return { t: "sign", id: d.id, event: d.event };
+  if (d.t === "propose" && d.event && typeof d.event === "object") return { t: "propose", id: d.id, event: d.event };
+  if (d.t === "wallet") return { t: "wallet", id: d.id };
+  if (d.t === "pay" && cleanInvoice(d.invoice)) return { t: "pay", id: d.id, invoice: cleanInvoice(d.invoice) };
   if (d.t === "pass" && typeof d.session === "string" && HEX64.test(d.session)) return { t: "pass", id: d.id, session: d.session };
   if (d.t === "save" && cleanSlot(d.slot) && fitsInSave(d.data)) return { t: "save", id: d.id, slot: cleanSlot(d.slot), data: d.data };
   if (d.t === "find" && cleanSlot(d.slot)) return { t: "find", id: d.id, slot: cleanSlot(d.slot) };
@@ -274,11 +316,30 @@ export type HandoffMessage =
   | { t: "hello"; nonce: string }
   /** Signer to window: which site embeds it (as the browser says), a throwaway key to seal the hand-off to, and
    *  what that site said it wants, if it is an application (§SW9). */
-  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean; /** A world asked to be let do more, by name. */ more?: WorldMore[]; /** What it was already let do, by name: kept when the user allows it again. */ has?: WorldMore[] }
+  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean; /** A world asked to be let do more, by name. */ more?: WorldMore[]; /** What it was already let do, by name: kept when the user allows it again. */ has?: WorldMore[]; /** Something the site put to the person (§SW20), and who it is signed in as. */ ask?: Asked; pubkey?: string }
+  /** Window to signer: what the person answered to `ask`. Neither field: they said no. */
+  | { t: "answer"; nonce: string; world: string; event?: NostrEvent; wallet?: string; /** It was paid: the invoice that was, and the proof where there is one. */ paid?: { invoice: string; preimage?: string } }
   /** Window to signer, after the user pressed Allow: the sealed hand-off, for that site. */
   | { t: "grant"; nonce: string; world: string; sealed: { senderPublicKey: string; payload: string }; name?: string }
   /** Signer to window: it is unlocked, or it could not be. */
   | { t: "done"; nonce: string; ok: boolean };
+
+/** What a site put to the person: a careful kind to sign, exactly as it would be signed, or the use of a wallet. */
+export type Asked = { what: "sign"; event: UnsignedForSite } | { what: "wallet" } | { what: "pay"; invoice: string };
+
+/** A wallet connection as it may be passed on: the NWC form, and no longer than one could be. */
+export const cleanWalletUri = (input: unknown): string => (typeof input === "string" && input.length <= 2000 && /^nostr\+walletconnect:\/\/[0-9a-f]{64}\?[\x21-\x7e]+$/u.test(input) ? input : "");
+
+function readAsked(input: unknown, world: string): Asked | null {
+  if (!input || typeof input !== "object") return null;
+  const a = input as { what?: unknown; event?: unknown };
+  if (a.what === "wallet") return { what: "wallet" };
+  if (a.what === "pay") return cleanInvoice((a as { invoice?: unknown }).invoice) ? { what: "pay", invoice: cleanInvoice((a as { invoice?: unknown }).invoice) } : null;
+  if (a.what !== "sign") return null;
+  const event = prepareAsked(a.event, world, (a.event as { created_at?: number } | null)?.created_at ?? 0);
+  // What the signer prepared reads back as itself: the same kind, words and tags, the site's mark included.
+  return event && JSON.stringify(event.tags) === JSON.stringify((a.event as { tags?: unknown }).tags) ? { what: "sign", event } : null;
+}
 
 export const handoffMessage = (message: HandoffMessage): Record<string, unknown> => ({ nswp: HANDOFF_PROTOCOL, v: PROTOCOL_VERSION, ...message });
 
@@ -292,7 +353,17 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
     // A set that does not read as one is no frame at all: the window must not show part of what was asked.
     const wants = d.wants === undefined ? undefined : readPermissions(d.wants);
     if (wants === null) return null;
-    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}), ...(!wants && cleanMore(d.more).length ? { more: cleanMore(d.more) } : {}), ...(!wants && cleanMore(d.has).length ? { has: cleanMore(d.has) } : {}) };
+    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}), ...(!wants && cleanMore(d.more).length ? { more: cleanMore(d.more) } : {}), ...(!wants && cleanMore(d.has).length ? { has: cleanMore(d.has) } : {}), ...(!wants && readAsked(d.ask, cleanOrigin(d.world)) && hex(d.pubkey) ? { ask: readAsked(d.ask, cleanOrigin(d.world))!, pubkey: d.pubkey } : {}) };
+  }
+  if (d.t === "answer" && cleanOrigin(d.world)) {
+    const wallet = d.wallet === undefined ? "" : cleanWalletUri(d.wallet);
+    if (d.wallet !== undefined && !wallet) return null;
+    const event = d.event && typeof d.event === "object" ? (d.event as NostrEvent) : undefined;
+    const p = d.paid && typeof d.paid === "object" ? (d.paid as Record<string, unknown>) : null;
+    const paid = p && cleanInvoice(p.invoice) ? { invoice: cleanInvoice(p.invoice), ...(typeof p.preimage === "string" && HEX64.test(p.preimage) ? { preimage: p.preimage } : {}) } : null;
+    if (d.paid !== undefined && !paid) return null;
+    if ([event, wallet, paid].filter(Boolean).length > 1) return null;
+    return { t: "answer", nonce: d.nonce, world: cleanOrigin(d.world), ...(event ? { event } : {}), ...(wallet ? { wallet } : {}), ...(paid ? { paid } : {}) };
   }
   if (d.t === "grant" && cleanOrigin(d.world) && d.sealed && typeof d.sealed === "object") {
     const s = d.sealed as Record<string, unknown>;

@@ -338,8 +338,20 @@ export class WorkerClient {
   vaultSaveNwc(payload: VaultSaveNwcPayload) {
     return this.call("vaultSaveNwc", payload);
   }
-  vaultFindForOrigin() {
-    return this.call("vaultFindForOrigin", {});
+  ecashMints() {
+    return this.call("ecashMints", {});
+  }
+  ecashLoad() {
+    return this.call("ecashLoad", {});
+  }
+  ecashSetMints(mints: string[]) {
+    return this.call("ecashSetMints", { mints });
+  }
+  ecashRoll(roll: WorkerActionMap["ecashRoll"][0]) {
+    return this.call("ecashRoll", roll);
+  }
+  vaultFindForOrigin(payload: VaultFindForOriginPayload = {}) {
+    return this.call("vaultFindForOrigin", payload);
   }
   vaultRevealNwc(payload: VaultRevealNwcPayload) {
     return this.call("vaultRevealNwc", payload);

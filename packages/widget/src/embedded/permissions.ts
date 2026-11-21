@@ -105,6 +105,16 @@ export function isLocalAddress(origin: unknown): boolean {
 }
 
 /**
+ * BitLogin's own sign-in addresses: where its window and its panel are served, and the only places a page may
+ * name ANOTHER site as the one a wallet connection is for (the panel, answering for a world: §SW20). Anywhere
+ * else, a vendored copy in an application, a connection is for the page's own origin and nobody else's.
+ */
+export const SIGN_IN_ADDRESSES: readonly string[] = ["https://bitlogin.network", "https://bitlogin-beta.vercel.app"];
+
+/** Whether this origin is one of BitLogin's sign-in addresses, or a local copy of one. */
+export const isSignInAddress = (origin: unknown): boolean => typeof origin === "string" && (SIGN_IN_ADDRESSES.includes(origin) || isLocalAddress(origin));
+
+/**
  * The reserved kinds a site may hold, given the address BitLogin itself is running at.
  *
  * At BitLogin's real address they are a named address's and nobody else's. Where BitLogin is itself a local

@@ -6,6 +6,44 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-21 (on `beta` only)
+
+- **The sign-in panel** (`docs/sign-in-window.md` §SW19):
+  `/connect/panel/`, the sign-in window's own page, shown in a frame by a
+  client BitLogin lists (BitPortal's shell) where the world's menu is, so a
+  visitor never leaves the world. Sign-in (passkey or password), Allow, the
+  account chooser, the lock and every account page are in it. Only
+  `https://portal.bitblocks.network` may frame it. Nothing changes for a
+  site that opens the window.
+- **An ecash wallet kept with the account** (NIP-60; `docs/ecash.md`), on
+  BitLogin's own sign-in page and panel. Add sats by Lightning, receive a
+  Cashu token, pay an invoice. Kept in the browser first and then on the
+  account's relays, sealed to its key. Mints people recommend (NIP-87) are
+  listed to choose from. Experimental: not tried with real money.
+- **A site can ask to be paid** (`pay`, with a Lightning invoice): the
+  person's own wallet pays it on a press, and the site hears `paid`. It
+  never sees a token.
+- **`/connect/` pages may reach https addresses** (a mint). No other page.
+- **New dependency:** `@cashu/cashu-ts` 4.13.1, in `bitlogin-ecash.js`
+  only. A site that vendors the widget does not need that file.
+- **A site can put a careful kind to the person** (§SW20): `propose`, for
+  a profile, a deletion or a relay list. Answered `asking`, shown in words
+  on BitLogin's own page (the panel or the window), signed there on a
+  press, and handed back as `signed`. The embedded signer's own session
+  still signs a note and a reaction only.
+- **A site can ask for a wallet** (§SW20): `wallet`. The widget's wallet
+  step on BitLogin's own page, Bitcoin Connect first and a pasted NWC
+  connection second, bound to the site's address.
+  `requestNwcConnection({ forSite })` exists for that page alone: the
+  worker refuses a named site anywhere but BitLogin's sign-in addresses.
+- **`fresh-secrets` on `<bitlogin-auth>`:** "Reveal private key" then
+  works only within five minutes of a sign-in or of the lock being opened.
+  BitLogin's panel sets it. Without the attribute nothing changes.
+- **A local copy's panel accepts a client on a private network address**
+  (10.x, 172.16-31.x, 192.168.x), where it is served from one itself.
+- **The window's sign-in widget uses the relays its page names,** where it
+  names any. It used BitLogin's built-in list whatever the page said.
+
 ## 2026-11-20 (on `beta` only)
 
 - **Words for kind 37308** in the window, a visitor's bag: "change what is

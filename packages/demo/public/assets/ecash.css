@@ -1,0 +1,63 @@
+/* The ecash wallet (docs/ecash.md), on BitLogin's own sign-in page and panel. One thing is loud: the figure, set in
+   the display serif with lining, tabular numerals, the way a bank book sets a balance. Everything else is quiet. */
+.ecash h1 { font-family: var(--font-display); font-weight: 600; letter-spacing: -.01em; }
+.ecash p { max-width: 62ch; }
+.ecash-quiet { color: var(--muted); font-size: .92rem; margin: .2rem 0 0; }
+.ecash-plain { padding-left: .9rem; border-left: 2px solid var(--brass); color: var(--fg); }
+
+.ecash-balance { padding: .4rem 0 1rem; border-bottom: 1px solid var(--line); margin-bottom: 1rem; }
+.ecash-figure { margin: 0; font-family: var(--font-display); font-size: clamp(2.6rem, 9vw, 3.6rem); line-height: 1; font-weight: 600;
+  font-variant-numeric: lining-nums tabular-nums; letter-spacing: -.02em; color: var(--fg); }
+.ecash-unit { font-family: var(--font-body); font-size: .32em; font-weight: 500; letter-spacing: 0; color: var(--brass); margin-left: .15em; }
+
+.ecash-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: .5rem; }
+.ecash-actions .btn { width: 100%; justify-content: center; text-align: center; }
+
+.ecash-sub { margin: 1.4rem 0 .4rem; font-size: .92rem; font-weight: 600; color: var(--muted); }
+.connect .ecash-mints { list-style: none; margin: 0 0 .6rem; padding: 0; display: block; }
+.ecash-mints li { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--line); }
+.ecash-mints .mint { min-width: 0; overflow-wrap: anywhere; font: .88rem var(--font-mono); color: var(--fg); }
+.ecash-mints .sats { flex: none; font-variant-numeric: tabular-nums; font-weight: 600; }
+.ecash-mints .sats small { font-weight: 400; color: var(--muted); }
+
+.ecash-form { display: grid; gap: .45rem; margin-top: .8rem; }
+.ecash-form label { font-size: .9rem; color: var(--muted); margin-top: .3rem; }
+.ecash-form input, .ecash-form select, .ecash-form textarea { width: 100%; padding: .65rem .75rem; border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--ink-softer); color: var(--fg); font: 1rem var(--font-body); }
+.ecash-form textarea { font: .88rem/1.45 var(--font-mono); resize: vertical; overflow-wrap: anywhere; }
+.ecash-form input[type="number"] { font: 600 1.5rem var(--font-display); font-variant-numeric: lining-nums tabular-nums; }
+.ecash-form :is(input, select, textarea):focus-visible, .ecash button:focus-visible { outline: 2px solid var(--seal); outline-offset: 2px; }
+.ecash-form .btn { margin-top: .6rem; justify-self: start; }
+
+.ecash-qr { width: min(15rem, 100%); margin: .8rem 0; padding: .5rem; background: #fff; border-radius: 12px; }
+.ecash-qr svg { display: block; width: 100%; height: auto; }
+.ecash-code { font: .78rem/1.45 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; max-height: 4.4em; overflow: hidden; }
+.ecash-waiting { display: flex; align-items: center; gap: .55rem; margin-top: .9rem; color: var(--muted); }
+.ecash-waiting::before { content: ""; width: .6rem; height: .6rem; border-radius: 50%; background: var(--brass); animation: ecash-wait 1.4s ease-in-out infinite; }
+@keyframes ecash-wait { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .ecash-waiting::before { animation: none; } }
+
+.ecash-lines { margin: 1rem 0; }
+.ecash-lines > div { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid var(--line); }
+.ecash-lines dt { color: var(--muted); }
+.ecash-lines dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+
+.ecash-done { font-family: var(--font-display); font-size: 1.5rem; line-height: 1.25; margin: .6rem 0; }
+
+/* The way in, from the account page. */
+.ecash-door { display: flex; flex-direction: column; gap: .15rem; width: 100%; text-align: left; margin: .2rem 0 1rem; padding: .8rem 1rem; border: 1px solid var(--brass-soft);
+  border-radius: 12px; background: var(--ink-softer); color: var(--fg); font: inherit; cursor: pointer; }
+.ecash-door:hover { border-color: var(--brass); }
+.ecash-door-name { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; }
+.ecash-door-what { font-size: .88rem; color: var(--muted); }
+
+body.panel .ecash h1 { font-size: 1.3rem; }
+
+/* Mints people recommend: a row to press each, the address and who vouches for it. */
+.connect .ecash-picks { list-style: none; margin: .5rem 0 0; padding: 0; display: grid; gap: .4rem; }
+.ecash-pick { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; width: 100%; text-align: left; padding: .6rem .8rem;
+  border: 1px solid var(--line-strong); border-radius: 10px; background: var(--ink-softer); color: var(--fg); font: inherit; cursor: pointer; }
+.ecash-pick:hover:not(:disabled) { border-color: var(--brass); }
+.ecash-pick:disabled { opacity: .55; cursor: default; }
+.ecash-pick .mint { min-width: 0; overflow-wrap: anywhere; font: .9rem var(--font-mono); }
+.ecash-pick .why { flex: none; font-size: .84rem; color: var(--muted); }

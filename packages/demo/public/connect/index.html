@@ -9,11 +9,15 @@
 <link rel="icon" href="../assets/icon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="../assets/site.css" />
 <link rel="stylesheet" href="../assets/connect.css" />
+<link rel="stylesheet" href="../assets/ecash.css" />
 </head>
 <body class="connect">
 
 <nav class="nav">
-  <span class="brand"><img class="lockup" src="../assets/lockup.svg" alt="BitLogin" /></span>
+  <span class="brand"><img class="lockup" src="../assets/lockup.svg" alt="BitLogin" /><img class="panel-mark" src="../assets/mark.svg" alt="" /><strong class="panel-name">BitLogin</strong></span>
+  <!-- The panel only (docs/sign-in-window.md §SW19): whose page this is, and the way out. -->
+  <span class="panel-where" data-panel-only hidden><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg><span id="panel-me"></span></span>
+  <button id="close" class="panel-close" type="button" aria-label="Close" data-panel-only hidden>&times;</button>
 </nav>
 
 <main class="connect-main">
@@ -112,6 +116,137 @@
     <p class="connect-small">Your key stays with BitLogin. The application never sees it, and nothing is typed there.</p>
   </section>
 
+  <section id="confirm" class="connect-card" hidden>
+    <h1 id="confirm-title">Sign this?</h1>
+    <p id="confirm-site" class="connect-site"></p>
+    <p class="connect-small">This site is asking. It can't do this without you: you are asked each time.</p>
+    <div class="connect-account">
+      <p class="connect-small">Signing as</p>
+      <p class="connect-who"><strong id="confirm-who"></strong></p>
+      <p id="confirm-who-key" class="connect-key"></p>
+    </div>
+    <p id="confirm-warning" class="connect-warning"></p>
+    <div class="cta-row">
+      <button id="confirm-yes" class="btn primary" type="button">Sign it</button>
+      <button id="confirm-no" class="btn secondary" type="button">Don't sign</button>
+    </div>
+    <p class="connect-what">What it says:</p>
+    <ul id="confirm-lines"></ul>
+  </section>
+
+  <section id="wallet" class="connect-card" hidden>
+    <h1>Let this site use a wallet?</h1>
+    <p id="wallet-site" class="connect-site"></p>
+    <div class="connect-warning">
+      <p><strong>This site will receive a wallet connection.</strong> It can spend from that wallet, within the budget the wallet itself enforces, until you revoke the connection at the wallet.</p>
+      <p>Make a connection for this site alone, with a small budget. Never share one you use anywhere else.</p>
+    </div>
+    <div id="wallet-slot"></div>
+    <div class="cta-row"><button id="wallet-no" class="btn secondary" type="button">Don't share a wallet</button></div>
+  </section>
+
+  <section id="ecash" class="connect-card ecash" hidden>
+    <!-- A site asked to be paid: whose invoice this is. Shown only then. -->
+    <div id="ecash-for" hidden>
+      <p class="connect-small">Asking to be paid</p>
+      <p id="ecash-site" class="connect-site"></p>
+    </div>
+
+    <div data-ecash="loading">
+      <p class="ecash-quiet">Opening your wallet.</p>
+    </div>
+
+    <div data-ecash="setup" hidden>
+      <h1>Start an ecash wallet</h1>
+      <p>Ecash is bitcoin you can spend in a world with one press, without the world ever touching your wallet. It is kept with your BitLogin account, sealed so only you can read it.</p>
+      <p class="ecash-plain">A mint holds the bitcoin behind your ecash. Choose one you trust, and keep small amounts there: if a mint disappears, the sats kept at it go with it.</p>
+      <h2 class="ecash-sub">Mints people recommend</h2>
+      <p id="ecash-picks-note" class="ecash-quiet">Looking on Nostr for recommendations.</p>
+      <ul id="ecash-picks" class="ecash-picks"></ul>
+      <form id="ecash-mint-form" class="ecash-form">
+        <label for="ecash-mint">Or another mint's address</label>
+        <input id="ecash-mint" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" required />
+        <button class="btn primary" type="submit">Use this mint</button>
+      </form>
+    </div>
+
+    <div data-ecash="home" hidden>
+      <div class="ecash-balance">
+        <p class="ecash-figure"><span id="ecash-total">0</span> <span class="ecash-unit">sats</span></p>
+        <p id="ecash-note" class="ecash-quiet"></p>
+      </div>
+      <div class="ecash-actions">
+        <button id="ecash-go-fund" class="btn primary" type="button">Add sats</button>
+        <button id="ecash-go-pay" class="btn secondary" type="button">Pay an invoice</button>
+        <button id="ecash-go-receive" class="btn secondary" type="button">Receive a token</button>
+      </div>
+      <h2 class="ecash-sub">Where it is kept</h2>
+      <ul id="ecash-mints" class="ecash-mints"></ul>
+      <button id="ecash-go-mint" class="connect-link" type="button">Add another mint</button>
+    </div>
+
+    <div data-ecash="fund" hidden>
+      <h1>Add sats</h1>
+      <form id="ecash-fund-form" class="ecash-form">
+        <label for="ecash-fund-amount">How many sats</label>
+        <input id="ecash-fund-amount" type="number" inputmode="numeric" min="1" max="1000000" step="1" required />
+        <label for="ecash-fund-mint">At which mint</label>
+        <select id="ecash-fund-mint"></select>
+        <button class="btn primary" type="submit">Make a Lightning invoice</button>
+      </form>
+      <div id="ecash-invoice" hidden>
+        <p>Pay this from any Lightning wallet. The sats arrive here as soon as it is paid.</p>
+        <div id="ecash-qr" class="ecash-qr"></div>
+        <p id="ecash-invoice-text" class="ecash-code"></p>
+        <button id="ecash-invoice-copy" class="btn secondary" type="button">Copy invoice</button>
+        <p id="ecash-fund-status" class="ecash-waiting" role="status">Waiting for the payment.</p>
+      </div>
+    </div>
+
+    <div data-ecash="receive" hidden>
+      <h1>Receive a token</h1>
+      <p>Paste a Cashu token someone sent you. It is exchanged at its mint for ecash only you hold, so the sender can't take it back.</p>
+      <form id="ecash-receive-form" class="ecash-form">
+        <label for="ecash-token">Cashu token</label>
+        <textarea id="ecash-token" rows="4" autocomplete="off" spellcheck="false" placeholder="cashuB…" required></textarea>
+        <button class="btn primary" type="submit">Receive it</button>
+      </form>
+    </div>
+
+    <div data-ecash="invoice" hidden>
+      <h1>Pay an invoice</h1>
+      <form id="ecash-pay-form" class="ecash-form">
+        <label for="ecash-pay-invoice">Lightning invoice</label>
+        <textarea id="ecash-pay-invoice" rows="4" autocomplete="off" spellcheck="false" placeholder="lnbc…" required></textarea>
+        <button class="btn primary" type="submit">See what it costs</button>
+      </form>
+    </div>
+
+    <div data-ecash="confirm" hidden>
+      <h1 id="ecash-confirm-title">Pay this?</h1>
+      <p class="ecash-figure"><span id="ecash-pay-amount">0</span> <span class="ecash-unit">sats</span></p>
+      <dl class="ecash-lines">
+        <div><dt>Routing fee, at most</dt><dd id="ecash-pay-fee"></dd></div>
+        <div><dt>From</dt><dd id="ecash-pay-mint"></dd></div>
+        <div><dt>You hold there</dt><dd id="ecash-pay-have"></dd></div>
+      </dl>
+      <p id="ecash-short" class="connect-warning" hidden></p>
+      <div class="cta-row">
+        <button id="ecash-pay-yes" class="btn primary" type="button">Pay</button>
+        <button id="ecash-pay-no" class="btn secondary" type="button">Don't pay</button>
+        <button id="ecash-pay-fund" class="btn secondary" type="button" hidden>Add sats first</button>
+      </div>
+      <p class="connect-small">A Lightning payment can't be taken back. What the mint doesn't use for routing comes back to your wallet.</p>
+    </div>
+
+    <div data-ecash="done" hidden>
+      <p class="ecash-done" id="ecash-done-text"></p>
+    </div>
+
+    <p id="ecash-error" class="connect-warning" role="alert" hidden></p>
+    <div class="cta-row" id="ecash-nav"><button id="ecash-back" class="btn secondary" type="button">Back</button></div>
+  </section>
+
   <section id="choose" class="connect-card" hidden>
     <h1>Which account?</h1>
     <p id="choose-site" class="connect-site"></p>
@@ -125,11 +260,25 @@
 
   <section id="signin" class="connect-card" hidden>
     <h1>Sign in to BitLogin first</h1>
-    <p>A site is asking to sign notes as you, and you aren't signed in on this device. Sign in here, and the question comes next.</p>
-    <p class="connect-small">Before you type anything, check the address above: it should be BitLogin's own. A site that asks for your BitLogin password on a page of its own is not to be trusted.</p>
+    <p data-window-only>A site is asking to sign notes as you, and you aren't signed in on this device. Sign in here, and the question comes next.</p>
+    <p class="connect-small" data-window-only>Before you type anything, check the address above: it should be BitLogin's own. A site that asks for your BitLogin password on a page of its own is not to be trusted.</p>
+    <div class="connect-warning" data-panel-only hidden>
+      <p><strong>A world can draw a copy of this panel.</strong> A passkey can't be fooled by one. If you type a password and your password manager doesn't offer to fill it in, stop. Never type your recovery phrase or private key into anything a world shows you.</p>
+    </div>
     <div id="widget-slot"></div>
     <div class="cta-row"><button id="deny-2" class="btn secondary" type="button">Not now</button></div>
   </section>
+  <section id="account" class="connect-card" hidden>
+    <h1>Your BitLogin account</h1>
+    <p class="connect-small">Everything BitLogin does is here: your accounts, your password, your recovery phrase, your key, your connections and your lock.</p>
+    <div class="connect-warning">
+      <p>BitLogin shows your recovery phrase and private key only when you ask, here. Nothing else should ever ask you to type them in, and a world never needs them.</p>
+    </div>
+    <button id="open-ecash" class="ecash-door" type="button"><span class="ecash-door-name">Ecash wallet</span><span class="ecash-door-what">Sats you can spend in a world with one press</span></button>
+    <div id="account-slot"></div>
+    <div class="cta-row"><button id="account-back" class="btn secondary" type="button">Back</button></div>
+  </section>
+  <p class="panel-foot" data-panel-only hidden><button id="advanced" class="connect-link" type="button">Account and more</button> <span id="panel-client"></span></p>
 </main>
 
 <script type="module" src="../vendor/bitlogin/bitlogin.js"></script>

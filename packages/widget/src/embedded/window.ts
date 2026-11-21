@@ -11,17 +11,21 @@
  * nothing; and with no signer found, there is nothing to allow.
  */
 import type { HeadlessSigner } from "../headless.js";
-import { handoffMessage, readHandoffMessage } from "./policy.js";
+import type { NostrEvent } from "@bitlogin/core/nostr";
+import { handoffMessage, readHandoffMessage, type Asked } from "./policy.js";
 import { describePermissions, heldAsLocal, knownAppName, mayHold, RESERVED_KINDS, type AppPermissions, type PermissionWords } from "./permissions.js";
 import { familyDomain, inFamily, knownFamily } from "./family.js";
 import { familyOf } from "./publicSuffix.js";
 import type { WorldMore } from "./follows.js";
+import { framesOfClient } from "./panel.js";
 
 export { describePermissions, knownAppName, type AppPermissions, type PermissionWords };
 export { declineFamily, describeAllowed, familyDeclined, familyOffer, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
 export { familyDomain, familyOf, inFamily, knownFamily };
-export { SIGN_LIMITS } from "./policy.js";
+export { SIGN_LIMITS, type Asked } from "./policy.js";
+export { describeAsked, type AskedWords } from "./careful.js";
 export { askLockDevice } from "../lockDevice.js";
+export { PANEL_CLIENTS, panelClientAllowed, panelMessage, readPanelHello, type PanelHello, type PanelMode, type PanelToClient } from "./panel.js";
 
 export interface FoundSigner {
   /** The site the signer is embedded in, as the browser reported it to the signer. Show this, exactly. */
@@ -54,6 +58,18 @@ export interface FoundSigner {
    * is what is new, and what the question is about.
    */
   readonly has: readonly WorldMore[];
+  /**
+   * Something the site put to the person (§SW20): a careful kind to sign, or the use of a wallet. Null when there
+   * is nothing waiting. Where there is, this is what the page is for: show it, and bring back `answer`.
+   */
+  readonly ask: Asked | null;
+  /** The account the site is signed in as, where it put something to the person: the answer must be that account's. */
+  readonly askedAs: string | null;
+  /**
+   * What the person answered: the event, signed by this origin's own session, or the wallet connection, or
+   * nothing (they said no). Resolves true once the signer has passed it on, or heard the no.
+   */
+  answer(result: { event: NostrEvent } | { wallet: string } | { paid: { invoice: string; preimage?: string } } | null): Promise<boolean>;
   /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
   readonly known: boolean;
   /**
@@ -81,16 +97,27 @@ export interface FoundSigner {
 export interface FindSignerOptions {
   /** How long to keep asking before giving up, in milliseconds. A signer may still be loading. */
   timeoutMs?: number;
+  /**
+   * Look in the frames of the page that shows this one (the sign-in panel,
+   * §SW19), not in the page that opened it (the window).
+   */
+  inClient?: boolean;
+  /** Take only a signer that reports this site. The panel is told which world it is for, and shows no other. */
+  world?: string;
 }
 
 /**
  * Look for this origin's embedded signer in the page that opened this
- * window. Resolves with it, or with null when there is no opener, or none
+ * window, or, for the panel, in the frames of the page that shows it.
+ * Resolves with it, or with null when there is no such page, or none
  * answers: then there is nothing to allow.
  */
 export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundSigner | null> {
-  const opener = typeof window === "undefined" ? null : (window.opener as Window | null);
-  if (!opener) return Promise.resolve(null);
+  if (typeof window === "undefined") return Promise.resolve(null);
+  const opener = opts.inClient ? null : (window.opener as Window | null);
+  if (opts.inClient ? window.parent === window : !opener) return Promise.resolve(null);
+  /** Where a signer may be: the opener's frames, or the client's and theirs. Read again on each try: a world may still be loading. */
+  const candidates = (): Window[] => (opts.inClient ? framesOfClient(window) : Array.from({ length: opener!.frames.length }, (_, i) => opener!.frames[i]!));
   const me = location.origin;
   const bytes = crypto.getRandomValues(new Uint8Array(12));
   const nonce = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -102,8 +129,7 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
     const call = () => {
       if (frame) return;
       try {
-        const frames = opener.frames;
-        for (let i = 0; i < frames.length; i++) frames[i]!.postMessage(handoffMessage({ t: "hello", nonce }), me);
+        for (const candidate of candidates()) candidate.postMessage(handoffMessage({ t: "hello", nonce }), me);
       } catch {
         /* the page that opened this has gone, or cut its link: nothing is found */
       }
@@ -124,6 +150,8 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       if (!msg || msg.nonce !== nonce) return;
       if (msg.t === "done" && frame && e.source === frame) return void onDone?.(msg.ok);
       if (msg.t !== "frame" || frame) return;
+      // The panel was told which world it is for: a signer in any other frame is not the one that asked.
+      if (opts.world && msg.world !== opts.world) return;
       frame = e.source as Window;
       clearInterval(again);
       clearTimeout(giveUp);
@@ -147,6 +175,18 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
         more,
         has,
         local: !!wants && heldAsLocal(world) && [...wants.sign, ...wants.read].some((kind) => RESERVED_KINDS.includes(kind)),
+        ask: msg.ask ?? null,
+        askedAs: msg.ask ? (msg.pubkey ?? null) : null,
+        async answer(result) {
+          const answered = new Promise<boolean>((done) => {
+            onDone = done;
+            setTimeout(() => done(false), 8000);
+          });
+          frame!.postMessage(handoffMessage({ t: "answer", nonce, world, ...(result ?? {}) }), me);
+          const ok = await answered;
+          window.removeEventListener("message", onMessage);
+          return ok;
+        },
         async grant(session, name, remember, forFamily, withMore) {
           // What is sealed is exactly what this page was given to show: the set, for the site the browser named,
           // and its family only where the user chose that, with "remember" left on.

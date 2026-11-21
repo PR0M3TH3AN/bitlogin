@@ -55,7 +55,7 @@ import { describe as describeKept, forget as forgetKept, keep as keepKept, loadK
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { inFamily, readFamily } from "../embedded/family.js";
-import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
+import { isSignInAddress, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
 import { createSignGate, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
 import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
@@ -63,7 +63,9 @@ import { ACHIEVEMENT_LIMITS, achievementForWorld } from "../embedded/achievement
 import { buildMessageRelays, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS, sealMessage, UNWRAP_WORLD_LIMITS } from "../embedded/messages.js";
 import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
-import { deleteSignerGrant, grantedAt, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/mints.js";
+import { loadEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
+import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
   checkDue,
   checkLearned,
@@ -520,6 +522,20 @@ function selfOrigin(): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * The site a wallet connection is for. This page's own origin, always, except in one place: at one of BitLogin's
+ * own sign-in addresses the page may name the site, because there the page is BitLogin's panel or window
+ * answering for a world, and the person is shown that world's address before anything is shared (§SW20). In a
+ * vendored copy at an application's address a named site is refused, so a host can never adopt, or be handed, a
+ * wallet the user connected to another site.
+ */
+function walletSite(named: unknown): string {
+  if (named === undefined) return selfOrigin();
+  const site = grantSite(named);
+  if (!site || !isSignInAddress(selfOrigin())) throw new Error("A wallet connection is for this site only.");
+  return site;
 }
 
 function requireVault(): VaultSession {
@@ -1756,6 +1772,59 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     // ---- Connection Vault (connection-vault.md §12, reveal mode) ----
 
+    // ---- An ecash wallet kept with the account (docs/ecash.md). A full session only: none of these is on the list a
+    // handed-over session may ask, so no embedded signer, and so no site, can read a token.
+    // The mints people recommend (NIP-87): read from relays, counted one voice per account, the user's own follows
+    // first. It reads public notes and the user's follow list, and writes nothing.
+    case "ecashMints": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      const relayUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
+      if (relayUrls.length === 0) return { mints: [] };
+      const pool = new RelayPool(relayUrls);
+      try {
+        const [recommended, lists] = await Promise.all([
+          pool.queryQuorum({ kinds: [MINT_RECOMMENDATION_KIND], "#k": [CASHU_MINT_KIND], limit: 500 }, 5000),
+          pool.queryQuorum({ kinds: [FOLLOWS_KIND], authors: [me], limit: 2 }, 4000)
+        ]);
+        const newest = lists.outcomes.flatMap((o) => o.events).filter((event) => event.pubkey === me && event.kind === FOLLOWS_KIND && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+        const follows = new Set((newest?.tags ?? []).filter((tag) => tag[0] === "p" && typeof tag[1] === "string").map((tag) => tag[1]!));
+        const byId = new Map(recommended.outcomes.flatMap((o) => o.events).filter((event) => verifyNostrEvent(event)).map((event) => [event.id, event]));
+        return { mints: rankMints([...byId.values()], follows) };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    case "ecashLoad":
+    case "ecashSetMints":
+    case "ecashRoll": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      // Their own write relays, and BitLogin's: the same place a take-back is kept.
+      const finder = new RelayPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
+      let mine: string[] = session.relays;
+      if (mine.length === 0) {
+        try {
+          mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+        } catch {
+          mine = [];
+        } finally {
+          finder.closeAll();
+        }
+      } else finder.closeAll();
+      const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
+      const pool = new RelayPool(relayUrls);
+      try {
+        const deps = { signer, store, relays: pool };
+        if (action === "ecashLoad") return await loadEcash(deps);
+        if (action === "ecashSetMints") return await setEcashMints({ ...deps, newKey: () => bytesToHex(generatePrivateKey()) }, (payload as { mints?: unknown }).mints);
+        return await rollEcash(deps, payload as EcashRoll);
+      } finally {
+        pool.closeAll();
+      }
+    }
+
     case "vaultStatus": {
       if (!session.signer) return { enabled: false };
       if (session.connectionVaultRoot) {
@@ -1770,8 +1839,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultSaveNwc": {
-      const p = payload as { uri: string; label: string };
-      const origin = selfOrigin();
+      const p = payload as { uri: string; label: string; site?: unknown };
+      const origin = walletSite(p.site);
       const vault = requireVault();
       const credential = parseNwcUri(p.uri);
       const label = p.label.trim().slice(0, 120) || "Wallet connection";
@@ -1798,7 +1867,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultFindForOrigin": {
-      const origin = selfOrigin();
+      const origin = walletSite((payload as { site?: unknown }).site);
       const { connections } = await listLiveConnections();
       const match = connections.find(
         (c) =>
@@ -1810,7 +1879,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultRevealNwc": {
-      const p = payload as { connectionId: string };
+      const p = payload as { connectionId: string; site?: unknown };
+      const forSite = walletSite(p.site);
       const { connection } = await findConnection(p.connectionId);
       if (connection.record.connection_type !== "nwc" || connection.record.state !== "active") {
         throw new Error("That connection is not an active wallet connection.");
@@ -1822,7 +1892,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       // management UI's markup) could pull a wallet the user connected to a
       // different site entirely.
       const boundOrigin = connection.record.application_binding.origin;
-      if (boundOrigin !== null && boundOrigin !== selfOrigin()) {
+      if (boundOrigin !== null && boundOrigin !== forSite) {
         throw new Error("That connection belongs to a different site.");
       }
       const credential = connection.record.credential as unknown as NwcCredential;
@@ -1921,6 +1991,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
+  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

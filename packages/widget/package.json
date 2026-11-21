@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@bitlogin/core": "*",
+    "@cashu/cashu-ts": "4.13.1",
     "@getalby/bitcoin-connect": "3.12.3",
     "qrcode-generator": "^2.0.4"
   },

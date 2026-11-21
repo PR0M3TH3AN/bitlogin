@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { PANEL_CLIENTS } from "./embedded/panel.js";
 
 const widgetSource = readFileSync(
   new URL("./element.ts", import.meta.url),
@@ -225,8 +226,9 @@ describe("widget security policy", () => {
     );
   });
 
-  // Three sets of headers (docs/sign-in-window.md §SW6): every page; the embedded signer, which other sites frame;
-  // and the sign-in window, which must keep its link to the page that opened it. Nothing else differs.
+  // Four sets of headers (docs/sign-in-window.md §SW6, §SW19): every page; the embedded signer, which other sites
+  // frame; the sign-in window, which must keep its link to the page that opened it; and the sign-in panel, which
+  // only the clients BitLogin lists may frame. Nothing else differs.
   const ruleFor = (source: string) => {
     const rule = vercel.headers.find((entry) => entry.source === source);
     expect(rule, `a header rule for ${source}`).toBeTruthy();
@@ -237,7 +239,8 @@ describe("widget security policy", () => {
     expect(vercel.headers.map((entry) => entry.source)).toEqual([
       "/((?!signer/|connect/).*)",
       "/signer/(.*)",
-      "/connect/(.*)",
+      "/connect/((?!panel/).*)",
+      "/connect/panel/(.*)",
     ]);
     const headers = ruleFor("/((?!signer/|connect/).*)");
     expect(headers.get("Content-Security-Policy")).toContain(
@@ -288,24 +291,52 @@ describe("widget security policy", () => {
     for (const required of ["X-Content-Type-Options", "Referrer-Policy", "Permissions-Policy", "Cross-Origin-Resource-Policy"]) {
       expect(signer.has(required), `${required} must be configured`).toBe(true);
     }
-    // Exactly one rule anywhere allows framing.
+    // Two rules anywhere allow framing: this one, and the panel's, which names its clients (below).
     const framable = vercel.headers.filter((entry) =>
       entry.headers.some((h) => h.key === "Content-Security-Policy" && !h.value.includes("frame-ancestors 'none'")),
     );
-    expect(framable.map((entry) => entry.source)).toEqual(["/signer/(.*)"]);
+    expect(framable.map((entry) => entry.source)).toEqual(["/signer/(.*)", "/connect/panel/(.*)"]);
   });
 
   it("lets the sign-in window keep its link to the page that opened it, and nothing else", () => {
     const everything = ruleFor("/((?!signer/|connect/).*)");
-    const connect = ruleFor("/connect/(.*)");
+    const connect = ruleFor("/connect/((?!panel/).*)");
     // The window finds the signer through window.opener. Cross-Origin-Opener-Policy: same-origin would cut that.
     expect(connect.has("Cross-Origin-Opener-Policy")).toBe(false);
+    // It may also reach a mint, over TLS (docs/ecash.md): the ecash wallet lives on this page and the panel, and
+    // a mint is an https address the person chooses. No other page may: the account page, the embedded signer
+    // and every worker keep `connect-src 'self' wss:`.
+    expect(connect.get("Content-Security-Policy")).toMatch(/(^|; )connect-src 'self' wss: https:(;|$)/u);
+    expect(everything.get("Content-Security-Policy")).toMatch(/(^|; )connect-src 'self' wss:(;|$)/u);
     // In every other respect it is a page like any other: it is never framed, and has the same policy.
     const rest = new Map(everything);
     rest.delete("Cross-Origin-Opener-Policy");
+    rest.set("Content-Security-Policy", (rest.get("Content-Security-Policy") ?? "").replace("connect-src 'self' wss:;", "connect-src 'self' wss: https:;"));
     expect([...connect]).toEqual([...rest]);
     expect(connect.get("X-Frame-Options")).toBe("DENY");
     expect(connect.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
+  });
+
+  it("lets only the clients BitLogin lists frame the sign-in panel, and changes nothing else", () => {
+    const connect = ruleFor("/connect/((?!panel/).*)");
+    const panel = ruleFor("/connect/panel/(.*)");
+    const csp = panel.get("Content-Security-Policy") ?? "";
+    // Exactly the list in embedded/panel.ts: never https:, never a wildcard, never a world.
+    expect(PANEL_CLIENTS.length).toBeGreaterThan(0);
+    for (const origin of PANEL_CLIENTS) expect(origin).toMatch(/^https:\/\/[a-z0-9.-]+$/u);
+    expect(csp).toContain(`frame-ancestors ${PANEL_CLIENTS.join(" ")};`);
+    expect(csp).not.toMatch(/frame-ancestors[^;]*(\*|https:(?!\/\/)|http:)/u);
+    // A header that forbids framing would contradict it.
+    expect(panel.has("X-Frame-Options")).toBe(false);
+    // A passkey may be used in it, where the client delegates that to the frame.
+    expect(panel.get("Permissions-Policy")).toContain("publickey-credentials-get=(self)");
+    expect(panel.get("Permissions-Policy")).toContain("publickey-credentials-create=(self)");
+    // Everything else is the window's, word for word.
+    const rest = new Map(connect);
+    rest.delete("X-Frame-Options");
+    rest.set("Content-Security-Policy", (rest.get("Content-Security-Policy") ?? "").replace("frame-ancestors 'none'", `frame-ancestors ${PANEL_CLIENTS.join(" ")}`));
+    rest.set("Permissions-Policy", `${rest.get("Permissions-Policy")}, publickey-credentials-get=(self), publickey-credentials-create=(self)`);
+    expect([...panel].sort()).toEqual([...rest].sort());
   });
 
   it("keeps demo pages free of inline scripts and remote font dependencies", () => {

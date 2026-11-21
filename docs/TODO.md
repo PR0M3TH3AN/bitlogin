@@ -265,6 +265,39 @@ that moved.
     "taken or not" answer to `want`; and a line in the window when a site
     asked for more than it may have (§SW9.3a). On `beta`.
 
+- [ ] **16. The sign-in panel: BitLogin inside BitPortal's shell (§SW19).**
+  Asked for by the owner 2026-11-21 ("Keep all of it in app and not in a
+  separate window"); confirmed in this session the same day.
+  - [x] `/connect/panel/`, made from the window's page at build time;
+    framed only by `PANEL_CLIENTS` (`https://portal.bitblocks.network`),
+    with passkeys allowed. Finds the world's signer in the client's frames.
+    Sign-in, the question, the account chooser, the lock and "Account and
+    more" (the whole widget) all in the panel. On `beta`.
+  - [ ] The client half is BitPortal's: the shell's frame, the world's "ask
+    my client" path in the kit, the Airlock. Sent the address and the
+    message shapes (§SW19.2).
+  - [x] Tried in Chromium, Firefox and WebKit (Playwright's builds) with a
+    password account; Chromium with a virtual passkey.
+  - [ ] **Owner: try it in Brave and Safari,** with your real passkey and
+    password manager, and see whether Brave keeps the panel signed in
+    after the client's last tab closes. No harness reaches those.
+  - [x] Careful kinds asked each time (§SW20): `propose`, for a profile, a
+    deletion and a relay list. On `beta`. The kit side and the name in
+    NSWP-10 are the NSWP session's.
+  - [x] A wallet for a world (§SW20): `wallet`. Bitcoin Connect first, a
+    pasted NWC connection second, bound to the world's address. On `beta`.
+  - [x] The private key shown in the panel only after a fresh proof
+    (§SW19.7). On `beta`.
+  - [x] **Ecash (NIP-60), option (b)** as the owner chose 2026-11-21:
+    BitLogin holds the wallet and pays a world per press (`docs/ecash.md`).
+    The wallet, the browser copy written first, recommended mints
+    (NIP-87), `pay` for a world, and the wallet's screens. On `beta`.
+  - [ ] **Owner: try the wallet with a few real sats,** at a mint you
+    choose. It has only seen a mock mint and a test mint of pretend sats.
+  - [ ] Ecash still to do: secrets derived from a seed (so nothing is lost
+    in a crash), sending a token, nutzaps (NIP-61), a wallet page outside
+    the panel.
+
 **In a headset** (read from BitPortal's `AGENTS.md` and the NSWP plans
 `signing-in-worlds.md` and `in-game-identity.md`, 2026-11-19). These bound
 the items above; none is BitLogin's to decide alone.
@@ -286,8 +319,9 @@ the items above; none is BitLogin's to decide alone.
   arrival (`INSTANCE.signer`). To try the beta address from BitPortal that
   value has to point at it, in a BitPortal build made for the purpose; it
   is the owner's to change.
-- BitPortal never frames its own sign-in page and never draws BitLogin in a
-  canvas or a headset session. Nothing here should ask it to.
+- BitPortal never draws BitLogin in a canvas or a headset session. Since
+  2026-11-21 its shell frames the sign-in panel (§SW19), by the owner's
+  decision; nothing else of BitLogin's is framed by it.
 
 **Owner action items:**
 

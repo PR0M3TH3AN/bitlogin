@@ -24,6 +24,17 @@ cpSync(publicDir, outDir, { recursive: true });
 mkdirSync(join(outDir, "vendor", "bitlogin"), { recursive: true });
 cpSync(widgetDist, join(outDir, "vendor", "bitlogin"), { recursive: true });
 
+// The sign-in panel (docs/sign-in-window.md §SW19) is the window's own page, served at an address of its own so it can
+// have headers of its own: a client BitLogin lists may frame it, and nothing else may. It is made from the window's
+// page here, so the two can never say different things. Only the paths change, one folder deeper.
+{
+  const windowPage = readFileSync(join(publicDir, "connect", "index.html"), "utf8");
+  const panelPage = windowPage.replace(/(src|href)="\.\.\//gu, '$1="../../');
+  if (panelPage === windowPage || /(src|href)="\.\.\/(?!\.\.\/)/u.test(panelPage)) throw new Error("The panel's paths were not all moved one folder deeper.");
+  mkdirSync(join(outDir, "connect", "panel"), { recursive: true });
+  writeFileSync(join(outDir, "connect", "panel", "index.html"), panelPage);
+}
+
 function filesBelow(directory, prefix = "") {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const relative = join(prefix, entry.name);
