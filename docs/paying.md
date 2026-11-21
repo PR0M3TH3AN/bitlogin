@@ -1,7 +1,8 @@
 # Paying for Things: Tips, Purchases and Receipts
 
 **Date:** 2026-11-21
-**Status:** Built on `beta`. Not on `main`, not deployed. Tried against a
+**Status:** On `main` and bitlogin.network since 2026-11-21, with buying
+closed there (PY11). Tried against a
 pretend selling service with real signatures, and a mock mint. **Not tried
 against BitUnlock itself, and not with real money.** Experimental, and
 marked so in the interface.
@@ -337,5 +338,12 @@ once the sandbox has an address; it is not built for beta yet):
   order taken up again by its id, the seller's part alone then paid, the
   unlock, a receipt that passes with the sandbox's key and is refused
   without it, a renewal that runs on, and the service's list of both
-  receipts. All passed. **The screen itself has not been tried against
-  it**: that needs someone signed in on a local copy.
+  receipts. All passed. **The buy screen was then tried against it too**, in a
+  real browser, in BitLogin's own test with a throwaway passkey account
+  and mock relays: a world asked `buy`, the panel showed 500 sats as 490
+  to the seller and 10 to the service, "pretend sats: a test service", a
+  press settled both, and the world was handed `bought` with the sandbox's
+  receipt, then `have`. That run is opt-in (`BITLOGIN_SANDBOX`,
+  `BITLOGIN_SANDBOX_RELAY`, `BITLOGIN_SANDBOX_LISTING` in the panel test),
+  since it needs the sandbox running. Not tried: a world built on the
+  NSWP kit doing the asking.
