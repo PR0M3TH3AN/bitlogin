@@ -66,6 +66,7 @@ import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.
 import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/mints.js";
 import { keepReceipts, loadReceipts } from "./receiptStore.js";
 import { loadPaySettings, savePaySettings } from "./paySettings.js";
+import { quickRelays } from "./quickRelays.js";
 import { lightningAddressOfProfile } from "../pay/lightning.js";
 import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
 import { blossomAuth, loadDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
@@ -532,6 +533,9 @@ function selfOrigin(): string {
 
 /** Where a site's signer keeps the receipts it was handed, by site. */
 const HELD_RECEIPTS = "bitlogin:held:v1:";
+
+/** Relays for the paying screens: asked together, and not waited on to the last one (quickRelays.ts). */
+const quick = (urls: readonly string[]) => quickRelays(urls, (url) => new RelayPool([url]));
 
 /** Paying and buying are done on BitLogin's own pages, and nowhere a copy of the widget is hosted. */
 function requireSignInAddress(): void {
@@ -1883,7 +1887,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       if (typeof who !== "string" || !/^[0-9a-f]{64}$/u.test(who)) throw new Error("That is not an account.");
       const relayUrls = [...new Set([...session.relays, ...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 10);
       if (relayUrls.length === 0) return { name: "", address: "", answered: false };
-      const pool = new RelayPool(relayUrls);
+      const pool = quick(relayUrls);
       try {
         const found = await pool.queryQuorum({ kinds: [0], authors: [who], limit: 2 }, 3500);
         const events = found.outcomes.flatMap((o) => o.events);
@@ -1905,7 +1909,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const named = (Array.isArray(p.relays) ? p.relays : []).filter((url): url is string => typeof url === "string" && url.length <= 200 && (/^wss:\/\//u.test(url) || (local && /^ws:\/\/(localhost|127\.0\.0\.1)[:/]/u.test(url)))).slice(0, 6);
       const relayUrls = [...new Set([...named, ...session.relays, ...discoveryRelayUrls])].slice(0, 12);
       if (relayUrls.length === 0) return { event: null, answered: false };
-      const pool = new RelayPool(relayUrls);
+      const pool = quick(relayUrls);
       try {
         const found = await pool.queryQuorum({ kinds: [30078], authors: [sellerOf(coordinate)], "#d": [coordinate.slice(71)], limit: 4 }, 5000);
         const newest = found.outcomes.flatMap((o) => o.events).filter((event) => event.kind === 30078 && event.pubkey === sellerOf(coordinate) && event.tags.some((tag) => tag[0] === "d" && tag[1] === coordinate.slice(71)) && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
@@ -1950,7 +1954,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const finderUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
       let mine: string[] = session.relays;
       if (mine.length === 0 && finderUrls.length) {
-        const finder = new RelayPool(finderUrls);
+        const finder = quick(finderUrls);
         try {
           mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
         } catch {
@@ -1959,7 +1963,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
           finder.closeAll();
         }
       }
-      const pool = new RelayPool([...new Set([...mine, ...vaultRelayUrls])].slice(0, 16));
+      const pool = quick([...new Set([...mine, ...vaultRelayUrls])].slice(0, 16));
       try {
         const deps = { signer, store, relays: pool };
         if (action === "paySettingsLoad") return await loadPaySettings(deps);

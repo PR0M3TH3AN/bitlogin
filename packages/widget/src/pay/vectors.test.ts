@@ -11,7 +11,7 @@ describe("BitUnlock's published vectors, read by BitLogin's buyer side (docs/pay
     const event = vector("product-event-v1");
     const d = event.tags.find((t: string[]) => t[0] === "d")[1];
     const listing = readListing(event, `30078:${event.pubkey}:${d}`);
-    expect(listing).toMatchObject({ seller: event.pubkey, title: "Relay Runner", priceSats: 21_000, service: UNLOCK_SERVICES[0], for: "", termSeconds: 0, nswp: false });
+    expect(listing).toMatchObject({ seller: event.pubkey, title: "Relay Runner", priceSats: 21_000, service: UNLOCK_SERVICES[0], for: "", termSeconds: 0, nswp: false, shared: false, shares: [] });
     // It carries no `nswp:` tag, so it is not held to the floor for things sold in a world.
     expect(underFloor(listing!)).toBe(false);
     expect(underFloor({ nswp: true, priceSats: 499 })).toBe(true);

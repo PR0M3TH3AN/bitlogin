@@ -6,7 +6,15 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
-## 2026-11-21, later (on `beta` only)
+## 2026-11-21, later still (on `beta` only)
+
+- The paying screens don't wait on the slowest relay; a listing lasting an
+  hour says "an hour".
+- **A price shared between several people** (`docs/paying.md` PY14) is
+  built and switched off. Until it is switched on, a listing carrying
+  `nswp:share` is not shown for sale.
+
+## 2026-11-21, later (on `main`, with buying closed there)
 
 - **Tips, purchases and receipts** (`docs/paying.md`), on BitLogin's own
   sign-in page and panel. A site may ask its signer for `tip` (a person or

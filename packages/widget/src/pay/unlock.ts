@@ -14,6 +14,7 @@
 import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
 import { invoiceSats } from "./lightning.js";
 import { cleanCoordinate, readReceipt, receiptGood, type Listing, type Receipt, type UnlockService } from "./listing.js";
+import { cleanShareLabel, splitPrice } from "./shares.js";
 
 /**
  * A purchase stopped after a part of it was paid. The money that went is with whoever it was paid to, there is no
@@ -53,8 +54,11 @@ export interface BuyerKeys {
 }
 
 export interface PlanLeg {
-  /** Who this part goes to: the seller, or the service's own fee. */
-  role: string;
+  /** Who this part goes to: the seller, the service's own fee, or someone the seller shares the price with. */
+  role: "seller" | "service" | "share" | "other";
+  /** For a share: the key the service says it is for, and the seller's word for it. */
+  to?: string;
+  label?: string;
   sats: number;
   invoice: string;
   hash: string;
@@ -100,7 +104,10 @@ export function readPlan(input: unknown, want: { listing: string; buyer: string;
     const pretend = raw.rail === "sandbox" && raw.adapter === "mock" && /^bitunlock-mock:1:[0-9a-f]{64}$/u.test(invoice);
     if (status !== "settled" && !(want.sandbox ? pretend : raw.rail === "lightning" && invoiceSats(invoice) === sats)) return bad();
     hashes.add(raw.paymentHash);
-    legs.push({ role: raw.role === "seller" ? "seller" : raw.role === "bitunlock" ? "service" : "other", sats, invoice, hash: raw.paymentHash, status });
+    const shareTo = raw.role === "share" && typeof raw.recipientPubkey === "string" && HEX64.test(raw.recipientPubkey) ? raw.recipientPubkey : "";
+    const shareLabel = shareTo ? cleanShareLabel(raw.label) : "";
+    if (raw.role === "share" && (!shareTo || !shareLabel)) return bad();
+    legs.push({ role: raw.role === "seller" ? "seller" : raw.role === "bitunlock" ? "service" : shareTo ? "share" : "other", sats, invoice, hash: raw.paymentHash, status, ...(shareTo ? { to: shareTo, label: shareLabel } : {}) });
   }
   if (legs.reduce((sum, leg) => sum + leg.sats, 0) !== total) return bad();
   return { order: p.orderId, totalSats: total, legs };
@@ -112,14 +119,57 @@ export interface SandboxSession {
   token: string;
 }
 
+/** The service's own fee, as its signed policy states it: parts in ten thousand of the price, between a least and a most. */
+export interface FeePolicy {
+  bps: number;
+  min: number;
+  max: number;
+}
+
+/**
+ * Hold a payment plan to the listing its seller signed (docs/paying.md PY14).
+ *
+ * An ordinary listing has a part for its seller and at most one for the service, and nothing else. A listing whose
+ * price is shared is divided here, by the rule, and the plan must be one of exactly two: the division with the
+ * client paid, or the one with no client (the service pays only a key registered with it to be paid, which BitLogin
+ * can't know of the client). Any other plan is refused: a part for an amount the seller didn't write, a share left
+ * out or added, or one labelled for a key the seller didn't name. The service's own fee is the one part taken from
+ * the plan, and it is held to the service's signed policy.
+ */
+export function holdToListing(plan: Plan, listing: Listing, o: { client?: string; fee?: FeePolicy | null } = {}): void {
+  const bad = (): never => {
+    throw new PurchaseError("plan", "The seller's service answered with a payment plan that isn't what the seller wrote. Nothing was spent.");
+  };
+  const sellers = plan.legs.filter((leg) => leg.role === "seller");
+  const services = plan.legs.filter((leg) => leg.role === "service");
+  const shareLegs = plan.legs.filter((leg) => leg.role === "share");
+  if (sellers.length !== 1 || services.length > 1 || plan.legs.some((leg) => leg.role === "other")) return bad();
+  if (!listing.shared) return shareLegs.length === 0 ? undefined : bad();
+  if (!listing.shares) return bad();
+  const charge = services[0]?.sats ?? 0;
+  if (o.fee && charge !== Math.min(Math.max(Math.floor((listing.priceSats * o.fee.bps) / 10_000), o.fee.min), o.fee.max)) return bad();
+  if (plan.totalSats !== listing.priceSats) return bad();
+  const right = [splitPrice(listing.priceSats, listing.shares, listing.seller, { ...(o.client ? { client: o.client } : {}), charge }), splitPrice(listing.priceSats, listing.shares, listing.seller, { charge })];
+  const fits = right.some((split) => {
+    if (!split.ok) return false;
+    const others = split.parts.filter((part) => !part.seller);
+    return split.parts.find((part) => part.seller)!.sats === sellers[0]!.sats && others.length === shareLegs.length && others.every((part) => shareLegs.some((leg) => leg.to === part.to && leg.sats === part.sats && leg.label === part.label));
+  });
+  if (!fits) return bad();
+}
+
 export interface UnlockClient {
   /**
    * Fetch the service's signed policy, and check it is the pinned key's. The relays it names are where listings
    * are. `sandbox`: it says it takes only pretend payments, so it is a test service and no real one.
    */
-  policy(): Promise<{ relays: string[]; sandbox: boolean }>;
-  /** Ask for a quote. `key` names this attempt: asked again with the same one, the service gives the same order. */
-  quote(listing: Listing, key?: string): Promise<Plan>;
+  policy(): Promise<{ relays: string[]; sandbox: boolean; fee: FeePolicy | null }>;
+  /**
+   * Ask for a quote. `key` names this attempt: asked again with the same one, the service gives the same order.
+   * `client` is the key of the client that brought the buyer, for a listing that shares its price with one. It is
+   * part of what the key names: the same key with another client is a conflict, so it is decided first and kept.
+   */
+  quote(listing: Listing, key?: string, client?: string): Promise<Plan>;
   /**
    * An unfinished order for this listing, where there is one: so a purchase begun before is taken up again, and
    * never a second order made beside it. `order` is one BitLogin kept the id of; without it the service is asked
@@ -193,7 +243,7 @@ export function createUnlockClient(service: UnlockService, keys: BuyerKeys, opti
       const event = found?.event;
       // The policy is the pinned key's own signed word, and what is read is what was signed.
       if (!event || event.pubkey !== service.pubkey || event.kind !== 30078 || !verifyNostrEvent(event)) return down();
-      let doc: { endpoint?: unknown; servicePubkey?: unknown; status?: unknown; relays?: unknown; paymentAdapters?: unknown };
+      let doc: { endpoint?: unknown; servicePubkey?: unknown; status?: unknown; relays?: unknown; paymentAdapters?: unknown; feePolicy?: { feeBps?: unknown; minimumSats?: unknown; maximumSats?: unknown } };
       try {
         doc = JSON.parse(event.content) as typeof doc;
       } catch {
@@ -201,13 +251,17 @@ export function createUnlockClient(service: UnlockService, keys: BuyerKeys, opti
       }
       if (doc.endpoint !== service.endpoint || doc.servicePubkey !== service.pubkey || doc.status !== "active") return down();
       const relays = Array.isArray(doc.relays) ? doc.relays.filter((r): r is string => typeof r === "string" && r.length <= 200 && /^wss?:\/\//u.test(r)).slice(0, 6) : [];
-      return { relays, sandbox: Array.isArray(doc.paymentAdapters) && doc.paymentAdapters.includes("mock") };
+      const f = doc.feePolicy;
+      const whole = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+      return { relays, sandbox: Array.isArray(doc.paymentAdapters) && doc.paymentAdapters.includes("mock"), fee: f && whole(f.feeBps) && whole(f.minimumSats) && whole(f.maximumSats) ? { bps: f.feeBps, min: f.minimumSats, max: f.maximumSats } : null };
     },
-    async quote(listing, key) {
+    async quote(listing, key, clientKey) {
       try {
-        return readPlan(await call("/v1/quotes", "POST", { productCoordinate: listing.coordinate, buyerPubkey: keys.pubkey, idempotencyKey: key && ORDER_KEY.test(key) ? key : newKey() }), want(listing));
+        return readPlan(await call("/v1/quotes", "POST", { productCoordinate: listing.coordinate, buyerPubkey: keys.pubkey, idempotencyKey: key && ORDER_KEY.test(key) ? key : newKey(), ...(clientKey && HEX64.test(clientKey) ? { clientPubkey: clientKey } : {}) }), want(listing));
       } catch (err) {
         if (/sold|inventory|reserved|revoked|inactive/u.test(refusedAs(err))) throw new PurchaseError("sold", "This isn't for sale just now. Nothing was spent.");
+        // Someone the price is shared with can't be paid just now (they withdrew, or their part is too small to send).
+        if (refusedAs(err) === "shares_unavailable") throw new PurchaseError("sold", "This can't be sold just now: someone its price is shared with can't be paid. Nothing was spent.");
         throw err;
       }
     },
@@ -325,8 +379,10 @@ export async function completePurchase(input: {
   }
 
   async function run(): Promise<{ receipt: Receipt; delivery: string }> {
-  // The smallest part first, and the seller's last: a payment that stops half way then strands the least.
-  const order = [...plan.legs].sort((a, b) => Number(a.role === "seller") - Number(b.role === "seller") || a.sats - b.sats);
+  // The service's own part first, then the shares smallest first (two of a size by key), and the seller's last: a
+  // payment that stops half way then strands the least.
+  const rank = (leg: PlanLeg) => (leg.role === "service" ? 0 : leg.role === "seller" ? 2 : 1);
+  const order = [...plan.legs].sort((a, b) => rank(a) - rank(b) || a.sats - b.sats || ((a.to ?? "") < (b.to ?? "") ? -1 : 1));
   for (const first of order) {
     let leg = plan.legs.find((l) => l.hash === first.hash)!;
     if (leg.status === "settled") continue;

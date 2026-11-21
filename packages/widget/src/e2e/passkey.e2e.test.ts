@@ -797,12 +797,19 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     async () => {
       // Two pages of one site, as BitPortal's shell and a world under it are: the client, and the world it shows.
       // What the world says of itself, in its own /.well-known/nswp.json: where it takes tips, and the keys it publishes with.
-      const worldWord: { tip?: string; publishers: Record<string, unknown> } = { publishers: {} };
+      const worldWord: { tip?: string; share?: string; publishers: Record<string, unknown> } = { publishers: {} };
       // The seller's wallet is the mint the test starts later. The service is started first: BitLogin's pages are
       // told of it as they load.
       let payMint: Awaited<ReturnType<typeof startMockMint>> | null = null;
       const unlock = await startMockUnlock({ invoice: (sats) => payMint!.invoice(sats), paid: (invoice) => payMint!.paid.includes(invoice) });
-      unlockNamed = unlock.named;
+      // Opt-in: the buy screen against BitUnlock's own sandbox, where one is running on this machine. Then that is
+      // the service BitLogin's pages are told of, and the listing named is one registered there.
+      //   BITLOGIN_SANDBOX="https://<address>|<key>" BITLOGIN_SANDBOX_RELAY=wss://… BITLOGIN_SANDBOX_LISTING=30078:…
+      // For a listing whose price is shared: BITLOGIN_SANDBOX_CLIENT=<the key of a client registered there to be
+      // paid>, which the page showing the panel then names as its own, and BITLOGIN_SANDBOX_EXPECT=<JSON:
+      // { "price": "2,100", "lines": ["…"], "yes": "Pay 2,100 sats" }> for what the screen should say.
+      const live = process.env.BITLOGIN_SANDBOX ? { named: process.env.BITLOGIN_SANDBOX, relay: process.env.BITLOGIN_SANDBOX_RELAY ?? "", listing: process.env.BITLOGIN_SANDBOX_LISTING ?? "" } : null;
+      unlockNamed = live?.named ?? unlock.named;
       const start = (body: (url: URL) => string) =>
         new Promise<{ server: Server; at: string }>((resolve) => {
           const server = createServer((req, res) => {
@@ -863,7 +870,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       );
       const browser = await playwright!.chromium.launch();
       try {
-        const context = await browser.newContext();
+        // The sandbox answers with this machine's own development certificate, which no browser trusts unasked.
+        const context = await browser.newContext({ ignoreHTTPSErrors: !!live });
         const cdp = await context.newCDPSession(await context.newPage());
         await cdp.send("WebAuthn.enable");
         await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -1164,65 +1172,143 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await panel.locator('#ecash-limit-form button[type="submit"]').click();
           await panel.locator("#ecash-limit-note").filter({ hasText: "at most 10,000 sats" }).waitFor({ timeout: 30_000 });
           expect(relays.every((relay) => relay.storedEventKinds().includes(30078))).toBe(true);
+          // More sats, for what is bought next.
+          await panel.locator("#ecash-go-fund").click();
+          await panel.locator("#ecash-fund-amount").fill("3000");
+          await panel.locator('#ecash-fund-form button[type="submit"]').click();
+          await panel.locator("#ecash-qr svg").waitFor({ timeout: 30_000 });
+          mint.payAllFunding();
+          await panel.locator("#ecash-note").filter({ hasText: "Added 3,000 sats." }).waitFor({ timeout: 30_000 });
           // Not a tip at all: not put to anyone.
           expect((await ask({ t: "tip", sats: 0 })).t).toBe("no answer");
           expect((await ask({ t: "tip", sats: 5, to: "nobody" })).t).toBe("no answer");
 
-          // Buying. The world names a listing. Before anything is bought, it holds no receipt.
-          const made = unlock.listing({ d: "season-pass", priceSats: 30, title: "Season pass", delivers: "the key to the back room" });
-          await publish([made.event]);
-          expect((await ask({ t: "have", listing: made.coordinate })).t).toBe("none");
-          await propose({ t: "buy", listing: made.coordinate }, "b1");
-          await asking("b1");
-          await showFor();
-          await panel.locator('[data-shop="confirm"]').waitFor({ state: "visible", timeout: 60_000 });
-          expect(await panel.locator("#shop-site").textContent()).toBe(world);
-          expect(await panel.locator("#shop-title").textContent()).toBe("Season pass");
-          expect(await panel.locator("#shop-seller-key").textContent()).toBe(made.seller.getPublicKey());
-          expect(await panel.locator("#shop-price").textContent()).toBe("30");
-          const lines = (await panel.locator("#shop-lines").textContent()) ?? "";
-          expect(lines).toContain("To the seller29 sats");
-          expect(lines).toContain("its fee1 sat");
-          expect(await panel.locator("#shop-yes").textContent()).toBe("Pay 30 sats");
-          expect(await panel.locator("#shop .exp-note").isVisible()).toBe(true);
-          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/buy.png` });
-          await page.waitForTimeout(1000);
-          await panel.locator("#shop-yes").click();
-          const bought = await waitFor("b1");
-          expect(bought).toMatchObject({ t: "bought", delivery: "the key to the back room" });
-          // The receipt is the service's own signed note, whole: for this listing, and for the account signed in.
-          const signedInAs = (await ask({ t: "state" })).pubkey as string;
-          expect(bought.receipt.pubkey).toBe(unlock.pubkey);
-          expect(JSON.parse(bought.receipt.content)).toMatchObject({ productCoordinate: made.coordinate, buyerPubkey: signedInAs });
-          expect(mint.paid).toHaveLength(4);
-          // The world never signed as the buyer: every note the service took was signed by the account, on BitLogin's page.
-          expect(unlock.auths.length).toBeGreaterThan(3);
-          expect(unlock.auths.every((event) => event.pubkey === signedInAs)).toBe(true);
-          // It was bought through this world, so its signer now says so with no question.
-          expect(await ask({ t: "have", listing: made.coordinate })).toMatchObject({ t: "receipt", receipt: { id: bought.receipt.id } });
-          // A listing that is not this world's is not answered for, whatever the person holds.
-          expect((await ask({ t: "have", listing: `30078:${"ab".repeat(32)}:other` })).t).toBe("none");
-          expect((await ask({ t: "have", listing: "nonsense" })).t).toBe("no answer");
-          // Asked to buy it again: the receipt, and nothing charged.
-          await propose({ t: "buy", listing: made.coordinate }, "b2");
-          await asking("b2");
-          await showFor();
-          expect(await waitFor("b2")).toMatchObject({ t: "bought", receipt: { id: bought.receipt.id } });
-          expect(mint.paid).toHaveLength(4);
+          let made: { coordinate: string } = { coordinate: live?.listing ?? "" };
+          let bought: Record<string, any> = {};
+          if (live) {
+            // BitUnlock's own sandbox: a real service's signatures over pretend sats. The listing is read from the
+            // test relay it is kept on and put on this test's relays, where BitLogin's worker looks.
+            const listed = await new Promise<unknown>((resolve, reject) => {
+              const ws = new WebSocket(live.relay);
+              let found: unknown = null;
+              ws.onerror = () => reject(new Error("the test relay refused a connection"));
+              ws.onopen = () => ws.send(JSON.stringify(["REQ", "q", { kinds: [30078], authors: [live.listing.slice(6, 70)], "#d": [live.listing.slice(71)] }]));
+              ws.onmessage = (m) => {
+                const msg = JSON.parse(String(m.data));
+                if (msg[0] === "EVENT") found = msg[2];
+                if (msg[0] === "EOSE") (ws.close(), resolve(found));
+              };
+            });
+            expect(listed, "the listing is on the test relay").toBeTruthy();
+            await publish([listed]);
+            if (process.env.BITLOGIN_SANDBOX_CLIENT) worldWord.share = process.env.BITLOGIN_SANDBOX_CLIENT;
+            const wanted: { price: string; lines: string[]; yes: string } = process.env.BITLOGIN_SANDBOX_EXPECT ? JSON.parse(process.env.BITLOGIN_SANDBOX_EXPECT) : { price: "500", lines: ["To the seller490 sats", "its fee10 sats"], yes: "Pay 500 sats" };
+            expect((await ask({ t: "have", listing: made.coordinate })).t).toBe("none");
+            await propose({ t: "buy", listing: made.coordinate }, "b1");
+            await asking("b1");
+            await showFor();
+            await panel.locator('[data-shop="confirm"], [data-shop="done"]').first().waitFor({ state: "visible", timeout: 60_000 });
+            const shown = { done: await panel.locator("#shop-done").textContent(), title: await panel.locator("#shop-title").textContent(), price: await panel.locator("#shop-price").textContent(), lines: await panel.locator("#shop-lines").textContent(), lasts: await panel.locator("#shop-lasts").textContent(), yes: await panel.locator("#shop-yes").textContent() };
+            console.log("THE BUY SCREEN, AGAINST THE SANDBOX:", JSON.stringify(shown));
+            expect(await panel.locator('[data-shop="confirm"]').isVisible(), shown.done ?? "").toBe(true);
+            expect(shown.price).toBe(wanted.price);
+            for (const line of wanted.lines) expect(shown.lines).toContain(line);
+            expect(shown.lines).toContain("pretend sats: a test service");
+            expect(shown.yes).toBe(wanted.yes);
+            if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/buy-sandbox.png` });
+            await page.waitForTimeout(1000);
+            await panel.locator("#shop-yes").click();
+            bought = await waitFor("b1");
+            console.log("THE WORLD WAS HANDED:", JSON.stringify({ t: bought.t, receiptBy: bought.receipt?.pubkey, words: bought.receipt ? JSON.parse(bought.receipt.content) : null, delivery: bought.delivery }));
+            expect(bought.t).toBe("bought");
+            expect(bought.receipt.pubkey).toBe(live.named.split("|")[1]);
+            expect(JSON.parse(bought.receipt.content)).toMatchObject({ productCoordinate: made.coordinate, buyerPubkey: (await ask({ t: "state" })).pubkey });
+            expect(await ask({ t: "have", listing: made.coordinate })).toMatchObject({ t: "receipt", receipt: { id: bought.receipt.id } });
+            // Asked again: the receipt held, and no second order.
+            await propose({ t: "buy", listing: made.coordinate }, "b2");
+            await asking("b2");
+            await showFor();
+            expect(await waitFor("b2")).toMatchObject({ t: "bought", receipt: { id: bought.receipt.id } });
+          } else {
+            // Buying. The world names a listing. Before anything is bought, it holds no receipt.
+            // Its price is shared (docs/paying.md PY14): most to the seller, a tenth to a maker (Alice, who has a name
+            // in her profile), and a twentieth to the client that brought the buyer: the page showing the panel, which
+            // names a key for it in its own /.well-known/nswp.json and is registered with the service to be paid.
+            const seller = new NostrSigner(generatePrivateKey());
+            const clientKey = new NostrSigner(generatePrivateKey()).getPublicKey();
+            worldWord.share = clientKey;
+            unlock.payees.add(clientKey);
+            made = unlock.listing({ d: "season-pass", priceSats: 2100, title: "Season pass", delivers: "the key to the back room", seller, tags: [["nswp:share", seller.getPublicKey(), "8500", "world"], ["nswp:share", alice.getPublicKey(), "1000", "maker"], ["nswp:share", "client", "500"]] });
+            await publish([made.event]);
+            expect((await ask({ t: "have", listing: made.coordinate })).t).toBe("none");
+            await propose({ t: "buy", listing: made.coordinate }, "b1");
+            await asking("b1");
+            await showFor();
+            await panel.locator('[data-shop="confirm"]').waitFor({ state: "visible", timeout: 60_000 });
+            expect(await panel.locator("#shop-site").textContent()).toBe(world);
+            expect(await panel.locator("#shop-title").textContent()).toBe("Season pass");
+            expect(await panel.locator("#shop-seller-key").textContent()).toBe(made.seller.getPublicKey());
+            expect(await panel.locator("#shop-price").textContent()).toBe("2,100");
+            // Every share is shown before anything is paid: the seller's word for it, who it is for, and how much.
+            const lines = (await panel.locator("#shop-lines div").allTextContents()).map((line) => line.replace(/\s+/gu, " ").trim());
+            const short = (key: string) => `${key.slice(0, 8)}…${key.slice(-4)}`;
+            expect(lines.slice(0, 4)).toEqual([
+              "To the seller, for the world1,764 sats",
+              `To ${new URL(unlock.url).host}, its fee21 sats`,
+              `To an account with no name (${short(clientKey)}), for the client105 sats`,
+              `To Alice (${short(alice.getPublicKey())}), for the maker210 sats`
+            ]);
+            expect(await panel.locator("#shop-yes").textContent()).toBe("Pay 2,100 sats");
+            expect(await panel.locator("#shop .exp-note").isVisible()).toBe(true);
+            if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/buy.png` });
+            await page.waitForTimeout(1000);
+            await panel.locator("#shop-yes").click();
+            bought = await waitFor("b1");
+            expect(bought).toMatchObject({ t: "bought", delivery: "the key to the back room" });
+            // The receipt is the service's own signed note, whole: for this listing, and for the account signed in.
+            const signedInAs = (await ask({ t: "state" })).pubkey as string;
+            expect(bought.receipt.pubkey).toBe(unlock.pubkey);
+            expect(JSON.parse(bought.receipt.content)).toMatchObject({ productCoordinate: made.coordinate, buyerPubkey: signedInAs });
+            expect(mint.paid).toHaveLength(6);
+            // Paid as the seller wrote, the service's part first and the seller's last.
+            expect(mint.paid.slice(2).map((invoice) => /^lnbc(\d+)n1/u.exec(invoice)![1])).toEqual(["210", "1050", "2100", "17640"]);
+            // The world never signed as the buyer: every note the service took was signed by the account, on BitLogin's page.
+            expect(unlock.auths.length).toBeGreaterThan(3);
+            expect(unlock.auths.every((event) => event.pubkey === signedInAs)).toBe(true);
+            // It was bought through this world, so its signer now says so with no question.
+            expect(await ask({ t: "have", listing: made.coordinate })).toMatchObject({ t: "receipt", receipt: { id: bought.receipt.id } });
+            // A listing that is not this world's is not answered for, whatever the person holds.
+            expect((await ask({ t: "have", listing: `30078:${"ab".repeat(32)}:other` })).t).toBe("none");
+            expect((await ask({ t: "have", listing: "nonsense" })).t).toBe("no answer");
+            // Asked to buy it again: the receipt, and nothing charged.
+            await propose({ t: "buy", listing: made.coordinate }, "b2");
+            await asking("b2");
+            await showFor();
+            expect(await waitFor("b2")).toMatchObject({ t: "bought", receipt: { id: bought.receipt.id } });
+            expect(mint.paid).toHaveLength(6);
+            // Paid as the seller wrote, the service's part first and the seller's last.
+            expect(mint.paid.slice(2).map((invoice) => /^lnbc(\d+)n1/u.exec(invoice)![1])).toEqual(["210", "1050", "2100", "17640"]);
+
+          }
 
           // What was bought is in the panel, under the account.
           await page.evaluate(() => (window as any).showPanel({ mode: "library" }));
           await panel.locator("#library-list li").waitFor({ timeout: 60_000 });
-          expect(await panel.locator("#library-list li").textContent()).toContain("Season pass");
-          expect(await panel.locator("#library-list li").textContent()).toContain("Yours to keep");
+          expect(await panel.locator("#library-list li").textContent()).toMatch(live ? /Until |Yours to keep/u : /Season pass/u);
+          if (!live) expect(await panel.locator("#library-list li").textContent()).toContain("Yours to keep");
           expect(await panel.locator("#library-list li").textContent()).toContain(`Bought at ${new URL(world).host}`);
           if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/library.png` });
           await panel.locator("#library-back").click();
 
           // The world's page is loaded again. Its signer still knows what its visitor holds, with no panel shown: the
           // receipts were kept beside the site's grant (owner, 2026-11-21).
-          await worldFrame.evaluate(() => location.reload());
-          await worldFrame.waitForFunction(() => Array.isArray((window as any).heard) && (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          // Marked first, and loaded again a moment after the call returns: what is then waited for is a page without
+          // the mark, so it is the new one that is asked, and the call can't be left waiting on a page that has gone.
+          await worldFrame.evaluate(() => {
+            (window as any).beforeReload = true;
+            setTimeout(() => location.reload(), 50);
+          });
+          await worldFrame.waitForFunction(() => !(window as any).beforeReload && Array.isArray((window as any).heard) && (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
           await worldFrame.waitForFunction(async () => (await (window as any).ask({ t: "state" })).unlocked === true, null, { timeout: 30_000 });
           expect(await ask({ t: "have", listing: made.coordinate })).toMatchObject({ t: "receipt", receipt: { id: bought.receipt.id } });
           expect((await ask({ t: "have", listing: `30078:${"ab".repeat(32)}:other` })).t).toBe("none");

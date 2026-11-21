@@ -1,7 +1,8 @@
 # Paying for Things: Tips, Purchases and Receipts
 
 **Date:** 2026-11-21
-**Status:** Built on `beta`. Not on `main`, not deployed. Tried against a
+**Status:** On `main` and bitlogin.network since 2026-11-21, with buying
+closed there (PY11). Tried against a
 pretend selling service with real signatures, and a mock mint. **Not tried
 against BitUnlock itself, and not with real money.** Experimental, and
 marked so in the interface.
@@ -220,9 +221,7 @@ it, which a `buy` or opening Purchases does.
 - **Not tried against BitUnlock.** Its sandbox pays with a control call
   and not with Lightning, so a wallet can't pay it. See PY10.
 - **No real money**, and no real lightning address.
-- **Shares** between several parties, and the client's share: they wait on
-  the owner's lawyer. A plan part that is neither the seller's nor the
-  service's is shown as "To another party".
+- **Shares** are built and switched off (PY14).
 - **A token locked to a recipient's key**, paying from a wallet
   connection, a visitor's own issuers, refunds in the interface.
 - **The floor's screen** is not in a browser test: the rule is tested, the
@@ -337,5 +336,89 @@ once the sandbox has an address; it is not built for beta yet):
   order taken up again by its id, the seller's part alone then paid, the
   unlock, a receipt that passes with the sandbox's key and is refused
   without it, a renewal that runs on, and the service's list of both
-  receipts. All passed. **The screen itself has not been tried against
-  it**: that needs someone signed in on a local copy.
+  receipts. All passed. **The buy screen was then tried against it too**, in a
+  real browser, in BitLogin's own test with a throwaway passkey account
+  and mock relays: a world asked `buy`, the panel showed 500 sats as 490
+  to the seller and 10 to the service, "pretend sats: a test service", a
+  press settled both, and the world was handed `bought` with the sandbox's
+  receipt, then `have`. That run is opt-in (`BITLOGIN_SANDBOX`,
+  `BITLOGIN_SANDBOX_RELAY`, `BITLOGIN_SANDBOX_LISTING` in the panel test),
+  since it needs the sandbox running. Not tried: a world built on the
+  NSWP kit doing the asking.
+
+## PY13. Not waiting on the slowest relay
+
+BitLogin's account flows wait for every relay, or the whole timeout,
+because for them the newest record matters more than a second. Tried in a
+real world on 2026-11-21, that made the buy screen take most of a minute
+to appear: one relay that never answers cost the whole timeout on every
+question, and the worker answers one question at a time.
+
+The paying screens ask relays another way (`worker/quickRelays.ts`): a
+question is finished when every relay has answered, or a moment (0.7 s)
+after two have. Sending is the same. Fewer than two answering still waits
+the whole time, so nothing is ever called "none" out of impatience. What a
+slow relay held and was not waited for is found next time, and what it did
+not take is sent again then, as the receipts and settings stores already
+do. This covers a tip's profile lookup, a listing, the receipts and the
+settings. Nothing about signing in, or the account's own records, changes.
+
+## PY14. A price shared between several people (built, and switched off)
+
+Asked for by the owner on 2026-11-21: "build and test adjustable splits
+and leave it disabled for now." The rule is NSWP's (`protocol/10-identity.md`,
+"Shares"); `pay/shares.ts` is written from it and run against NSWP's own
+vectors (`pay/vectors/shares.json`, copied unchanged at NSWP f3ffc86), the
+same file the kit and BitUnlock are run against.
+
+**Where it is open:** on a local copy only (`SHARES_OPEN_AT`, empty). On
+beta and at bitlogin.network a listing carrying any `nswp:share` tag is
+not shown for sale at all.
+
+**The rule.** A listing carries one `["nswp:share", <key or the word
+client>, <parts in 10000>, <a word>]` for each person its price is divided
+between: four at most, nobody twice, the seller among them, adding up to
+exactly 10000. Each person but the seller gets their parts, rounded down.
+The seller gets what is left, and the service's fee comes out of the
+seller's part only. No part under 10 sats.
+
+**The client** is the page showing BitLogin's panel, and nothing else: the
+key in that page's own `/.well-known/nswp.json` `share`. In BitLogin's own
+window there is none, and a world is never asked. With no client, or where
+the client is the seller, that share is the seller's. It is decided before
+the first quote, named to the service as `clientPubkey`, and kept with the
+order.
+
+**What the screen shows:** every share before anything is paid: the
+seller's word for it, the name in that person's own profile with their key
+shortened beside it, and its amount. One total, one press.
+
+**What is checked.** BitLogin divides the price itself and holds the
+service's plan to it. Exactly two plans are right: the division with the
+client paid, and the one with no client (the service pays only a key
+registered with it to be paid, which BitLogin can't know of the client).
+Any other is refused before a word of it is shown: an amount the seller
+didn't write, a share left out or added, or one labelled for a key the
+seller didn't name. The service's fee is the one part taken from the plan,
+and it is held to the service's signed policy.
+
+**What that does not prove:** that an invoice really pays the key it is
+labelled for. An invoice doesn't say whose it is. That rests on the
+service being one BitLogin pins, as the seller's own part always has.
+
+**Paid** the service's part first, then the shares smallest first (two of
+a size by key), the seller's last. Each part costs its own routing reserve
+at the mint, so a ten-sat share costs about a fifth of itself to send.
+
+**Tried:** the rule against all of NSWP's vectors; the plan check against
+a pretend service that answers honestly, and dishonestly four ways; and a
+shared purchase in a real browser in BitLogin's own test, with a named
+maker and a client. **Tried against BitUnlock's own sandbox on
+2026-11-21**, once it sold shared listings: a 2,100-sat listing shared
+8500 / 1000 / 500 with a client. With the registered client named the plan
+was seller 1,764, the service 21, client 105, maker 210, paid in the order
+21, 105, 210, 1,764; with no client, or one never registered there, seller
+1,869, the service 21, maker 210. Both were held to the listing and to the
+service's signed fee, and the first, held to a division that names no
+client, was refused. Then the same purchase on the buy screen in a real
+browser, the client named by the page showing the panel. All passed.

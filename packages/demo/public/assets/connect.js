@@ -361,6 +361,8 @@ const askBuy = async () => {
     pubkey: who.pubkey,
     resize: (size) => toClient({ t: "size", size }),
     request: { site: found.site, listing: found.ask.listing },
+    // The page showing this panel is the client that brought the buyer. In a window of BitLogin's own there is none.
+    client: inPanel && client ? client : "",
     openWallet: () => (wantsWallet = true),
     done: async (bought) => {
       if (!wantsWallet) return void answered(bought ? { bought } : null, "Done. The site has your receipt.");
@@ -446,7 +448,8 @@ const handOverReceipts = () => {
 const ask = () => {
   if (!found || !who || finished) return;
   $("signin").hidden = true;
-  if (found.ask) handOverReceipts();
+  // Not for a purchase: the buy screen reads the receipts itself, and hands the site the one it asked about.
+  if (found.ask && found.ask.what !== "buy") handOverReceipts();
   if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" || found.ask.what === "tip" ? void askPay() : found.ask.what === "buy" ? void askBuy() : found.ask.what === "save" || found.ask.what === "pick" ? void askFile() : void askSign();
   toClient({ t: "size", size: "menu" });
   void prepare().catch(() => {});
