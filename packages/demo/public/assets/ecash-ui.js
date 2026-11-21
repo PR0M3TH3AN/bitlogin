@@ -30,7 +30,7 @@ let wallet = null;
 export async function openEcash({ worker, name = "", resize, request, done }) {
   if (request) request = { ...request };
   /** A local copy of BitLogin may ask a lightning address on this machine. The real address never does. */
-  const local = /^(localhost|127\.0\.0\.1)$/u.test(location.hostname);
+  const local = /^(?:localhost|127(?:\.[0-9]{1,3}){3}|10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})$/u.test(location.hostname);
   /** The most a site may ask for at once with no receipt, kept with the account. 0: no limit. Read when the wallet opens. */
   let limitSats = 1000;
   const limit = () => limitSats;

@@ -14,8 +14,11 @@ const host = (url) => {
   }
 };
 const TOO_SOON_MS = 900;
-/** A local copy of BitLogin may be tried against a selling service on this machine. The real address never is. */
-const local = /^(localhost|127\.0\.0\.1)$/u.test(location.hostname);
+/**
+ * A local copy of BitLogin (on this machine, or a private network) may be tried against a selling service there.
+ * The real address never is.
+ */
+const local = /^(?:localhost|127(?:\.[0-9]{1,3}){3}|10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})$/u.test(location.hostname);
 const storage = () => {
   try {
     return window.localStorage;
@@ -189,7 +192,9 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     const keys = { pubkey, auth: (req) => worker.pay.auth(req), open: (from, sealed) => worker.nip44Decrypt(from, sealed) };
     const clients = services.map((service) => ({ service, client: lib.createUnlockClient(service, keys) }));
     const policies = await Promise.all(clients.map(({ client: c }) => c.policy().catch(() => null)));
-    const found = await worker.pay.listing(request.listing, policies.flatMap((policy) => policy?.relays ?? []));
+    // A local copy may also be told of a test relay where test listings are kept, so none need be put on a public one.
+    const testRelays = local ? (document.documentElement.dataset.listingRelays ?? "").split(",").map((url) => url.trim()).filter(Boolean).slice(0, 3) : [];
+    const found = await worker.pay.listing(request.listing, [...testRelays, ...policies.flatMap((policy) => policy?.relays ?? [])]);
     listing = lib.readListing(found.event, request.listing, services);
     if (!listing) return stop(found.event ? "This site asked to sell something BitLogin can't check: its listing isn't signed by its seller, or names a service BitLogin doesn't buy from. Nothing was spent." : found.answered ? "This site asked to sell something no relay knows of. Nothing was spent." : "No relay answered just now, so what is for sale couldn't be looked up. Nothing was spent.");
     // Nothing in a world is sold under the floor (owner, 2026-11-21): the service's fee would be too large a part of it.

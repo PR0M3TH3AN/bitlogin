@@ -311,8 +311,20 @@ once the sandbox has an address; it is not built for beta yet):
   `X-BitUnlock-Sandbox-Session` with every buyer call, shows "pretend
   sats: a test service", and settles each part with
   `POST /sandbox/v1/payments/<hash>/settle` in place of a wallet.
+- A local copy is one served from this machine or a private network
+  address, over http or https. Its pages may also name a test relay where
+  test listings are kept, `<html data-listing-relays="wss://…">` on
+  `/connect/` and `/connect/panel/`, so that none is put on a public relay.
+  The real address reads neither attribute.
 - Anywhere a test service is not being tried, a `bitunlock-mock:` request
   fails the plan check and never reaches a wallet. A test service's plan
   with a Lightning part in it is refused too.
-- Not in a browser test: the code that reads and pays is tested against a
-  pretend sandbox, and the screen is to be tried against BitUnlock's own.
+- **Tried against BitUnlock's own sandbox on 2026-11-21**, on the owner's
+  machine, with the code that ships and a throwaway key: the signed
+  policy, a listing with a space in its name read from a test relay, a
+  quote, the same order for the same key, the fee part settled and the
+  order taken up again by its id, the seller's part alone then paid, the
+  unlock, a receipt that passes with the sandbox's key and is refused
+  without it, a renewal that runs on, and the service's list of both
+  receipts. All passed. **The screen itself has not been tried against
+  it**: that needs someone signed in on a local copy.
