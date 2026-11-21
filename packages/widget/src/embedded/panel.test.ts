@@ -54,6 +54,11 @@ describe("the sign-in panel (sign-in-window.md §SW19)", () => {
       expect(readPanelReply(panelMessage(message))).toEqual(message);
     }
     expect(readPanelReply(panelMessage({ t: "size", size: "huge" } as never))).toBeNull();
+    // A wished height, in CSS pixels, kept within sense. The client clamps it again to what its screen allows.
+    expect(readPanelReply(panelMessage({ t: "size", size: "tall", height: 541.6 }))).toEqual({ t: "size", size: "tall", height: 542 });
+    expect(readPanelReply(panelMessage({ t: "size", size: "tall", height: 999999 }))).toEqual({ t: "size", size: "tall", height: 4000 });
+    expect(readPanelReply(panelMessage({ t: "size", size: "menu", height: 3 }))).toEqual({ t: "size", size: "menu", height: 120 });
+    expect(readPanelReply({ bitlogin: "bitlogin-panel", v: 1, t: "size", size: "menu", height: "tall" })).toEqual({ t: "size", size: "menu" });
     expect(readPanelReply({ bitlogin: "bitlogin-panel", v: 1, t: "close", allowed: "yes" })).toEqual({ t: "close", allowed: false });
     expect(readPanelReply({ bitlogin: "bitlogin-panel", v: 1, t: "key", key: "x" })).toBeNull();
   });

@@ -874,6 +874,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(await panel.locator("#signin").textContent()).toContain("A world can draw a copy of this panel");
         for (const hidden of await panel.locator("#signin [data-window-only]").all()) expect(await hidden.isVisible()).toBe(false);
         expect(await page.evaluate(() => (window as any).said.some((m: any) => m.t === "size" && m.size === "tall"))).toBe(true);
+        // It says how tall its content is, so the client need not leave empty space under a short page.
+        await page.waitForFunction(() => (window as any).said.some((m: any) => m.t === "size" && m.height > 300 && m.height < 640), null, { timeout: 30_000 });
         // The panel is dark whatever the browser's theme (this browser's is light): it is drawn over a game.
         const lightness = await panel.locator("body").evaluate((el) => (getComputedStyle(el).backgroundColor.match(/[\d.]+/gu) ?? []).slice(0, 3).reduce((sum, v) => sum + Number(v), 0));
         expect(lightness).toBeLessThan(120);

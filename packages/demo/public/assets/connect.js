@@ -35,9 +35,32 @@ const $ = (id) => document.getElementById(id);
 const inPanel = location.pathname.includes("/connect/panel/");
 /** The client showing the panel: the browser's word for its origin, checked against BitLogin's list. */
 let client = null;
+/** How tall this page's content is: the bar, and what is under it. Not the frame's own height, which is the client's. */
+const contentHeight = () => Math.ceil((document.querySelector(".nav")?.getBoundingClientRect().height ?? 0) + (document.querySelector("main")?.getBoundingClientRect().height ?? 0)) + 2;
+let lastSize = "menu";
+let lastHeight = 0;
 const toClient = (message) => {
-  if (client) window.parent.postMessage(panelMessage(message), client);
+  if (!client) return;
+  // A size goes with how tall the content is, so a short page is not shown with empty space under it.
+  if (message.t === "size") {
+    lastSize = message.size;
+    lastHeight = contentHeight();
+    message = { ...message, height: lastHeight };
+  }
+  window.parent.postMessage(panelMessage(message), client);
 };
+/** The content grew or shrank (a list arrived, a step changed): the client is told the new height. */
+if (inPanel && typeof ResizeObserver === "function") {
+  let waiting = false;
+  new ResizeObserver(() => {
+    if (waiting || !client) return;
+    waiting = true;
+    requestAnimationFrame(() => {
+      waiting = false;
+      if (Math.abs(contentHeight() - lastHeight) > 4) toClient({ t: "size", size: lastSize });
+    });
+  }).observe(document.querySelector("main"));
+}
 /** What a press that ends the question says to the person: a window they close, or a panel. */
 const here = inPanel ? "panel" : "window";
 const status = (text) => {

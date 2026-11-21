@@ -56,8 +56,12 @@ export interface PanelHello {
 export type PanelToClient =
   /** It has loaded and heard the client. */
   | { t: "ready" }
-  /** The size it would like: the menu's own, or taller for the account pages. The client decides, and clamps it. */
-  | { t: "size"; size: "menu" | "tall" }
+  /**
+   * The size it would like: the menu's own, or taller for the account pages; and, where it knows, how tall its
+   * content is, in CSS pixels, so a short page is not shown with empty space under it. The client decides, and
+   * clamps both. Sent again when the content's height changes.
+   */
+  | { t: "size"; size: "menu" | "tall"; height?: number }
   /** Done: close it. `allowed` says whether the world was allowed. The world learns more from its own signer. */
   | { t: "close"; allowed: boolean };
 
@@ -87,7 +91,10 @@ export function readPanelReply(data: unknown): PanelToClient | null {
   const d = data as Record<string, unknown>;
   if (d.bitlogin !== PANEL_PROTOCOL || d.v !== PANEL_VERSION) return null;
   if (d.t === "ready") return { t: "ready" };
-  if (d.t === "size" && (d.size === "menu" || d.size === "tall")) return { t: "size", size: d.size };
+  if (d.t === "size" && (d.size === "menu" || d.size === "tall")) {
+    const height = typeof d.height === "number" && Number.isFinite(d.height) ? Math.min(4000, Math.max(120, Math.round(d.height))) : null;
+    return { t: "size", size: d.size, ...(height ? { height } : {}) };
+  }
   if (d.t === "close") return { t: "close", allowed: d.allowed === true };
   return null;
 }
