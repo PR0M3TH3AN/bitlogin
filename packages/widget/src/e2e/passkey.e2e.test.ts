@@ -805,6 +805,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       // Opt-in: the buy screen against BitUnlock's own sandbox, where one is running on this machine. Then that is
       // the service BitLogin's pages are told of, and the listing named is one registered there.
       //   BITLOGIN_SANDBOX="https://<address>|<key>" BITLOGIN_SANDBOX_RELAY=wss://… BITLOGIN_SANDBOX_LISTING=30078:…
+      // For a listing whose price is shared: BITLOGIN_SANDBOX_CLIENT=<the key of a client registered there to be
+      // paid>, which the page showing the panel then names as its own, and BITLOGIN_SANDBOX_EXPECT=<JSON:
+      // { "price": "2,100", "lines": ["…"], "yes": "Pay 2,100 sats" }> for what the screen should say.
       const live = process.env.BITLOGIN_SANDBOX ? { named: process.env.BITLOGIN_SANDBOX, relay: process.env.BITLOGIN_SANDBOX_RELAY ?? "", listing: process.env.BITLOGIN_SANDBOX_LISTING ?? "" } : null;
       unlockNamed = live?.named ?? unlock.named;
       const start = (body: (url: URL) => string) =>
@@ -1198,6 +1201,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
             });
             expect(listed, "the listing is on the test relay").toBeTruthy();
             await publish([listed]);
+            if (process.env.BITLOGIN_SANDBOX_CLIENT) worldWord.share = process.env.BITLOGIN_SANDBOX_CLIENT;
+            const wanted: { price: string; lines: string[]; yes: string } = process.env.BITLOGIN_SANDBOX_EXPECT ? JSON.parse(process.env.BITLOGIN_SANDBOX_EXPECT) : { price: "500", lines: ["To the seller490 sats", "its fee10 sats"], yes: "Pay 500 sats" };
             expect((await ask({ t: "have", listing: made.coordinate })).t).toBe("none");
             await propose({ t: "buy", listing: made.coordinate }, "b1");
             await asking("b1");
@@ -1206,11 +1211,10 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
             const shown = { done: await panel.locator("#shop-done").textContent(), title: await panel.locator("#shop-title").textContent(), price: await panel.locator("#shop-price").textContent(), lines: await panel.locator("#shop-lines").textContent(), lasts: await panel.locator("#shop-lasts").textContent(), yes: await panel.locator("#shop-yes").textContent() };
             console.log("THE BUY SCREEN, AGAINST THE SANDBOX:", JSON.stringify(shown));
             expect(await panel.locator('[data-shop="confirm"]').isVisible(), shown.done ?? "").toBe(true);
-            expect(shown.price).toBe("500");
-            expect(shown.lines).toContain("To the seller490 sats");
-            expect(shown.lines).toContain("its fee10 sats");
+            expect(shown.price).toBe(wanted.price);
+            for (const line of wanted.lines) expect(shown.lines).toContain(line);
             expect(shown.lines).toContain("pretend sats: a test service");
-            expect(shown.yes).toBe("Pay 500 sats");
+            expect(shown.yes).toBe(wanted.yes);
             if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/buy-sandbox.png` });
             await page.waitForTimeout(1000);
             await panel.locator("#shop-yes").click();
@@ -1290,7 +1294,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           // What was bought is in the panel, under the account.
           await page.evaluate(() => (window as any).showPanel({ mode: "library" }));
           await panel.locator("#library-list li").waitFor({ timeout: 60_000 });
-          expect(await panel.locator("#library-list li").textContent()).toContain(live ? "Until " : "Season pass");
+          expect(await panel.locator("#library-list li").textContent()).toMatch(live ? /Until |Yours to keep/u : /Season pass/u);
           if (!live) expect(await panel.locator("#library-list li").textContent()).toContain("Yours to keep");
           expect(await panel.locator("#library-list li").textContent()).toContain(`Bought at ${new URL(world).host}`);
           if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/library.png` });

@@ -413,5 +413,12 @@ at the mint, so a ten-sat share costs about a fifth of itself to send.
 **Tried:** the rule against all of NSWP's vectors; the plan check against
 a pretend service that answers honestly, and dishonestly four ways; and a
 shared purchase in a real browser in BitLogin's own test, with a named
-maker and a client. **Not tried against BitUnlock**, whose sandbox doesn't
-sell shared listings yet.
+maker and a client. **Tried against BitUnlock's own sandbox on
+2026-11-21**, once it sold shared listings: a 2,100-sat listing shared
+8500 / 1000 / 500 with a client. With the registered client named the plan
+was seller 1,764, the service 21, client 105, maker 210, paid in the order
+21, 105, 210, 1,764; with no client, or one never registered there, seller
+1,869, the service 21, maker 210. Both were held to the listing and to the
+service's signed fee, and the first, held to a division that names no
+client, was refused. Then the same purchase on the buy screen in a real
+browser, the client named by the page showing the panel. All passed.
