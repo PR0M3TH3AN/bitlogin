@@ -532,6 +532,10 @@ import type { RankedMint } from "../ecash/mints.js";
 export type { RankedMint };
 
 // ---- A person's files (docs/files.md; worker/driveStore.ts) ----
+import type { OpenOrder, PaySettings } from "./paySettings.js";
+export type { OpenOrder, PaySettings };
+import type { KeptReceipt, ReceiptsState } from "./receiptStore.js";
+export type { KeptReceipt, ReceiptsState };
 import type { DriveSave, DriveState, RankedServer } from "./driveStore.js";
 export type { DriveSave, DriveState, RankedServer };
 
@@ -565,6 +569,9 @@ export type WorkerActionMap = {
   signerRestore: [SignerSitePayload, SignerRestoreResult];
   signerTouch: [SignerTouchPayload, Record<string, never>];
   signerForget: [SignerSitePayload, Record<string, never>];
+  /** Keep, and read back, the receipts BitLogin's page handed a site's signer. A signer-only session only. */
+  signerHold: [{ site: string; receipts: NostrEvent[] }, Record<string, never>];
+  signerHeld: [{ site: string }, { receipts: NostrEvent[] }];
   appEncrypt: [AppCryptPayload, { text: string }];
   appDecrypt: [AppCryptPayload, { text: string }];
   appDecryptEvent: [AppDecryptEventPayload, { text: string }];
@@ -601,6 +608,17 @@ export type WorkerActionMap = {
   /** The account's own server list (BUD-03), and the servers people use, the user's follows first. */
   blossomServers: [Record<string, never>, { mine: string[]; ranked: RankedServer[] }];
   blossomSetServers: [{ servers: string[] }, { mine: string[] }];
+  /** Whom a tip is for: the name and lightning address in that account's own signed profile. */
+  payProfile: [{ pubkey: string }, { name: string; address: string; answered: boolean }];
+  /** A listing, by coordinate, as relays hold it. Checked by the page that asked (pay/listing.ts). */
+  payListing: [{ coordinate: string; relays: string[] }, { event: NostrEvent | null; answered: boolean }];
+  /** A buyer's permission note (NIP-98) for one request to a selling service BitLogin knows. */
+  unlockAuth: [{ url: string; method: "GET" | "POST"; payload?: string }, { token: string }];
+  /** The person's own limit on a payment with no receipt, kept with the account. */
+  paySettingsLoad: [Record<string, never>, PaySettings];
+  paySettingsSave: [{ limitSats: number } | { addOrder: Omit<OpenOrder, "at"> } | { removeOrder: string }, PaySettings];
+  receiptsLoad: [Record<string, never>, ReceiptsState];
+  receiptsKeep: [{ receipts: KeptReceipt[] }, ReceiptsState];
   ecashLoad: [Record<string, never>, EcashState];
   ecashSetMints: [{ mints: string[] }, EcashState];
   ecashRoll: [EcashRoll, EcashState];

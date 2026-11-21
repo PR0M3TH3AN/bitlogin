@@ -26,6 +26,9 @@ import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
 import { readPermissions, type AppPermissions } from "./permissions.js";
 import { ASK_WAIT_MS, ASKED_KINDS, cleanOrigin, PROTOCOL_VERSION, SIGNER_PROTOCOL, SITE_TAG } from "./policy.js";
 import { cleanInvoice } from "../ecash/nip60.js";
+import { cleanSats } from "../pay/lightning.js";
+import { cleanCoordinate, localService, readReceipt as readReceiptOf, receiptGood, UNLOCK_SERVICES } from "../pay/listing.js";
+import { buyingOpenAt, isLocalAddress } from "./permissions.js";
 
 export interface BitLoginClientOptions {
   /** The sign-in address: an origin, such as "https://bitlogin.network". */
@@ -36,6 +39,11 @@ export interface BitLoginClientOptions {
   mount?: HTMLElement;
   /** How long one request may take, in milliseconds. */
   timeoutMs?: number;
+  /**
+   * For trying a local copy of BitLogin against a local selling service only: `http://127.0.0.1:<port>|<its key>`.
+   * Ignored unless `at` is an address on this machine or a private network.
+   */
+  localUnlockService?: string;
 }
 
 export interface BitLoginClientState {
@@ -112,6 +120,30 @@ export interface BitLoginClient {
    * invoice), or null if it was not paid.
    */
   pay(invoice: string, options?: AskOptions): Promise<{ preimage?: string } | null>;
+  /**
+   * Ask for a tip to be sent (docs/paying.md): this many sats to a person,
+   * by their key, or with no `to`, to this application's own address (the
+   * `tip` in its `/.well-known/nswp.json`). The application names no
+   * invoice: BitLogin's page finds the lightning address, shows who it is
+   * for, and pays at a press. Resolves as `pay` does, or null.
+   */
+  tip(tip: { to?: string; sats: number }, options?: AskOptions): Promise<{ preimage?: string } | null>;
+  /**
+   * Ask to buy what a listing sells, by its coordinate. BitLogin's page
+   * runs the purchase and keeps the receipt with the account. Resolves with
+   * the receipt, checked here to be a known service's, for this listing and
+   * this account, and with what the purchase delivers where it delivers
+   * something; or null. Something already held is answered with its
+   * receipt, and nothing is charged.
+   */
+  buy(listing: string, options?: AskOptions): Promise<{ receipt: NostrEvent; delivery?: string } | null>;
+  /**
+   * Whether the user holds a receipt for a listing of this application's
+   * own. No question is put. Null where they hold none, or none this
+   * application may be told of. Whether it was taken back since is the
+   * selling service's to say: ask it.
+   */
+  have(listing: string): Promise<NostrEvent | null>;
   /** Remove the frame and stop listening. */
   destroy(): void;
 }
@@ -148,6 +180,9 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
   const wanted = readPermissions(options.permissions);
   if (!wanted) throw new Error("`permissions` is not a permission set BitLogin will show a user. See docs/sign-in-window.md §SW9.2.");
   const timeoutMs = options.timeoutMs ?? 20_000;
+  // A local copy of BitLogin, tried against a local selling service, may be told which. The real address never is.
+  const tried = isLocalAddress(at) ? localService(options.localUnlockService) : null;
+  const readReceipt = (event: unknown) => readReceiptOf(event, tried ? [...UNLOCK_SERVICES, tried] : UNLOCK_SERVICES);
 
   const frame = document.createElement("iframe");
   frame.src = `${at}/signer/`;
@@ -320,6 +355,30 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
       const reply = await askThePerson({ t: "pay", invoice: clean }, options);
       if (reply?.t !== "paid") return null;
       return typeof reply.preimage === "string" && /^[0-9a-f]{64}$/u.test(reply.preimage) ? { preimage: reply.preimage } : {};
+    },
+    async tip(tip, options) {
+      const sats = cleanSats(tip.sats);
+      if (!sats || (tip.to !== undefined && !/^[0-9a-f]{64}$/u.test(tip.to))) return null;
+      const reply = await askThePerson({ t: "tip", sats, ...(tip.to ? { to: tip.to } : {}) }, options);
+      if (reply?.t !== "paid") return null;
+      return typeof reply.preimage === "string" && /^[0-9a-f]{64}$/u.test(reply.preimage) ? { preimage: reply.preimage } : {};
+    },
+    async buy(listing, options) {
+      const coordinate = cleanCoordinate(listing);
+      // Not yet open at every sign-in address (permissions.ts): there, nothing is asked and nothing is bought.
+      if (!coordinate || !buyingOpenAt(at)) return null;
+      const reply = await askThePerson({ t: "buy", listing: coordinate }, options);
+      // Believed only as far as the receipt goes: a known service signed it, for this listing and this account.
+      const receipt = reply?.t === "bought" ? readReceipt(reply.receipt) : null;
+      if (!receiptGood(receipt, { buyer: raw.pubkey ?? "", listing: coordinate, now: Date.now() / 1000 })) return null;
+      return { receipt: receipt!.event, ...(typeof reply!.delivery === "string" ? { delivery: reply!.delivery as string } : {}) };
+    },
+    async have(listing) {
+      const coordinate = cleanCoordinate(listing);
+      if (!coordinate) return null;
+      const reply = await request({ t: "have", listing: coordinate }).catch(() => null);
+      const receipt = reply?.t === "receipt" ? readReceipt(reply.receipt) : null;
+      return receiptGood(receipt, { buyer: raw.pubkey ?? "", listing: coordinate, now: Date.now() / 1000 }) ? receipt!.event : null;
     },
     async getPublicKey() {
       if (!current.signedIn || !current.pubkey) throw new BitLoginRefused("say who is signed in");

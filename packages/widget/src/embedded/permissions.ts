@@ -115,6 +115,15 @@ export const SIGN_IN_ADDRESSES: readonly string[] = ["https://bitlogin.network",
 export const isSignInAddress = (origin: unknown): boolean => typeof origin === "string" && (SIGN_IN_ADDRESSES.includes(origin) || isLocalAddress(origin));
 
 /**
+ * Where `buy` is taken (docs/paying.md PY11): the test address and a local copy, and not yet BitLogin's real
+ * address. A purchase has not been tried end to end against the selling service, so at the real address a site
+ * that asks to buy is answered as for a request the signer doesn't know: nobody can pay real sats down a path no one
+ * has tried. Opening it there is the owner's decision, made by adding the address here.
+ */
+export const BUYING_OPEN_AT: readonly string[] = ["https://bitlogin-beta.vercel.app"];
+export const buyingOpenAt = (origin: unknown): boolean => typeof origin === "string" && (BUYING_OPEN_AT.includes(origin) || isLocalAddress(origin));
+
+/**
  * The reserved kinds a site may hold, given the address BitLogin itself is running at.
  *
  * At BitLogin's real address they are a named address's and nobody else's. Where BitLogin is itself a local

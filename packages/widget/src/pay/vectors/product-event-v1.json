@@ -1,0 +1,51 @@
+{
+  "kind": 30078,
+  "created_at": 1800000000,
+  "content": "{\"title\":\"Relay Runner\",\"summary\":\"A downloadable browser game\",\"storefront\":{\"theme\":\"arcade\"}}",
+  "tags": [
+    [
+      "d",
+      "example:relay-runner"
+    ],
+    [
+      "price",
+      "21000",
+      "SAT"
+    ],
+    [
+      "status",
+      "active"
+    ],
+    [
+      "br:delivery",
+      "seller-unlock-service-v1"
+    ],
+    [
+      "br:delivery-mode",
+      "static"
+    ],
+    [
+      "br:unlock-service",
+      "https://api.bitunlock.network"
+    ],
+    [
+      "br:unlock-service-pubkey",
+      "66be61cf5b8d286391f7b1a72ffa7c799ec2dc49eff0830c40df1cc964e6787d"
+    ],
+    [
+      "br:unlock-policy",
+      "30078:66be61cf5b8d286391f7b1a72ffa7c799ec2dc49eff0830c40df1cc964e6787d:bitunlock:service-policy:v1"
+    ],
+    [
+      "br:claim-epoch",
+      "1"
+    ],
+    [
+      "t",
+      "game"
+    ]
+  ],
+  "pubkey": "84bf7562262bbd6940085748f3be6afa52ae317155181ece31b66351ccffa4b0",
+  "id": "a9f57ff4ded92946dd6434ec4c341e607b3cb9b6d1913140a55b250346a09024",
+  "sig": "81c780306d258d0b1555c5759f75a8cf8d75a476427f35951267a42c8529a8e6efe514a131e465fed500abb82c65921a20ac2c5b83b25a7275fc5fc6f56f2ece"
+}

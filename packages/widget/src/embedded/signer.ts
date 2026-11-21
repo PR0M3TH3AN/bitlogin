@@ -27,17 +27,19 @@
  * in is worked out here, from the address the browser gave, by the Public
  * Suffix List: never by the site, and never by the window.
  */
-import { verifyNostrEvent } from "@bitlogin/core/nostr";
+import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
+import { bestReceipt, localService, readReceipt, receiptGood, UNLOCK_SERVICES, type Receipt, type UnlockService } from "../pay/listing.js";
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
 import { knownFamily } from "./family.js";
 import { familyOf } from "./publicSuffix.js";
-import { APP_LIMITS, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
+import { APP_LIMITS, buyingOpenAt, isLocalAddress, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import type { Profile } from "./profile.js";
 import {
   ASK_LIMITS,
   ASK_WAIT_MS,
   cleanOrigin,
   cleanWalletUri,
+  heldReceipts,
   prepareAsked,
   type Asked,
   createSignGate,
@@ -109,7 +111,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
    */
   let pending: { id: string; ask: Asked; timer: ReturnType<typeof setTimeout> } | null = null;
   /** Counted apart: asking for a wallet does not use up a question about a profile, nor the other way round. */
-  const askGates: Record<Asked["what"], SignGate> = { sign: createSignGate(ASK_LIMITS), wallet: createSignGate(ASK_LIMITS), pay: createSignGate(ASK_LIMITS), save: createSignGate(ASK_LIMITS), pick: createSignGate(ASK_LIMITS) };
+  const askGates: Record<Asked["what"], SignGate> = { sign: createSignGate(ASK_LIMITS), wallet: createSignGate(ASK_LIMITS), pay: createSignGate(ASK_LIMITS), tip: createSignGate(ASK_LIMITS), buy: createSignGate(ASK_LIMITS), save: createSignGate(ASK_LIMITS), pick: createSignGate(ASK_LIMITS) };
   /** The question is over, unanswered: the site is told "refused", like every other no. */
   const dropPending = () => {
     if (!pending) return;
@@ -120,6 +122,33 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
   };
   /** The hand-off in flight: the window that asked, and the word it gave. */
   let asking: { nonce: string; from: MessageEventSource } | null = null;
+  /** The last window or panel of BitLogin's that said hello: the one that may hand over the person's receipts. */
+  let lastWindow: { nonce: string; from: MessageEventSource } | null = null;
+
+  /**
+   * The person's receipts for this site's own listings (docs/paying.md), as BitLogin's page handed them over: what
+   * `have` is answered from. This page can reach no selling service, so it holds only what it was given, and
+   * believes each only as far as its signature goes. Kept across page loads where the site is,
+   * through the worker, beside its grant.
+   */
+  const local = isLocalAddress(me) ? localService(document.documentElement.dataset.unlockService) : null;
+  const services: readonly UnlockService[] = local ? [...UNLOCK_SERVICES, local] : UNLOCK_SERVICES;
+  let held: NostrEvent[] = [];
+  /** Kept by the worker, beside the site's grant, and only where the site itself is kept: never for one visit. */
+  const keepHeld = () => {
+    if (remembered && pubkey && site) void headless?.holdReceipts(site, held).catch(() => {});
+  };
+  const takeUpHeld = async () => {
+    held = [];
+    if (!pubkey || !site || !headless) return;
+    held = heldReceipts(await headless.heldReceipts(site).catch(() => []), pubkey, services);
+  };
+  /** Let go here. What the worker kept goes when the site is forgotten, with its grant. */
+  const forgetHeld = () => {
+    held = [];
+  };
+  const heldFor = (listing: string): Receipt | null =>
+    pubkey ? bestReceipt(held.map((event) => readReceipt(event, services)).filter((r): r is Receipt => !!r), { buyer: pubkey, listing, now: Date.now() / 1000 }) : null;
 
   // Never restore(): this origin's own session is not the asking site's to use.
   const load = async (): Promise<HeadlessSigner> => (headless ??= await createHeadlessSigner(options));
@@ -127,7 +156,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
    *  long unchecked, and no relay answered). */
   const drop = () => {
     dropPending();
-    const held = headless;
+    const was = headless;
     headless = null;
     pubkey = null;
     name = null;
@@ -135,7 +164,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     until = 0;
     remembered = false;
     app = null;
-    held?.destroy();
+    held = [];
+    was?.destroy();
   };
   /**
    * Ask the user's relays whether this site was taken back (docs/take-back.md). The worker asks at most once a
@@ -143,17 +173,17 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
    * and the site is told only that it is locked.
    */
   const checkTakenBack = async (): Promise<void> => {
-    const held = headless;
-    if (!held || !pubkey || !remembered || !site) return;
-    const found = await held.checkTakenBack(site).catch(() => "ok" as const);
-    if (found === "ok" || headless !== held) return;
+    const was = headless;
+    if (!was || !pubkey || !remembered || !site) return;
+    const found = await was.checkTakenBack(site).catch(() => "ok" as const);
+    if (found === "ok" || headless !== was) return;
     drop();
     say(state());
   };
   /** Lock: the site is forgotten, and the key goes with the worker that held it. */
   const lock = () => {
     dropPending();
-    const held = headless;
+    const was = headless;
     const forSite = site;
     headless = null;
     pubkey = null;
@@ -163,7 +193,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     remembered = false;
     app = null;
     more = [];
-    if (held) void (forSite ? held.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => held.destroy());
+    forgetHeld();
+    if (was) void (forSite ? was.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => was.destroy());
   };
   /**
    * Take up what was kept for this site, once, as soon as it is known which
@@ -190,6 +221,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
         if (kept.check === "overdue") await checkTakenBack();
         else if (kept.check === "due") void checkTakenBack();
         passGate = createSignGate(passLimits, kept.signedPass);
+        await takeUpHeld();
       } catch {
         /* nothing kept, or no storage here: the user is asked, as before */
       }
@@ -225,6 +257,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (from !== site) return;
     const ask = readSignerRequest(e.data);
     if (!ask) return;
+    // Buying is not yet open at every address BitLogin runs at (permissions.ts). Where it isn't, `buy` is not a
+    // request this signer knows, and gets no answer.
+    if (ask.t === "buy" && !buyingOpenAt(me)) return;
     await remember();
     if (ask.t === "state") return say(state(ask.id));
     if (ask.t === "lock") {
@@ -250,12 +285,19 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (pubkey && Date.now() / 1000 >= until) lock();
     if (!headless || !pubkey) return refuse();
 
-    if (ask.t === "propose" || ask.t === "wallet" || ask.t === "pay" || ask.t === "file-save" || ask.t === "file-pick") {
+    if (ask.t === "have") {
+      // Answered from what BitLogin's page handed over: the person's receipts for this site's own listings, and
+      // no others. No question is put, and nothing is fetched. One that has run out is not one.
+      const receipt = heldFor(ask.listing);
+      return say(receipt ? { t: "receipt", id: ask.id, receipt: receipt.event } : { t: "none", id: ask.id });
+    }
+
+    if (ask.t === "propose" || ask.t === "wallet" || ask.t === "pay" || ask.t === "tip" || ask.t === "buy" || ask.t === "file-save" || ask.t === "file-pick") {
       // Put to the person on a page of BitLogin's own. An application the user approved may ask too (BitPortal's own
       // room is one, and should behave as a world does): asking widens nothing it may do on its own say, because
       // every answer is a press on BitLogin's page, and what is signed there is signed by BitLogin's own session.
       // Not a wallet: an application asks for one through the widget, at its own address.
-      const asked: Asked | null = app && ask.t === "wallet" ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ask.t === "file-pick" ? { what: "pick" } : ask.t === "file-save" ? { what: "save", name: ask.name, type: ask.type, bytes: ask.bytes, private: ask.private } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
+      const asked: Asked | null = app && ask.t === "wallet" ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ask.t === "tip" ? { what: "tip", sats: ask.sats, ...(ask.to ? { to: ask.to } : {}) } : ask.t === "buy" ? { what: "buy", listing: ask.listing } : ask.t === "file-pick" ? { what: "pick" } : ask.t === "file-save" ? { what: "save", name: ask.name, type: ask.type, bytes: ask.bytes, private: ask.private } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
       if (!asked || !askGates[asked.what].take(Date.now())) return refuse();
       // One question at a time: a new one ends the one before it.
       dropPending();
@@ -384,6 +426,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
+      lastWindow = asking;
         back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}), ...(pubkey && pending ? { ask: pending.ask, pubkey } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
@@ -401,6 +444,17 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       if (was.ask.what === "wallet" && cleanWalletUri(msg.wallet)) reply = { t: "wallet", id: was.id, uri: cleanWalletUri(msg.wallet) };
       // Paid: only where it is the invoice this site asked to have paid. The site learns that, and nothing of the wallet.
       if (was.ask.what === "pay" && msg.paid?.invoice === was.ask.invoice) reply = { t: "paid", id: was.id, ...(msg.paid.preimage ? { preimage: msg.paid.preimage } : {}) };
+      // A tip: only for the amount this site asked. Whom it went to was BitLogin's page's to find, and is not said.
+      if (was.ask.what === "tip" && msg.tipped?.sats === was.ask.sats) reply = { t: "paid", id: was.id, ...(msg.tipped.preimage ? { preimage: msg.tipped.preimage } : {}) };
+      // Bought: only with a receipt a known service signed, for this listing and this account, that has not run out.
+      if (was.ask.what === "buy" && msg.bought) {
+        const receipt = readReceipt(msg.bought.receipt, services);
+        if (receiptGood(receipt, { buyer: pubkey, listing: was.ask.listing, now: Date.now() / 1000 })) {
+          reply = { t: "bought", id: was.id, receipt: receipt!.event, ...(msg.bought.delivery ? { delivery: msg.bought.delivery } : {}) };
+          held = heldReceipts([receipt!.event, ...held.filter((event) => event.id !== receipt!.event.id)], pubkey, services);
+          keepHeld();
+        }
+      }
       // A file saved, or the one file the person chose: passed on as BitLogin's own page gave it.
       if (was.ask.what === "save" && msg.saved) reply = { t: "file-saved", id: was.id, ...msg.saved };
       if (was.ask.what === "pick" && msg.file) reply = { t: "file", id: was.id, ...msg.file };
@@ -413,7 +467,14 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
         if (sameAsAsked) reply = { t: "signed", id: was.id, event: signed };
       }
       say(reply);
-      return back({ t: "done", nonce: msg.nonce, ok: reply.t !== "refused" || (!msg.event && !msg.wallet && !msg.paid && !msg.saved && !msg.file) });
+      return back({ t: "done", nonce: msg.nonce, ok: reply.t !== "refused" || (!msg.event && !msg.wallet && !msg.paid && !msg.saved && !msg.file && !msg.tipped && !msg.bought) });
+    }
+    if (msg.t === "held") {
+      // From the window or panel that last said hello, for the site this is really in, and only once signed in.
+      if (!lastWindow || lastWindow.nonce !== msg.nonce || lastWindow.from !== e.source || msg.world !== site || !pubkey) return;
+      held = heldReceipts(msg.receipts, pubkey, services);
+      keepHeld();
+      return;
     }
     if (msg.t !== "grant") return;
     // Only from the window that said hello, with the word it gave, and for the site this is really in.
@@ -435,6 +496,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       gate = createSignGate();
       passGate = createSignGate(passLimits);
       dropPending();
+      // Another account's receipts are not this one's: what was held is let go until BitLogin's page hands over more.
+      forgetHeld();
       // A site the user left "remember" ticked for is kept, so they are not asked again when its page is next
       // loaded: thirty days for one BitLogin knows, seven for any other. A site they unticked it for is allowed
       // for this visit: it lasts as long as the page does, and nothing is written down. So does one that can't
@@ -447,6 +510,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       until = Math.floor(Date.now() / 1000) + (got.remember ? longest : SIGN_LIMITS.visitSec);
       remembered = got.remember === true && (await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false));
       if (!remembered) until = Math.min(until, Math.floor(Date.now() / 1000) + SIGN_LIMITS.visitSec);
+      // What an account before this one held here is written over: nothing of theirs is left for this one.
+      keepHeld();
       back({ t: "done", nonce: msg.nonce, ok: true });
     } catch {
       lock();

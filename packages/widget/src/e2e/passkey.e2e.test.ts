@@ -29,6 +29,8 @@ import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "../../../core
 import { NostrSigner } from "../../../core/src/account/signer.js";
 import { sealMessage } from "../embedded/messages.js";
 import { startMockMint } from "../ecash/mockMint.js";
+import { startMockUnlock } from "../pay/mockUnlock.js";
+import { NostrSigner } from "@bitlogin/core/account";
 import { startMockBlossom } from "../drive/mockBlossom.js";
 import { RelayPool } from "../../../core/src/nostr/pool.js";
 
@@ -58,6 +60,8 @@ try {
  * pointed at the local mock relay (the real page uses BitLogin's public relay
  * list, which this test must never touch).
  */
+/** A selling service a test is tried against, as `localService` reads it. Named on BitLogin's own pages only. */
+let unlockNamed = "";
 function startServer(relayUrls: string[]): Promise<{ server: Server; origin: string }> {
   const relayList = relayUrls.join(",");
   const server = createServer(async (req, res) => {
@@ -82,7 +86,7 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
       // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
       // signer reads it. Each is given the mock relays, as the account page is.
       if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/signer/index.html") {
-        body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}">`);
+        body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}"${unlockNamed ? ` data-unlock-service="${unlockNamed}"` : ""}>`);
       }
       res.writeHead(200, {
         "content-type": MIME[extname(filePath)] ?? "application/octet-stream",
@@ -792,9 +796,20 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     "a client that keeps the screen shows the sign-in panel over a world, and the world is allowed without a window (sign-in-window.md §SW19)",
     async () => {
       // Two pages of one site, as BitPortal's shell and a world under it are: the client, and the world it shows.
+      // What the world says of itself, in its own /.well-known/nswp.json: where it takes tips, and the keys it publishes with.
+      const worldWord: { tip?: string; publishers: Record<string, unknown> } = { publishers: {} };
+      // The seller's wallet is the mint the test starts later. The service is started first: BitLogin's pages are
+      // told of it as they load.
+      let payMint: Awaited<ReturnType<typeof startMockMint>> | null = null;
+      const unlock = await startMockUnlock({ invoice: (sats) => payMint!.invoice(sats), paid: (invoice) => payMint!.paid.includes(invoice) });
+      unlockNamed = unlock.named;
       const start = (body: (url: URL) => string) =>
         new Promise<{ server: Server; at: string }>((resolve) => {
           const server = createServer((req, res) => {
+            if ((req.url ?? "").startsWith("/.well-known/nswp.json")) {
+              res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*", "cache-control": "no-store" });
+              return void res.end(JSON.stringify(worldWord));
+            }
             res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
             res.end(body(new URL(req.url ?? "/", "http://x")));
           });
@@ -1075,6 +1090,142 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           expect(mint.paid).toEqual([invoice]);
           // Not an invoice: not put to anyone.
           expect((await ask({ t: "pay", invoice: "https://evil.example/pay" })).t).toBe("no answer");
+
+          // ---- Paying for things (docs/paying.md).
+          payMint = mint;
+          const publish = async (events: unknown[]) => {
+            for (const relay of relays) {
+              await new Promise<void>((resolve, reject) => {
+                const socket = new WebSocket(relay.url);
+                socket.onerror = () => reject(new Error("mock relay refused a connection"));
+                socket.onopen = () => {
+                  for (const event of events) socket.send(JSON.stringify(["EVENT", event]));
+                  setTimeout(() => (socket.close(), resolve()), 300);
+                };
+              });
+            }
+          };
+          const showFor = async () => page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+
+          // A tip to a person. The world names a key and an amount, and nothing else: BitLogin finds the lightning
+          // address in that person's own signed profile, shows the name and the address, and pays exactly that much.
+          const alice = new NostrSigner(generatePrivateKey());
+          await publish([alice.signEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify({ name: "Alice", lud16: unlock.address("alice") }) })]);
+          unlock.commentAllowed = 120;
+          await propose({ t: "tip", to: alice.getPublicKey(), sats: 21 }, "t1");
+          await asking("t1");
+          await showFor();
+          await panel.locator('[data-ecash="confirm"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#ecash-confirm-title").textContent()).toBe("Send this tip?");
+          expect(await panel.locator("#ecash-pay-what").textContent()).toBe("A tip to Alice, at this lightning address:");
+          expect(await panel.locator("#ecash-pay-to").textContent()).toBe(unlock.address("alice"));
+          expect(await panel.locator("#ecash-pay-amount").textContent()).toBe("21");
+          expect(await panel.locator("#ecash-no-receipt").textContent()).toBe("No receipt: nothing will be recorded as yours.");
+          expect(await panel.locator("#ecash-no-receipt").isVisible()).toBe(true);
+          expect(await panel.locator("#ecash-pay-yes").textContent()).toBe("Send 21 sats");
+          // The person tipped is told who and in which world, by a note with the payment: the name in the tipper's own
+          // public profile. The tipper may leave their name off, and then the note that goes is the shorter one.
+          const worldHost = new URL(world).host;
+          const withName = (await panel.locator("#ecash-note-text").textContent()) ?? "";
+          expect(withName.startsWith("A tip from pk-")).toBe(true);
+          expect(withName.endsWith(`, in ${worldHost}`)).toBe(true);
+          expect(unlock.comments).toEqual([withName]);
+          await panel.locator("#ecash-note-name").uncheck();
+          await panel.locator("#ecash-note-text").filter({ hasText: /^A tip, in / }).waitFor({ timeout: 30_000 });
+          expect(await panel.locator("#ecash-note-text").textContent()).toBe(`A tip, in ${worldHost}`);
+          expect(unlock.comments).toEqual([withName, `A tip, in ${worldHost}`]);
+          expect(await panel.locator("#ecash-pay-amount").textContent()).toBe("21");
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/tip.png` });
+          await page.waitForTimeout(1000);
+          await panel.locator("#ecash-pay-yes").click();
+          const tipped = await waitFor("t1");
+          expect(tipped).toMatchObject({ t: "paid" });
+          // The world learns that it was paid, and nothing of where it went.
+          expect(JSON.stringify(tipped)).not.toContain("alice");
+          expect(mint.paid).toHaveLength(2);
+          expect(mint.paid[1]).toMatch(/^lnbc210n1/u);
+
+          // Over the person's limit for a payment with no receipt (1,000 sats unless they change it): nothing is
+          // looked up, nothing is spent, and the world hears only "refused".
+          await propose({ t: "tip", sats: 5000 }, "t2");
+          await asking("t2");
+          await showFor();
+          await panel.locator('[data-ecash="done"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#ecash-done-text").textContent()).toContain("The most you allow for that is 1,000 sats");
+          await panel.locator("#ecash-back").click();
+          expect((await waitFor("t2")).t).toBe("refused");
+          expect(mint.paid).toHaveLength(2);
+          // The limit is the person's to change, in their wallet, in a few steps: and it is kept with the account.
+          await page.evaluate(() => (window as any).showPanel({ mode: "wallet" }));
+          await panel.locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#ecash-limit").inputValue()).toBe("1000");
+          expect(await panel.locator("#ecash-limit option").allTextContents()).toEqual(["1,000 sats", "10,000 sats", "100,000 sats", "No limit"]);
+          await panel.locator("#ecash-limit").selectOption("10000");
+          await panel.locator('#ecash-limit-form button[type="submit"]').click();
+          await panel.locator("#ecash-limit-note").filter({ hasText: "at most 10,000 sats" }).waitFor({ timeout: 30_000 });
+          expect(relays.every((relay) => relay.storedEventKinds().includes(30078))).toBe(true);
+          // Not a tip at all: not put to anyone.
+          expect((await ask({ t: "tip", sats: 0 })).t).toBe("no answer");
+          expect((await ask({ t: "tip", sats: 5, to: "nobody" })).t).toBe("no answer");
+
+          // Buying. The world names a listing. Before anything is bought, it holds no receipt.
+          const made = unlock.listing({ d: "season-pass", priceSats: 30, title: "Season pass", delivers: "the key to the back room" });
+          await publish([made.event]);
+          expect((await ask({ t: "have", listing: made.coordinate })).t).toBe("none");
+          await propose({ t: "buy", listing: made.coordinate }, "b1");
+          await asking("b1");
+          await showFor();
+          await panel.locator('[data-shop="confirm"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#shop-site").textContent()).toBe(world);
+          expect(await panel.locator("#shop-title").textContent()).toBe("Season pass");
+          expect(await panel.locator("#shop-seller-key").textContent()).toBe(made.seller.getPublicKey());
+          expect(await panel.locator("#shop-price").textContent()).toBe("30");
+          const lines = (await panel.locator("#shop-lines").textContent()) ?? "";
+          expect(lines).toContain("To the seller29 sats");
+          expect(lines).toContain("its fee1 sat");
+          expect(await panel.locator("#shop-yes").textContent()).toBe("Pay 30 sats");
+          expect(await panel.locator("#shop .exp-note").isVisible()).toBe(true);
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/buy.png` });
+          await page.waitForTimeout(1000);
+          await panel.locator("#shop-yes").click();
+          const bought = await waitFor("b1");
+          expect(bought).toMatchObject({ t: "bought", delivery: "the key to the back room" });
+          // The receipt is the service's own signed note, whole: for this listing, and for the account signed in.
+          const signedInAs = (await ask({ t: "state" })).pubkey as string;
+          expect(bought.receipt.pubkey).toBe(unlock.pubkey);
+          expect(JSON.parse(bought.receipt.content)).toMatchObject({ productCoordinate: made.coordinate, buyerPubkey: signedInAs });
+          expect(mint.paid).toHaveLength(4);
+          // The world never signed as the buyer: every note the service took was signed by the account, on BitLogin's page.
+          expect(unlock.auths.length).toBeGreaterThan(3);
+          expect(unlock.auths.every((event) => event.pubkey === signedInAs)).toBe(true);
+          // It was bought through this world, so its signer now says so with no question.
+          expect(await ask({ t: "have", listing: made.coordinate })).toMatchObject({ t: "receipt", receipt: { id: bought.receipt.id } });
+          // A listing that is not this world's is not answered for, whatever the person holds.
+          expect((await ask({ t: "have", listing: `30078:${"ab".repeat(32)}:other` })).t).toBe("none");
+          expect((await ask({ t: "have", listing: "nonsense" })).t).toBe("no answer");
+          // Asked to buy it again: the receipt, and nothing charged.
+          await propose({ t: "buy", listing: made.coordinate }, "b2");
+          await asking("b2");
+          await showFor();
+          expect(await waitFor("b2")).toMatchObject({ t: "bought", receipt: { id: bought.receipt.id } });
+          expect(mint.paid).toHaveLength(4);
+
+          // What was bought is in the panel, under the account.
+          await page.evaluate(() => (window as any).showPanel({ mode: "library" }));
+          await panel.locator("#library-list li").waitFor({ timeout: 60_000 });
+          expect(await panel.locator("#library-list li").textContent()).toContain("Season pass");
+          expect(await panel.locator("#library-list li").textContent()).toContain("Yours to keep");
+          expect(await panel.locator("#library-list li").textContent()).toContain(`Bought at ${new URL(world).host}`);
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/library.png` });
+          await panel.locator("#library-back").click();
+
+          // The world's page is loaded again. Its signer still knows what its visitor holds, with no panel shown: the
+          // receipts were kept beside the site's grant (owner, 2026-11-21).
+          await worldFrame.evaluate(() => location.reload());
+          await worldFrame.waitForFunction(() => Array.isArray((window as any).heard) && (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          await worldFrame.waitForFunction(async () => (await (window as any).ask({ t: "state" })).unlocked === true, null, { timeout: 30_000 });
+          expect(await ask({ t: "have", listing: made.coordinate })).toMatchObject({ t: "receipt", receipt: { id: bought.receipt.id } });
+          expect((await ask({ t: "have", listing: `30078:${"ab".repeat(32)}:other` })).t).toBe("none");
         } finally {
           await mint.close();
         }
@@ -1193,9 +1344,11 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await browser.close();
         worldServer.server.close();
         clientServer.server.close();
+        unlockNamed = "";
+        await unlock.close();
       }
     },
-    240_000
+    300_000
   );
 
   it(

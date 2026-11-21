@@ -1260,6 +1260,10 @@ account is being made, as everywhere.
 
 # SW20. Asking the person: careful kinds, and a wallet (built on `beta`)
 
+**Added 2026-11-21:** `tip`, `buy` and `have` join this family, and `pay`
+is held to a limit. They are in `docs/paying.md`, with the exact messages.
+The panel takes `mode: "library"` (§SW19.2) for what a person has bought.
+
 A site the user allowed can have a note and a reaction signed without
 asking (§SW5). Two more things can now be **put to the person, each time,
 on a page of BitLogin's own**: the panel where a client shows it, the

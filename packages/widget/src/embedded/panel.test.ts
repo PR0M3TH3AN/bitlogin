@@ -78,3 +78,9 @@ describe("the sign-in panel (sign-in-window.md §SW19)", () => {
     expect(framesOfClient(panel as unknown as Window)).toEqual([world, signer, other]);
   });
 });
+
+describe("the panel, opened for what a person has bought (docs/paying.md)", () => {
+  it("takes the mode, with no world", () => {
+    expect(readPanelHello({ bitlogin: "bitlogin-panel", v: 1, t: "hello", mode: "library" })).toEqual({ t: "hello", mode: "library" });
+  });
+});

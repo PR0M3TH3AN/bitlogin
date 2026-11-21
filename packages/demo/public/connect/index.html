@@ -150,7 +150,7 @@
     <p class="exp-note"><span class="exp-tag">Experimental</span> The wallet is new and has not been through much. Keep only small amounts in it.</p>
     <!-- A site asked to be paid: whose invoice this is. Shown only then. -->
     <div id="ecash-for" hidden>
-      <p class="connect-small">Asking to be paid</p>
+      <p class="connect-small">Asked by</p>
       <p id="ecash-site" class="connect-site"></p>
     </div>
 
@@ -185,6 +185,18 @@
       <h2 class="ecash-sub">Where it is kept</h2>
       <ul id="ecash-mints" class="ecash-mints"></ul>
       <button id="ecash-go-mint" class="connect-link" type="button">Add another mint</button>
+      <h2 class="ecash-sub">Payments that leave no receipt</h2>
+      <form id="ecash-limit-form" class="ecash-form">
+        <label for="ecash-limit">The most a site can ask you to pay at once when nothing is recorded as yours: a tip, or an invoice it made.</label>
+        <select id="ecash-limit">
+          <option value="1000">1,000 sats</option>
+          <option value="10000">10,000 sats</option>
+          <option value="100000">100,000 sats</option>
+          <option value="0">No limit</option>
+        </select>
+        <button class="btn secondary" type="submit">Save this limit</button>
+      </form>
+      <p id="ecash-limit-note" class="ecash-quiet">Kept with your account. Something you buy with a receipt has no such limit: you are shown its price before you pay.</p>
     </div>
 
     <div data-ecash="fund" hidden>
@@ -226,12 +238,20 @@
 
     <div data-ecash="confirm" hidden>
       <h1 id="ecash-confirm-title">Pay this?</h1>
+      <p id="ecash-pay-what" class="ecash-plain" hidden></p>
+      <p id="ecash-pay-to" class="connect-key" hidden></p>
       <p class="ecash-figure"><span id="ecash-pay-amount">0</span> <span class="ecash-unit">sats</span></p>
       <dl class="ecash-lines">
         <div><dt>Routing fee, at most</dt><dd id="ecash-pay-fee"></dd></div>
         <div><dt>From</dt><dd id="ecash-pay-mint"></dd></div>
         <div><dt>You hold there</dt><dd id="ecash-pay-have"></dd></div>
       </dl>
+      <div id="ecash-note-row" hidden>
+        <p class="ecash-quiet">This note goes with it, to them and nobody else:</p>
+        <p id="ecash-note-text" class="ecash-plain"></p>
+        <label class="shop-check" id="ecash-note-name-row"><input id="ecash-note-name" type="checkbox" checked /> <span>Say it is from me</span></label>
+      </div>
+      <p id="ecash-no-receipt" class="ecash-quiet" hidden>No receipt: nothing will be recorded as yours.</p>
       <p id="ecash-short" class="connect-warning" hidden></p>
       <div class="cta-row">
         <button id="ecash-pay-yes" class="btn primary" type="button">Pay</button>
@@ -247,6 +267,62 @@
 
     <p id="ecash-error" class="connect-warning" role="alert" hidden></p>
     <div class="cta-row" id="ecash-nav"><button id="ecash-back" class="btn secondary" type="button">Back</button></div>
+  </section>
+
+  <!-- A site asked to buy something (docs/paying.md). BitLogin runs the purchase; the site learns the receipt. -->
+  <section id="shop" class="connect-card ecash shop" hidden>
+    <p class="exp-note"><span class="exp-tag">Experimental</span> Buying in a world is new and has not been through much. Keep purchases small.</p>
+    <div id="shop-for">
+      <p class="connect-small">Asked by</p>
+      <p id="shop-site" class="connect-site"></p>
+    </div>
+    <div data-shop="loading"><p id="shop-loading" class="ecash-waiting" role="status">Looking up what is for sale.</p></div>
+    <div data-shop="confirm" hidden>
+      <h1>Buy this?</h1>
+      <p id="shop-title" class="shop-title"></p>
+      <p class="connect-small">Sold by <span id="shop-seller"></span></p>
+      <p id="shop-seller-key" class="connect-key"></p>
+      <p class="ecash-figure"><span id="shop-price">0</span> <span class="ecash-unit">sats</span></p>
+      <dl id="shop-lines" class="ecash-lines"></dl>
+      <p class="ecash-plain">You get a receipt, signed by <span id="shop-service"></span> and kept with your account. <span id="shop-lasts"></span></p>
+      <p id="shop-short" class="connect-warning" hidden></p>
+      <div class="cta-row">
+        <button id="shop-yes" class="btn primary" type="button">Pay</button>
+        <button id="shop-no" class="btn secondary" type="button">Don't buy</button>
+        <button id="shop-wallet" class="btn secondary" type="button" hidden>Open my wallet</button>
+      </div>
+      <p class="connect-small">A Lightning payment can't be taken back. A refund is the seller's to give.</p>
+    </div>
+    <div data-shop="held" hidden>
+      <h1>You already have this</h1>
+      <p id="shop-held-title" class="shop-title"></p>
+      <p id="shop-held-lasts" class="ecash-quiet"></p>
+      <p class="ecash-plain">Nothing will be charged. Show this site your receipt for it?</p>
+      <div class="cta-row">
+        <button id="shop-show" class="btn primary" type="button">Show the receipt</button>
+        <button id="shop-hide" class="btn secondary" type="button">Not now</button>
+      </div>
+    </div>
+    <div data-shop="working" hidden><p id="shop-working" class="ecash-waiting" role="status"></p></div>
+    <div data-shop="done" hidden><p id="shop-done" class="ecash-done"></p></div>
+    <p id="shop-error" class="connect-warning" role="alert" hidden></p>
+    <div class="cta-row" id="shop-nav" hidden><button id="shop-close" class="btn secondary" type="button">Close</button></div>
+  </section>
+
+  <section id="library" class="connect-card ecash shop" hidden>
+    <p class="exp-note"><span class="exp-tag">Experimental</span> Purchases are new and have not been through much.</p>
+    <h1>What you've bought</h1>
+    <p id="library-note" class="ecash-quiet">Opening your receipts.</p>
+    <div id="library-open-row" hidden>
+      <h2 class="ecash-sub">Not finished</h2>
+      <ul id="library-open" class="ecash-mints"></ul>
+      <p class="ecash-quiet">Something you began to buy, and paid for in part or not at all. Nothing here is yours until it is finished.</p>
+      <h2 class="ecash-sub">Yours</h2>
+    </div>
+    <ul id="library-list" class="ecash-mints"></ul>
+    <p id="library-empty" class="ecash-plain" hidden>Nothing yet. When you buy something in a world, its receipt is kept here, with your account.</p>
+    <label class="shop-check"><input id="library-tell" type="checkbox" checked /> <span>Tell a world what I bought from it, without asking me each time. A world is never told what you bought anywhere else.</span></label>
+    <div class="cta-row"><button id="library-back" class="btn secondary" type="button">Back to your account</button></div>
   </section>
 
   <section id="files" class="connect-card files" hidden>
@@ -354,6 +430,7 @@
       <p>BitLogin shows your recovery phrase and private key only when you ask, here. Nothing else should ever ask you to type them in, and a world never needs them.</p>
     </div>
     <button id="open-files" class="ecash-door" type="button"><span class="ecash-door-name">Files <span class="exp-tag">Experimental</span></span><span class="ecash-door-what">Your files and folders, public or private, kept on servers you choose</span></button>
+    <button id="open-library" class="ecash-door" type="button"><span class="ecash-door-name">Purchases <span class="exp-tag">Experimental</span></span><span class="ecash-door-what">Receipts for what you've bought in a world</span></button>
     <button id="open-ecash" class="ecash-door" type="button"><span class="ecash-door-name">Ecash wallet <span class="exp-tag">Experimental</span></span><span class="ecash-door-what">Sats you can spend in a world with one press</span></button>
     <div id="account-slot"></div>
     <div class="cta-row"><button id="account-back" class="btn secondary" type="button">Back</button></div>

@@ -55,8 +55,8 @@ import { describe as describeKept, forget as forgetKept, keep as keepKept, loadK
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { inFamily, readFamily } from "../embedded/family.js";
-import { isSignInAddress, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
-import { createSignGate, signClass } from "../embedded/policy.js";
+import { isLocalAddress, isSignInAddress, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
+import { createSignGate, HELD_MOST, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
 import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
 import { ACHIEVEMENT_LIMITS, achievementForWorld } from "../embedded/achievements.js";
@@ -64,6 +64,10 @@ import { buildMessageRelays, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS,
 import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/mints.js";
+import { keepReceipts, loadReceipts } from "./receiptStore.js";
+import { loadPaySettings, savePaySettings } from "./paySettings.js";
+import { lightningAddressOfProfile } from "../pay/lightning.js";
+import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
 import { blossomAuth, loadDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { loadEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
@@ -526,6 +530,14 @@ function selfOrigin(): string {
   }
 }
 
+/** Where a site's signer keeps the receipts it was handed, by site. */
+const HELD_RECEIPTS = "bitlogin:held:v1:";
+
+/** Paying and buying are done on BitLogin's own pages, and nowhere a copy of the widget is hosted. */
+function requireSignInAddress(): void {
+  if (!isSignInAddress(selfOrigin())) throw new Error("That is done at BitLogin's own address.");
+}
+
 /**
  * The site a wallet connection is for. This page's own origin, always, except in one place: at one of BitLogin's
  * own sign-in addresses the page may name the site, because there the page is BitLogin's panel or window
@@ -895,12 +907,39 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const site = (payload as SignerSitePayload).site;
       await deleteSignerGrant(store, site);
       if (session.family && inFamily(site, session.family)) await deleteSignerGrant(store, session.family);
+      await store.delete(HELD_RECEIPTS + site).catch(() => {});
       // Its counts go with it: nothing is left here that says the site was ever used.
       for (const what of ["save", "follow", "seal", "unwrap", "reach", "score", "achieve"]) {
         worldCounts.delete(`${WORLD_COUNTS}${what}:${site}`);
         await store.delete(`${WORLD_COUNTS}${what}:${site}`).catch(() => {});
       }
       return {};
+    }
+
+    // The receipts BitLogin's own page handed a site's signer (docs/paying.md): the person's, for that site's own
+    // listings. Kept beside the site's grant, so a page loaded again still knows what its visitor holds (owner,
+    // 2026-11-21). They are signed notes and no secret; each is checked again where it is used. A signer-only
+    // session only, and only for the site its hand-off was sealed for.
+    case "signerHold":
+    case "signerHeld": {
+      const { signer } = requireUnlocked();
+      if (!session.signerOnly) throw new Error("Only a site's signer holds receipts for it.");
+      const site = grantSite((payload as { site?: unknown }).site);
+      if (!site) throw new Error("That is not a site.");
+      if ((session.app && session.app.site !== site) || (session.site && session.site !== site)) throw new Error("That is another site's.");
+      const me = signer.getPublicKey();
+      if (action === "signerHold") {
+        const offered = (payload as { receipts?: unknown }).receipts;
+        const receipts = (Array.isArray(offered) ? offered.slice(0, HELD_MOST) : []).filter((event): event is NostrEvent => !!event && typeof event === "object" && (event as NostrEvent).kind === 30078 && typeof (event as NostrEvent).content === "string" && (event as NostrEvent).content.length <= 8000 && verifyNostrEvent(event as NostrEvent));
+        await store.set(HELD_RECEIPTS + site, JSON.stringify({ pubkey: me, receipts }));
+        return {};
+      }
+      try {
+        const kept = JSON.parse((await store.get(HELD_RECEIPTS + site)) ?? "null") as { pubkey?: unknown; receipts?: unknown } | null;
+        return { receipts: kept?.pubkey === me && Array.isArray(kept.receipts) ? (kept.receipts as NostrEvent[]).slice(0, HELD_MOST) : [] };
+      } catch {
+        return { receipts: [] };
+      }
     }
 
     case "handoffAccept": {
@@ -1832,6 +1871,105 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       }
     }
 
+    // ---- Paying, and buying (docs/paying.md). A full session at one of BitLogin's own sign-in addresses only: none
+    // of these is on the list a handed-over session may ask, so no embedded signer, and so no site, can have a
+    // buyer's permission note signed or read what a person bought.
+
+    // Whom a tip is for: the name and the lightning address in that person's own signed profile. Read-only.
+    case "payProfile": {
+      requireUnlocked();
+      requireSignInAddress();
+      const who = (payload as { pubkey?: unknown }).pubkey;
+      if (typeof who !== "string" || !/^[0-9a-f]{64}$/u.test(who)) throw new Error("That is not an account.");
+      const relayUrls = [...new Set([...session.relays, ...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 10);
+      if (relayUrls.length === 0) return { name: "", address: "", answered: false };
+      const pool = new RelayPool(relayUrls);
+      try {
+        const found = await pool.queryQuorum({ kinds: [0], authors: [who], limit: 2 }, 3500);
+        const events = found.outcomes.flatMap((o) => o.events);
+        const newest = events.filter((event) => event.kind === 0 && event.pubkey === who && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+        return { name: newestProfile(events, who)?.name ?? "", address: newest ? lightningAddressOfProfile(newest.content, { local: isLocalAddress(selfOrigin()) }) : "", answered: found.respondedCount > 0 };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    // A listing, by its coordinate, from the relays its service names and the account's own. The page checks it.
+    case "payListing": {
+      requireUnlocked();
+      requireSignInAddress();
+      const p = payload as { coordinate?: unknown; relays?: unknown };
+      const coordinate = cleanCoordinate(p.coordinate);
+      if (!coordinate) throw new Error("That is not a listing.");
+      const local = isLocalAddress(selfOrigin());
+      const named = (Array.isArray(p.relays) ? p.relays : []).filter((url): url is string => typeof url === "string" && url.length <= 200 && (/^wss:\/\//u.test(url) || (local && /^ws:\/\/(localhost|127\.0\.0\.1)[:/]/u.test(url)))).slice(0, 6);
+      const relayUrls = [...new Set([...named, ...session.relays, ...discoveryRelayUrls])].slice(0, 12);
+      if (relayUrls.length === 0) return { event: null, answered: false };
+      const pool = new RelayPool(relayUrls);
+      try {
+        const found = await pool.queryQuorum({ kinds: [30078], authors: [sellerOf(coordinate)], "#d": [coordinate.slice(71)], limit: 4 }, 5000);
+        const newest = found.outcomes.flatMap((o) => o.events).filter((event) => event.kind === 30078 && event.pubkey === sellerOf(coordinate) && event.tags.some((tag) => tag[0] === "d" && tag[1] === coordinate.slice(71)) && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+        return { event: newest ?? null, answered: found.respondedCount > 0 };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    // A buyer's permission note (NIP-98) for one request to a selling service BitLogin knows: this address, this
+    // method, this body, once. Kind 27235 is signed here and nowhere else, and never for a site.
+    case "unlockAuth": {
+      const { signer } = requireUnlocked();
+      requireSignInAddress();
+      const p = payload as { url?: unknown; method?: unknown; payload?: unknown };
+      let url: URL;
+      try {
+        url = new URL(String(p.url));
+      } catch {
+        throw new Error("That is not an address.");
+      }
+      const known = UNLOCK_SERVICES.some((service) => service.endpoint === url.origin) || (isLocalAddress(selfOrigin()) && isLocalAddress(url.origin));
+      if (typeof p.url !== "string" || p.url.length > 1000 || url.toString() !== p.url || url.username || url.password || !known) throw new Error("That is not a service BitLogin buys from.");
+      if (p.method !== "GET" && p.method !== "POST") throw new Error("That is not something a selling service is asked.");
+      const body = typeof p.payload === "string" && /^[0-9a-f]{64}$/u.test(p.payload) ? p.payload : "";
+      if (p.method === "POST" && !body) throw new Error("A permission note names what is sent with it.");
+      const event = signer.signEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [["u", p.url], ["method", p.method], ["bitunlock:nonce", crypto.randomUUID()], ...(body ? [["payload", body]] : [])], content: "" });
+      const bytes = new TextEncoder().encode(JSON.stringify(event));
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return { token: `Nostr ${btoa(binary)}` };
+    }
+
+    // The receipts kept with the account: in this browser first, then on its relays, each sealed to its own key.
+    case "paySettingsLoad":
+    case "paySettingsSave":
+    case "receiptsLoad":
+    case "receiptsKeep": {
+      const { signer } = requireUnlocked();
+      requireSignInAddress();
+      const me = signer.getPublicKey();
+      const finderUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
+      let mine: string[] = session.relays;
+      if (mine.length === 0 && finderUrls.length) {
+        const finder = new RelayPool(finderUrls);
+        try {
+          mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+        } catch {
+          mine = [];
+        } finally {
+          finder.closeAll();
+        }
+      }
+      const pool = new RelayPool([...new Set([...mine, ...vaultRelayUrls])].slice(0, 16));
+      try {
+        const deps = { signer, store, relays: pool };
+        if (action === "paySettingsLoad") return await loadPaySettings(deps);
+        if (action === "paySettingsSave") return await savePaySettings(deps, payload);
+        return action === "receiptsLoad" ? await loadReceipts(deps) : await keepReceipts(deps, (payload as { receipts?: unknown }).receipts);
+      } finally {
+        pool.closeAll();
+      }
+    }
+
     // The words of their newest profile note, to show what a proposed one would change. Read-only, and theirs.
     case "profileContent": {
       const { signer } = requireUnlocked();
@@ -2061,11 +2199,12 @@ const KNOWN_ACTIONS = new Set<string>([
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
-  "signerKeep", "signerRestore", "signerTouch", "signerForget",
+  "signerKeep", "signerRestore", "signerTouch", "signerForget", "signerHold", "signerHeld",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent",
+  "payProfile", "payListing", "unlockAuth", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
   "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",

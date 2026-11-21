@@ -23,6 +23,8 @@ import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
 import type { RankedMint } from "./ecash/mints.js";
 import type { DriveSave, DriveState, RankedServer } from "./worker/driveStore.js";
+import type { KeptReceipt, ReceiptsState } from "./worker/receiptStore.js";
+import type { OpenOrder, PaySettings } from "./worker/paySettings.js";
 import type { EcashRoll, EcashState, KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import type { WorldMore } from "./embedded/follows.js";
@@ -120,6 +122,24 @@ export interface HeadlessSigner {
   /** The words of the account's newest profile note on relays, or null; and whether any relay answered. */
   profileContent(): Promise<{ content: string | null; answered: boolean }>;
   /**
+   * Paying and buying (docs/paying.md), for BitLogin's own sign-in page and panel, and refused anywhere else:
+   * whom a tip is for, a listing as relays hold it, a buyer's permission note for one request to a selling
+   * service BitLogin knows, and the receipts kept with the account.
+   */
+  pay: {
+    profile(pubkey: string): Promise<{ name: string; address: string; answered: boolean }>;
+    listing(coordinate: string, relays: string[]): Promise<{ event: NostrEvent | null; answered: boolean }>;
+    auth(request: { url: string; method: "GET" | "POST"; payload?: string }): Promise<string>;
+    receipts(): Promise<ReceiptsState>;
+    keep(receipts: KeptReceipt[]): Promise<ReceiptsState>;
+    /** The most a site may ask for at once with no receipt, in sats (0: no limit), kept with the account. */
+    settings(): Promise<PaySettings>;
+    setLimit(limitSats: number): Promise<PaySettings>;
+    /** Remember a purchase begun, before its first payment; and let one go, once it is finished or can't be. */
+    keepOrder(order: Omit<OpenOrder, "at">): Promise<PaySettings>;
+    dropOrder(order: string): Promise<PaySettings>;
+  };
+  /**
    * The account's ecash wallet (docs/ecash.md), for BitLogin's own pages: what it holds, its mints, and the
    * roll-over that replaces spent records. A full session only. The tokens returned are bearer money: a page
    * that asks for them must be BitLogin's own, and must never pass them to a site.
@@ -210,6 +230,9 @@ export interface HeadlessSigner {
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
   forgetSignerGrant(site: string): Promise<void>;
+  /** In the embedded signer: keep, and read back, the receipts BitLogin's own page handed it for this site (docs/paying.md). */
+  holdReceipts(site: string, receipts: NostrEvent[]): Promise<void>;
+  heldReceipts(site: string): Promise<NostrEvent[]>;
   /** Clear the cached session for this origin. */
   logout(): Promise<void>;
   /** Tear down the crypto worker. The signer is unusable afterward; create a
@@ -303,6 +326,44 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async profileContent() {
       await requirePubkey();
       return client.profileContent();
+    },
+    pay: {
+      async profile(who) {
+        await requirePubkey();
+        return client.payProfile(who);
+      },
+      async listing(coordinate, relays) {
+        await requirePubkey();
+        return client.payListing({ coordinate, relays });
+      },
+      async auth(request) {
+        await requirePubkey();
+        return (await client.unlockAuth(request)).token;
+      },
+      async receipts() {
+        await requirePubkey();
+        return client.receiptsLoad();
+      },
+      async keep(receipts) {
+        await requirePubkey();
+        return client.receiptsKeep(receipts);
+      },
+      async settings() {
+        await requirePubkey();
+        return client.paySettingsLoad();
+      },
+      async setLimit(limitSats) {
+        await requirePubkey();
+        return client.paySettingsSave({ limitSats });
+      },
+      async keepOrder(order) {
+        await requirePubkey();
+        return client.paySettingsSave({ addOrder: order });
+      },
+      async dropOrder(order) {
+        await requirePubkey();
+        return client.paySettingsSave({ removeOrder: order });
+      }
     },
     drive: {
       async load() {
@@ -420,6 +481,12 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async touchSignerGrant(site, signed, signedSensitive, signedPass) {
       await client.signerTouch({ site, signed, ...(signedSensitive ? { signedSensitive } : {}), ...(signedPass ? { signedPass } : {}) });
+    },
+    async holdReceipts(site, receipts) {
+      await client.signerHold({ site, receipts });
+    },
+    async heldReceipts(site) {
+      return (await client.signerHeld(site)).receipts;
     },
     async forgetSignerGrant(site) {
       await client.signerForget({ site });

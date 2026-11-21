@@ -6,7 +6,28 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
-## 2026-11-21 (on `beta` only)
+## 2026-11-21, later (on `beta` only)
+
+- **Tips, purchases and receipts** (`docs/paying.md`), on BitLogin's own
+  sign-in page and panel. A site may ask its signer for `tip` (a person or
+  itself, and an amount), `buy` (a BitUnlock listing, by coordinate) and
+  `have` (answered with no question, for the site's own listings only).
+  BitLogin finds the lightning address, runs the purchase as the buyer,
+  keeps the receipt with the account, and hands the site the receipt.
+  `client.tip`, `client.buy` and `client.have` do the same for an
+  application. Experimental: not tried against BitUnlock or real money.
+- **A limit on a payment that leaves no receipt:** `pay` and `tip` are
+  refused above 1,000 sats in one payment unless the person raised the
+  limit in their wallet. **A site that relied on `pay` for more than
+  1,000 sats will now hear `refused`.** The page for `pay` says that
+  nothing will be recorded as the person's.
+- The panel takes `mode: "library"`: what the person has bought.
+- The limit is one of four steps (1,000, 10,000, 100,000, none) and is
+  kept with the account. A tip carries a note to the person tipped where
+  their lightning address takes one. A listing for something in a world
+  priced under 500 sats is not shown for sale.
+
+## 2026-11-21 (on `main`)
 
 - **The sign-in panel** (`docs/sign-in-window.md` §SW19):
   `/connect/panel/`, the sign-in window's own page, shown in a frame by a
