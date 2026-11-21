@@ -532,8 +532,8 @@ import type { RankedMint } from "../ecash/mints.js";
 export type { RankedMint };
 
 // ---- A person's files (docs/files.md; worker/driveStore.ts) ----
-import type { PaySettings } from "./paySettings.js";
-export type { PaySettings };
+import type { OpenOrder, PaySettings } from "./paySettings.js";
+export type { OpenOrder, PaySettings };
 import type { KeptReceipt, ReceiptsState } from "./receiptStore.js";
 export type { KeptReceipt, ReceiptsState };
 import type { DriveSave, DriveState, RankedServer } from "./driveStore.js";
@@ -616,7 +616,7 @@ export type WorkerActionMap = {
   unlockAuth: [{ url: string; method: "GET" | "POST"; payload?: string }, { token: string }];
   /** The person's own limit on a payment with no receipt, kept with the account. */
   paySettingsLoad: [Record<string, never>, PaySettings];
-  paySettingsSave: [{ limitSats: number }, PaySettings];
+  paySettingsSave: [{ limitSats: number } | { addOrder: Omit<OpenOrder, "at"> } | { removeOrder: string }, PaySettings];
   receiptsLoad: [Record<string, never>, ReceiptsState];
   receiptsKeep: [{ receipts: KeptReceipt[] }, ReceiptsState];
   ecashLoad: [Record<string, never>, EcashState];

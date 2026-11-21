@@ -1927,7 +1927,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       } catch {
         throw new Error("That is not an address.");
       }
-      const known = UNLOCK_SERVICES.some((service) => service.endpoint === url.origin) || (isLocalAddress(selfOrigin()) && url.protocol === "http:" && /^(localhost|127\.0\.0\.1)$/u.test(url.hostname));
+      const known = UNLOCK_SERVICES.some((service) => service.endpoint === url.origin) || (isLocalAddress(selfOrigin()) && isLocalAddress(url.origin));
       if (typeof p.url !== "string" || p.url.length > 1000 || url.toString() !== p.url || url.username || url.password || !known) throw new Error("That is not a service BitLogin buys from.");
       if (p.method !== "GET" && p.method !== "POST") throw new Error("That is not something a selling service is asked.");
       const body = typeof p.payload === "string" && /^[0-9a-f]{64}$/u.test(p.payload) ? p.payload : "";

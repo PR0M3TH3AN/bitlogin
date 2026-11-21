@@ -374,8 +374,8 @@ export class WorkerClient {
   paySettingsLoad() {
     return this.call("paySettingsLoad", {});
   }
-  paySettingsSave(limitSats: number) {
-    return this.call("paySettingsSave", { limitSats });
+  paySettingsSave(change: WorkerActionMap["paySettingsSave"][0]) {
+    return this.call("paySettingsSave", change);
   }
   receiptsLoad() {
     return this.call("receiptsLoad", {});

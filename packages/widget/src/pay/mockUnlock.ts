@@ -18,8 +18,8 @@ const PROTOCOL = "seller-unlock-service-v1";
 interface Leg {
   role: "seller" | "bitunlock";
   amountSats: number;
-  rail: "lightning";
-  adapter: "lightning-nwc";
+  rail: "lightning" | "sandbox";
+  adapter: "lightning-nwc" | "mock";
   paymentRequest: string;
   paymentHash: string;
   status: "pending" | "settled" | "expired";
@@ -29,7 +29,7 @@ interface Order {
   orderId: string;
   productCoordinate: string;
   buyerPubkey: string;
-  state: "quoted" | "partially_paid" | "paid" | "fulfilled";
+  state: "quoted" | "partially_paid" | "paid" | "fulfilled" | "expired_pending_requote";
   legs: Leg[];
   totalSats: number;
   receipt?: NostrEvent;
@@ -52,6 +52,10 @@ export interface MockUnlock {
   comments: string[];
   /** Next unlock: give no receipt with it (it is then among the buyer's receipts). */
   omitReceipt: boolean;
+  /** Let an order's unpaid invoices run out, as ten minutes would. Asked about again, each gets a new one. */
+  expire(order: string): void;
+  /** Withdraw a listing, as its seller might: an order for it can then not be finished. */
+  withdraw(coordinate: string): void;
   /** Receipts taken back, by order. */
   revoked: Set<string>;
   orders: Map<string, Order>;
@@ -66,10 +70,20 @@ export interface MockUnlock {
  * `invoice(sats)` makes an invoice the test's mint can pay; `paid(invoice)`
  * says whether it has been. They stand for the seller's own wallet.
  */
-export async function startMockUnlock(wallet: { invoice(sats: number): string; paid(invoice: string): boolean }): Promise<MockUnlock> {
+export async function startMockUnlock(
+  wallet: { invoice(sats: number): string; paid(invoice: string): boolean },
+  /** `sandbox`: answer as BitUnlock's sandbox does: pretend payments, a session for every buyer call, and a route that settles one. */
+  options: { sandbox?: boolean } = {}
+): Promise<MockUnlock> {
+  const sandbox = options.sandbox === true;
+  const sessions = new Map<string, string>();
+  const settled = new Set<string>();
+  const withdrawn = new Set<string>();
+  const request = (sats: number, hash: string) => (sandbox ? `bitunlock-mock:1:${hash}` : wallet.invoice(sats));
   const service = new NostrSigner(generatePrivateKey());
   const listings = new Map<string, { priceSats: number; delivers: string; termSeconds: number }>();
   const nonces = new Set<string>();
+  const keys = new Map<string, string>();
   const now = () => Math.floor(Date.now() / 1000);
   const fail = (status: number, code: string): never => {
     throw Object.assign(new Error(code), { status, code });
@@ -100,6 +114,12 @@ export async function startMockUnlock(wallet: { invoice(sats: number): string; p
       return { event, coordinate, seller };
     },
     address: (name) => `${name}@${new URL(self.url).host}`,
+    expire(orderId) {
+      const order = self.orders.get(orderId)!;
+      for (const leg of order.legs) if (leg.status === "pending") leg.status = "expired";
+      if (order.state !== "fulfilled" && order.state !== "paid") order.state = "expired_pending_requote";
+    },
+    withdraw: (coordinate) => void withdrawn.add(coordinate),
     close: () => new Promise<void>((resolve) => server.close(() => resolve()))
   };
 
@@ -145,17 +165,22 @@ export async function startMockUnlock(wallet: { invoice(sats: number): string; p
     };
     return service.signEvent({ kind: 30078, created_at: issuedAt, tags: [["d", `bitunlock:entitlement:v1:${fulfillmentId}`]], content: JSON.stringify(document) });
   };
-  const look = (order: Order) => {
-    for (const leg of order.legs) if (leg.status === "pending" && wallet.paid(leg.paymentRequest)) leg.status = "settled";
-    const settled = order.legs.filter((leg) => leg.status === "settled").length;
-    if (order.state !== "fulfilled") order.state = settled === order.legs.length ? "paid" : settled > 0 ? "partially_paid" : "quoted";
+  const look = (order: Order, reissue = false) => {
+    for (const leg of order.legs) {
+      if (leg.status === "pending" && (sandbox ? settled.has(leg.paymentHash) : wallet.paid(leg.paymentRequest))) leg.status = "settled";
+      // Asked about again: an unpaid part whose invoice ran out is given a new one. A settled part never is.
+      if (leg.status === "expired" && reissue) Object.assign(leg, { status: "pending", paymentHash: hex(), expiresAt: now() + 600 }, {}), (leg.paymentRequest = request(leg.amountSats, leg.paymentHash));
+    }
+    const done = order.legs.filter((leg) => leg.status === "settled").length;
+    const ranOut = order.legs.some((leg) => leg.status === "expired");
+    if (order.state !== "fulfilled") order.state = done === order.legs.length ? "paid" : ranOut ? "expired_pending_requote" : done > 0 ? "partially_paid" : "quoted";
   };
 
-  const handle = (method: string, url: URL, authorization: string | undefined, raw: string): unknown => {
+  const handle = (method: string, url: URL, authorization: string | undefined, raw: string, sessionOf?: string): unknown => {
     const path = url.pathname;
     const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     if (method === "GET" && path === "/.well-known/bitunlock.json") {
-      const document = { schemaVersion: 1, product: "BitUnlock", protocolVersions: [PROTOCOL], status: "active", endpoint: self.url, servicePubkey: self.pubkey, policyCoordinate: `30078:${self.pubkey}:bitunlock:service-policy:v1`, paymentAdapters: ["lightning-nwc"], completionRule: "all", relays: [] };
+      const document = { schemaVersion: 1, product: "BitUnlock", protocolVersions: [PROTOCOL], status: "active", endpoint: self.url, servicePubkey: self.pubkey, policyCoordinate: `30078:${self.pubkey}:bitunlock:service-policy:v1`, paymentAdapters: [sandbox ? "mock" : "lightning-nwc"], completionRule: "all", relays: [] };
       return { schemaVersion: 1, signed: true, document, event: service.signEvent({ kind: 30078, created_at: now(), tags: [["d", "bitunlock:service-policy:v1"]], content: JSON.stringify(document) }) };
     }
     // A lightning address (LUD-16), for tips.
@@ -168,17 +193,48 @@ export async function startMockUnlock(wallet: { invoice(sats: number): string; p
       if (url.searchParams.has("comment")) self.comments.push(url.searchParams.get("comment")!);
       return { pr: wallet.invoice(sats), routes: [] };
     }
+    // A test service's own routes: a session, and settling a pretend payment with the session's token.
+    if (sandbox && method === "POST" && path === "/sandbox/v1/sessions") {
+      const made = { sessionId: `sess_${hex(8)}`, token: hex(24) };
+      sessions.set(made.sessionId, made.token);
+      return { ...made, clockAt: now(), expiresAt: now() + 3600 };
+    }
+    const settling = /^\/sandbox\/v1\/payments\/([0-9a-f]{64})\/settle$/u.exec(path);
+    if (sandbox && method === "POST" && settling) {
+      if (!sessionOf || sessions.get(sessionOf) !== /^Bearer (.+)$/u.exec(authorization ?? "")?.[1]) return fail(401, "sandbox_token_invalid");
+      if (![...self.orders.values()].some((o) => o.legs.some((leg) => leg.paymentHash === settling[1] && leg.status === "pending"))) return fail(404, "payment_not_found");
+      settled.add(settling[1]!);
+      return { paymentHash: settling[1], settledAt: now() };
+    }
     const buyer = buyerOf(method, url.toString(), authorization, raw);
+    if (sandbox && !sessions.has(sessionOf ?? "")) return fail(400, "sandbox_session_required");
     if (method === "POST" && path === "/v1/quotes") {
       const coordinate = String(body.productCoordinate);
       const listing = listings.get(coordinate);
       if (!listing || body.buyerPubkey !== buyer) return fail(404, "product_not_found");
+      if (withdrawn.has(coordinate)) return fail(409, "product_revoked");
+      // Asked again with the same key: the same order.
+      const same = [...self.orders.values()].find((o) => o.buyerPubkey === buyer && keys.get(o.orderId) === body.idempotencyKey);
+      if (same) return plan(same);
       const fee = Math.min(listing.priceSats - 1, Math.max(1, Math.floor(listing.priceSats / 100)));
-      const leg = (role: Leg["role"], amountSats: number): Leg => ({ role, amountSats, rail: "lightning", adapter: "lightning-nwc", paymentRequest: wallet.invoice(amountSats), paymentHash: hex(), status: "pending", expiresAt: now() + 600 });
+      const leg = (role: Leg["role"], amountSats: number): Leg => {
+        const paymentHash = hex();
+        return { role, amountSats, rail: sandbox ? "sandbox" : "lightning", adapter: sandbox ? "mock" : "lightning-nwc", paymentRequest: request(amountSats, paymentHash), paymentHash, status: "pending", expiresAt: now() + 600 };
+      };
       const order: Order = { orderId: `order_${hex(8)}`, productCoordinate: coordinate, buyerPubkey: buyer, state: "quoted", legs: [leg("seller", listing.priceSats - fee), leg("bitunlock", fee)], totalSats: listing.priceSats };
       self.orders.set(order.orderId, order);
+      keys.set(order.orderId, String(body.idempotencyKey));
       return plan(order);
     }
+    const one = /^\/v1\/orders\/(order_[0-9a-f]+)$/u.exec(path);
+    if (method === "GET" && one) {
+      const order = self.orders.get(one[1]!);
+      if (!order || order.buyerPubkey !== buyer) return fail(404, "order_not_found");
+      look(order);
+      return { orderId: order.orderId, productCoordinate: order.productCoordinate, buyerPubkey: order.buyerPubkey, state: order.state, paymentPlan: plan(order) };
+    }
+    // The sandbox has no list of a buyer's orders: an order is found again only by its id.
+    if (method === "GET" && path === "/v1/orders" && sandbox) return fail(404, "not_found");
     if (method === "GET" && path === "/v1/orders") {
       const mine = [...self.orders.values()].filter((o) => o.buyerPubkey === buyer && o.productCoordinate === url.searchParams.get("productCoordinate"));
       for (const order of mine) look(order);
@@ -191,7 +247,8 @@ export async function startMockUnlock(wallet: { invoice(sats: number): string; p
     const m = /^\/v1\/orders\/(order_[0-9a-f]+)\/(refresh|unlock)$/u.exec(path);
     const order = m ? self.orders.get(m[1]!) : undefined;
     if (method !== "POST" || !m || !order || order.buyerPubkey !== buyer) return fail(404, "order_not_found");
-    look(order);
+    if (m[2] === "refresh" && withdrawn.has(order.productCoordinate) && order.state !== "fulfilled") return fail(409, "product_revoked");
+    look(order, m[2] === "refresh");
     if (m[2] === "refresh") return plan(order);
     if (order.legs.some((leg) => leg.status !== "settled")) return fail(409, "payment_incomplete");
     order.receipt ??= receiptFor(order);
@@ -212,7 +269,8 @@ export async function startMockUnlock(wallet: { invoice(sats: number): string; p
       const url = new URL(req.url ?? "/", self.url);
       self.requests.push(`${req.method} ${url.pathname}`);
       try {
-        const out = handle(req.method ?? "GET", url, req.headers.authorization, Buffer.concat(chunks).toString("utf8"));
+        const session = req.headers["x-bitunlock-sandbox-session"];
+        const out = handle(req.method ?? "GET", url, req.headers.authorization, Buffer.concat(chunks).toString("utf8"), typeof session === "string" ? session : undefined);
         res.writeHead(200, { "content-type": "application/json", ...cors }).end(JSON.stringify(out));
       } catch (err) {
         const e = err as { status?: number; code?: string; message: string };

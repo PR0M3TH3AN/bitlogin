@@ -3,7 +3,7 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { cleanLightningAddress, cleanPayLimit, invoiceFromAddress, invoiceSats, lightningAddressOfProfile, overPayLimit, PAY_LIMIT, readWorld, tipNote } from "./lightning.js";
 import { belongsTo, bestReceipt, cleanCoordinate, localService, readListing, readReceipt, receiptGood, UNLOCK_SERVICES } from "./listing.js";
-import { completePurchase, createUnlockClient, PurchaseError, readPlan, type BuyerKeys } from "./unlock.js";
+import { completePurchase, createUnlockClient, newOrderKey, openSandboxSession, PurchaseError, readPlan, type BuyerKeys } from "./unlock.js";
 import { startMockUnlock, type MockUnlock } from "./mockUnlock.js";
 
 /** The seller's wallet, and the buyer's: an invoice is paid when the buyer's side says so. */
@@ -156,7 +156,7 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     const made = service.listing({ d: "key-to-the-vault", priceSats: 300, delivers: "open sesame" });
     const listing = readListing(made.event, made.coordinate, services)!;
     const client = createUnlockClient(services[0]!, buyerKeys(buyer));
-    expect(await client.policy()).toEqual({ relays: [] });
+    expect(await client.policy()).toEqual({ relays: [], sandbox: false });
     expect(await client.resume(listing)).toBeNull();
     const plan = await client.quote(listing);
     expect(plan.totalSats).toBe(300);
@@ -176,8 +176,9 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
         return { preimage: null };
       }
     });
-    expect(payments).toEqual(plan.legs.map((leg) => leg.invoice));
-    expect(steps).toEqual(["pay seller", "pay service", "unlock"]);
+    // The smallest part first, and the seller's last: a payment that stops half way strands the least.
+    expect(payments).toEqual([plan.legs[1]!.invoice, plan.legs[0]!.invoice]);
+    expect(steps).toEqual(["pay service", "pay seller", "unlock"]);
     expect(done.delivery).toBe("open sesame");
     expect(done.receipt).toMatchObject({ listing: made.coordinate, buyer: buyer.getPublicKey(), seller: made.seller.getPublicKey(), order: plan.order, expiresAt: 0, service: service.pubkey });
     // What a world checks: the service's signature, the listing, the buyer, that it hasn't run out.
@@ -220,7 +221,7 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     // A payment the service never sees arrive is said, and not paid again here.
     const stuck = await client.quote(readListing(service.listing({ d: "stuck", priceSats: 50, seller: made.seller }).event, `30078:${made.seller.getPublicKey()}:stuck`, services)!);
     // The money went (as far as the wallet knows), so it is said to have: how much, and that the rest didn't go.
-    await expect(completePurchase({ client, listing: { ...listing, coordinate: `30078:${made.seller.getPublicKey()}:stuck`, priceSats: 50 }, plan: stuck, wait: async () => {}, tries: 2, pay: async () => ({}) })).rejects.toMatchObject({ name: "PartPaidError", paidSats: 49, cause_: { code: "not-settled" } });
+    await expect(completePurchase({ client, listing: { ...listing, coordinate: `30078:${made.seller.getPublicKey()}:stuck`, priceSats: 50 }, plan: stuck, wait: async () => {}, tries: 2, pay: async () => ({}) })).rejects.toMatchObject({ name: "PartPaidError", paidSats: 1, cause_: { code: "not-settled" } });
     // The first part is paid and the second fails outright: one part's worth is said to have gone, and the order is taken up again later.
     const half = service.listing({ d: "half", priceSats: 500, seller: made.seller });
     const halfListing = readListing(half.event, half.coordinate, services)!;
@@ -232,10 +233,11 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
         paid.add(leg.invoice);
         return {};
       } })
-    ).rejects.toMatchObject({ name: "PartPaidError", paidSats: 495 });
+    ).rejects.toMatchObject({ name: "PartPaidError", paidSats: 5 });
+    // Five sats went, to the service, and not four hundred and ninety-five to the seller.
     const later = await client.resume(halfListing);
     expect(later?.order).toBe(halfPlan.order);
-    expect(later?.legs.map((leg) => leg.status)).toEqual(["settled", "pending"]);
+    expect(later?.legs.map((leg) => [leg.role, leg.status])).toEqual([["seller", "pending"], ["service", "settled"]]);
     const finished = await completePurchase({ client, listing: halfListing, plan: later!, wait: async () => {}, pay: async (leg) => (paid.add(leg.invoice), {}) });
     expect(finished.receipt.order).toBe(halfPlan.order);
     // Nothing paid at all: the plain error, and no word of money having gone.
@@ -271,5 +273,87 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     expect(belongsTo(listing, { publishers: ["ef".repeat(32)], site: "https://w.example" })).toBe(false);
     expect(belongsTo(listing, { publishers: [], site: "https://w.example" }, "https://w.example")).toBe(true);
     expect(belongsTo(listing, { publishers: [], site: "https://w.example" }, "https://other.example")).toBe(false);
+  });
+
+  it("keeps the same order when asked again with the same key, gives a run-out part a new invoice, and says when it was withdrawn", async () => {
+    const services = [localService(service.named)!];
+    const buyer = new NostrSigner(generatePrivateKey());
+    const made = service.listing({ d: "week pass", priceSats: 700 });
+    const listing = readListing(made.event, made.coordinate, services)!;
+    const client = createUnlockClient(services[0]!, buyerKeys(buyer));
+    const key = newOrderKey();
+    const plan = await client.quote(listing, key);
+    expect((await client.quote(listing, key)).order).toBe(plan.order);
+    expect((await client.quote(listing)).order).not.toBe(plan.order);
+    // The fee part is paid, and then ten minutes pass with the seller's part unpaid.
+    paid.add(plan.legs[1]!.invoice);
+    await client.refresh(listing, plan.order);
+    service.expire(plan.order);
+    // Taken up again by the id BitLogin kept: the settled part stays settled, and the other has a new invoice.
+    const again = await client.resume(listing, plan.order);
+    expect(again?.order).toBe(plan.order);
+    expect(again?.legs.map((leg) => [leg.role, leg.status])).toEqual([["seller", "pending"], ["service", "settled"]]);
+    expect(again?.legs[0]!.invoice).not.toBe(plan.legs[0]!.invoice);
+    // An id that is nobody's, or another buyer's, is no order.
+    expect(await client.resume(listing, "order_0000000000000000")).toBeNull();
+    expect(await createUnlockClient(services[0]!, buyerKeys(new NostrSigner(generatePrivateKey()))).resume(listing, plan.order)).toBeNull();
+    // The seller withdraws it while it is half paid: it can't be finished, and that is what is said.
+    service.withdraw(made.coordinate);
+    await expect(client.resume(listing, plan.order)).rejects.toMatchObject({ code: "withdrawn" });
+    await expect(client.refresh(listing, plan.order)).rejects.toMatchObject({ code: "withdrawn" });
+    await expect(client.quote(listing)).rejects.toMatchObject({ code: "sold" });
+  });
+});
+
+describe("a test service with pretend sats, as BitUnlock's sandbox is (docs/paying.md PY12)", () => {
+  it("is bought from with a session and a settle call, and no wallet", async () => {
+    const test = await startMockUnlock(wallet, { sandbox: true });
+    try {
+      const named = localService(test.named)!;
+      const buyer = new NostrSigner(generatePrivateKey());
+      const made = test.listing({ d: "season pass", priceSats: 500, tags: [["nswp:term", "86400"]], termSeconds: 86_400 });
+      const listing = readListing(made.event, made.coordinate, [named])!;
+      // Without a session it is not a service anything can be bought from.
+      const plain = createUnlockClient(named, buyerKeys(buyer));
+      expect(await plain.policy()).toEqual({ relays: [], sandbox: true });
+      await expect(plain.quote(listing)).rejects.toThrow();
+      await expect(plain.settle("ab".repeat(32))).rejects.toMatchObject({ code: "plan" });
+
+      const session = await openSandboxSession(named);
+      const client = createUnlockClient(named, buyerKeys(buyer), { sandbox: session });
+      const plan = await client.quote(listing, newOrderKey());
+      expect(plan.legs.map((leg) => [leg.role, leg.sats])).toEqual([["seller", 495], ["service", 5]]);
+      expect(plan.legs.every((leg) => /^bitunlock-mock:1:[0-9a-f]{64}$/u.test(leg.invoice))).toBe(true);
+      // It has no list of orders: an order is found again only by the id that was kept.
+      expect(await client.resume(listing)).toBeNull();
+      expect((await client.resume(listing, plan.order))?.order).toBe(plan.order);
+      const done = await completePurchase({ client, listing, plan, wait: async () => {}, pay: async (leg) => (await client.settle(leg.hash), {}) });
+      expect(readReceipt(done.receipt.event, [named])).toEqual(done.receipt);
+      expect(done.receipt.expiresAt - done.receipt.issuedAt).toBe(86_400);
+      // Its key is not the real service's: nowhere real believes the receipt.
+      expect(readReceipt(done.receipt.event)).toBeNull();
+      // Another session's token settles nothing.
+      const other = await openSandboxSession(named);
+      const next = await client.quote(listing, newOrderKey());
+      await expect(createUnlockClient(named, buyerKeys(buyer), { sandbox: { sessionId: session.sessionId, token: other.token } }).settle(next.legs[0]!.hash)).rejects.toMatchObject({ code: "service" });
+    } finally {
+      await test.close();
+    }
+  });
+
+  it("is refused outright anywhere a test service is not being tried: a pretend request never reaches a wallet", () => {
+    const buyer = "ab".repeat(32);
+    const listing = `30078:${"cd".repeat(32)}:thing`;
+    const hash = "ef".repeat(32);
+    const plan = { orderId: "order_0123456789abcdef", productCoordinate: listing, buyerPubkey: buyer, currency: "SAT", completionRule: "all", totalSats: 500, legs: [{ role: "seller", amountSats: 500, rail: "sandbox", adapter: "mock", paymentRequest: `bitunlock-mock:1:${hash}`, paymentHash: hash, status: "pending" }] };
+    expect(() => readPlan(plan, { listing, buyer, priceSats: 500 })).toThrow(PurchaseError);
+    expect(readPlan(plan, { listing, buyer, priceSats: 500, sandbox: true }).legs[0]!.invoice).toBe(`bitunlock-mock:1:${hash}`);
+    // And a test service is never handed a real invoice's worth of trust: a Lightning part is not taken in its plan.
+    expect(() => readPlan({ ...plan, legs: [{ ...plan.legs[0], rail: "lightning", adapter: "lightning-nwc", paymentRequest: wallet.invoice(500) }] }, { listing, buyer, priceSats: 500, sandbox: true })).toThrow(PurchaseError);
+    // A test service is named only at an address on this machine or a private network.
+    const key = "ab".repeat(32);
+    expect(localService(`https://192.168.68.84:4312|${key}`)).toEqual({ endpoint: "https://192.168.68.84:4312", pubkey: key });
+    expect(localService(`https://localhost:8789|${key}`)).toEqual({ endpoint: "https://localhost:8789", pubkey: key });
+    for (const far of ["https://sandbox.bitunlock.network", "https://8.8.8.8:4312", "https://192.169.1.1", "https://172.32.0.1", "ftp://127.0.0.1"]) expect(localService(`${far}|${key}`)).toBeNull();
   });
 });

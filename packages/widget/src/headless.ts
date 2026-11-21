@@ -24,7 +24,7 @@ import { WorkerClient } from "./worker/workerClient.js";
 import type { RankedMint } from "./ecash/mints.js";
 import type { DriveSave, DriveState, RankedServer } from "./worker/driveStore.js";
 import type { KeptReceipt, ReceiptsState } from "./worker/receiptStore.js";
-import type { PaySettings } from "./worker/paySettings.js";
+import type { OpenOrder, PaySettings } from "./worker/paySettings.js";
 import type { EcashRoll, EcashState, KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import type { WorldMore } from "./embedded/follows.js";
@@ -135,6 +135,9 @@ export interface HeadlessSigner {
     /** The most a site may ask for at once with no receipt, in sats (0: no limit), kept with the account. */
     settings(): Promise<PaySettings>;
     setLimit(limitSats: number): Promise<PaySettings>;
+    /** Remember a purchase begun, before its first payment; and let one go, once it is finished or can't be. */
+    keepOrder(order: Omit<OpenOrder, "at">): Promise<PaySettings>;
+    dropOrder(order: string): Promise<PaySettings>;
   };
   /**
    * The account's ecash wallet (docs/ecash.md), for BitLogin's own pages: what it holds, its mints, and the
@@ -351,7 +354,15 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       },
       async setLimit(limitSats) {
         await requirePubkey();
-        return client.paySettingsSave(limitSats);
+        return client.paySettingsSave({ limitSats });
+      },
+      async keepOrder(order) {
+        await requirePubkey();
+        return client.paySettingsSave({ addOrder: order });
+      },
+      async dropOrder(order) {
+        await requirePubkey();
+        return client.paySettingsSave({ removeOrder: order });
       }
     },
     drive: {

@@ -63,6 +63,27 @@ const hasAny = (pubkey) => {
   }
 };
 
+/**
+ * A test service's session (BitUnlock's sandbox), kept for as long as this page is: every buyer call carries its
+ * id, and its token settles a pretend payment. Made only on a local copy of BitLogin, for a service named there.
+ */
+const sandboxSession = async (service) => {
+  const at = `bitlogin:sandbox:v1:${service.endpoint}`;
+  try {
+    const kept = JSON.parse(window.sessionStorage.getItem(at) ?? "null");
+    if (kept?.sessionId && kept?.token) return kept;
+  } catch {
+    /* a new one is made */
+  }
+  const made = await lib.openSandboxSession(service);
+  try {
+    window.sessionStorage.setItem(at, JSON.stringify(made));
+  } catch {
+    /* it lasts as long as this purchase does */
+  }
+  return made;
+};
+
 /** The account's receipts, each read and checked: only those a known service signed, for this account. */
 const kept = async (worker, pubkey) => {
   const services = servicesKnown();
@@ -128,7 +149,9 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     $("shop-working").textContent = text;
   };
   $("shop-close").onclick = () => finish(null);
-  $("shop-site").textContent = request.site;
+  // Asked by a site, or opened from Purchases to finish something: then there is no site to name, or to answer.
+  $("shop-for").hidden = !request.site;
+  $("shop-site").textContent = request.site || "";
   $("shop").hidden = false;
   show("loading");
   resize("tall");
@@ -144,9 +167,9 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     const held = lib.bestReceipt(mine.receipts.filter((item) => item.receipt.listing === request.listing).map((item) => item.receipt), { buyer: pubkey, listing: request.listing, now: Date.now() / 1000 });
     if (held) {
       const item = mine.receipts.find((entry) => entry.receipt.event.id === held.event.id);
-      const world = await lib.readWorld(request.site, { local });
+      const world = request.site ? await lib.readWorld(request.site, { local }) : { publishers: [] };
       // Its own listing, and the person lets worlds be told: the receipt is handed over as `have` would hand it.
-      if (tellsWorlds(pubkey) && lib.belongsTo(held.listing, { publishers: world.publishers, site: request.site }, item?.via)) {
+      if (!request.site || (tellsWorlds(pubkey) && lib.belongsTo(held.listing, { publishers: world.publishers, site: request.site }, item?.via))) {
         // Said for a moment, so a press isn't met with nothing.
         stop(`You already have this. ${lasts(held)} Nothing was charged.`);
         $("shop-nav").hidden = true;
@@ -174,6 +197,13 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     const at = clients.findIndex(({ service }) => service.pubkey === listing.service.pubkey);
     if (!policies[at]) return stop(`${host(listing.service.endpoint)}, which sells this, didn't answer. Nothing was spent.`);
     client = clients[at].client;
+    // A test service, with pretend sats (BitUnlock's sandbox): tried only on a local copy of BitLogin. Its policy
+    // says so itself. It is given a session of its own, and what it is owed is settled by a call and by no wallet.
+    const pretend = policies[at].sandbox === true;
+    if (pretend) {
+      if (!local) return stop("This names a test service, which is tried only on a test copy of BitLogin. Nothing was spent.");
+      client = lib.createUnlockClient(listing.service, keys, { sandbox: await sandboxSession(listing.service) });
+    }
 
     // The service's own record of this account's receipts: one bought on another device is found here, and kept.
     const theirs = await client.receipts().catch(() => []);
@@ -184,17 +214,38 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
       return void openShop({ worker, pubkey, resize, request, done, openWallet }, true);
     }
 
-    wallet = lib.createEcashWallet(worker.ecash);
-    await wallet.open();
-    // A purchase begun before, and paid in part or in whole, is taken up again: never a second charge for it.
-    let plan = (await client.resume(listing)) ?? (await client.quote(listing));
+    if (!pretend) {
+      wallet = lib.createEcashWallet(worker.ecash);
+      await wallet.open();
+    }
+    // A purchase begun before is taken up again, by the order BitLogin kept the id of: never a second order beside
+    // one that is open, and never a second charge for a part that was paid.
+    const settings = await worker.pay.settings().catch(() => ({ orders: [] }));
+    let open = settings.orders.find((o) => o.listing === listing.coordinate && o.service === listing.service.endpoint) ?? null;
+    let plan = null;
+    try {
+      plan = open ? await client.resume(listing, open.order) : null;
+      // The order it kept is finished or gone: it is let go, and the service is asked whether it knows of another.
+      if (open && !plan) {
+        await worker.pay.dropOrder(open.order).catch(() => null);
+        open = null;
+      }
+      plan ??= await client.resume(listing);
+    } catch (err) {
+      if (err?.code !== "withdrawn") throw err;
+      // It can't be finished. Said plainly, with what went: nothing here pretends otherwise.
+      if (open) await worker.pay.dropOrder(open.order).catch(() => null);
+      return stop(`${open?.title || listing.title} was withdrawn by its seller, and can't be finished. Anything you paid toward it went to the seller or to ${host(listing.service.endpoint)}, and can't be taken back from here: ask the seller.`);
+    }
+    const key = open?.key ?? lib.newOrderKey();
+    plan ??= await client.quote(listing, key);
     const seller = await worker.pay.profile(listing.seller).catch(() => ({ name: "" }));
 
     // What each unpaid part costs to send, from the mint: before anything is spent.
     const due = plan.legs.filter((leg) => leg.status !== "settled");
     const quotes = new Map();
     let fees = 0;
-    if (wallet.state().mints.length > 0) {
+    if (!pretend && wallet.state().mints.length > 0) {
       for (const leg of due) {
         const quoted = await wallet.quote(leg.invoice);
         if (quoted.amount !== leg.sats) return stop("The seller's service answered with a payment plan that doesn't match what was asked. Nothing was spent.");
@@ -203,7 +254,7 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
       }
     }
     const owed = due.reduce((sum, leg) => sum + leg.sats, 0);
-    const have = wallet.balance();
+    const have = pretend ? 0 : wallet.balance();
     const mint = quotes.size ? [...quotes.values()][0].mint : "";
     const line = (label, value) => {
       const row = document.createElement("div");
@@ -221,16 +272,16 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     $("shop-price").textContent = plan.totalSats.toLocaleString();
     $("shop-lines").replaceChildren(
       ...plan.legs.map((leg) => line(`${who[leg.role] ?? "To another party"}${leg.status === "settled" ? " (paid already)" : ""}`, sats(leg.sats))),
-      ...(quotes.size ? [line("Routing fees, at most", sats(fees)), line("From", host(mint)), line("You hold", sats(have))] : [])
+      ...(pretend ? [line("Paid with", "pretend sats: a test service")] : quotes.size ? [line("Routing fees, at most", sats(fees)), line("From", host(mint)), line("You hold", sats(have))] : [])
     );
     $("shop-service").textContent = host(listing.service.endpoint);
     $("shop-lasts").textContent = listing.termSeconds ? `It lasts ${Math.round(listing.termSeconds / 86_400) || 1} ${Math.round(listing.termSeconds / 86_400) > 1 ? "days" : "day"}.` : "The receipt says how long it lasts.";
-    const short = quotes.size === 0 || have < owed + fees;
+    const short = !pretend && (quotes.size === 0 || have < owed + fees);
     $("shop-short").hidden = !short;
-    $("shop-short").textContent = quotes.size === 0 ? "You have no ecash wallet yet. Open your wallet, add sats, then ask again from the site." : short ? `This needs up to ${sats(owed + fees)}, and you hold ${sats(have)}. Open your wallet, add sats, then ask again from the site.` : "";
+    $("shop-short").textContent = !short ? "" : quotes.size === 0 ? "You have no ecash wallet yet. Open your wallet, add sats, then ask again." : `This needs up to ${sats(owed + fees)}, and you hold ${sats(have)}. Open your wallet, add sats, then ask again.`;
     $("shop-yes").hidden = short;
     $("shop-yes").disabled = false;
-    $("shop-yes").textContent = owed === 0 ? "Finish, nothing more to pay" : `Pay ${sats(owed)}`;
+    $("shop-yes").textContent = owed === 0 ? "Finish, nothing more to pay" : owed < plan.totalSats ? `Pay the ${sats(owed)} that is left` : `Pay ${sats(owed)}`;
     $("shop-wallet").hidden = !short;
     show("confirm");
     resize("tall");
@@ -245,26 +296,38 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
       $("shop-yes").disabled = true;
       working("Paying.");
       try {
+        // The order is kept with the account before a sat moves: its id, and the key it was asked with. If that
+        // can't be written down, nothing is paid.
+        try {
+          await worker.pay.keepOrder({ listing: listing.coordinate, order: plan.order, key, service: listing.service.endpoint, title: listing.title, via: request.site || "" });
+        } catch {
+          return stop("This purchase couldn't be written down first, so nothing was paid. Ask again.");
+        }
         const bought = await lib.completePurchase({
           client,
           listing,
           plan,
           progress: (step) => working("paying" in step ? `Paying ${sats(step.paying.sats)} ${step.paying.role === "seller" ? "to the seller" : step.paying.role === "service" ? `to ${host(listing.service.endpoint)}` : "to another party"}.` : "Paid. Fetching your receipt."),
           pay: async (leg) => {
+            if (pretend) return client.settle(leg.hash).then(() => ({}));
             const quoted = quotes.get(leg.hash) ?? (await wallet.quote(leg.invoice));
             if (quoted.amount !== leg.sats) throw new Error("A part of the payment plan changed. Nothing more was spent.");
             return wallet.pay(quoted);
           }
         });
         // Kept before the site hears of it: in this browser first, then on the account's relays.
-        const saved = await worker.pay.keep([{ event: bought.receipt.event, title: listing.title, via: request.site }]).catch(() => null);
+        const saved = await worker.pay.keep([{ event: bought.receipt.event, title: listing.title, via: request.site || "" }]).catch(() => null);
+        await worker.pay.dropOrder(plan.order).catch(() => null);
         stop(`Bought. ${lasts(bought.receipt)}${saved ? "" : " The receipt couldn't be kept just now: the seller's service holds it too, and it is fetched again when you next ask."}`);
         $("shop-nav").hidden = true;
         setTimeout(() => finish({ receipt: bought.receipt.event, ...(bought.delivery ? { delivery: bought.delivery } : {}) }), 1400);
       } catch (err) {
         // Stopped after money went: said plainly, with how much, that there is no receipt yet, and how it is finished.
-        if (err?.name === "PartPaidError") return stop(`${sats(err.paidSats)} of this was paid, and the rest didn't go. You have no receipt yet, and what was paid can't be taken back from here. Ask again from the site to finish: what was paid is counted, and never charged twice.`);
-        stop(err?.message || "That didn't work. Ask again from the site: anything already paid is counted, and never charged twice.");
+        if (err?.name === "PartPaidError" && err.cause_?.code === "withdrawn") return stop(`${sats(err.paidSats)} of this was paid, and then its seller withdrew it, so it can't be finished. What was paid can't be taken back from here: ask the seller.`);
+        if (err?.name === "PartPaidError") return stop(`${sats(err.paidSats)} of this was paid, and the rest didn't go. You have no receipt yet, and what was paid can't be taken back from here. It is kept under Purchases as not finished: finish it there, or ask again from the site. What was paid is counted, and never charged twice.`);
+        // Nothing went: the order need not be remembered.
+        await worker.pay.dropOrder(plan.order).catch(() => null);
+        stop(err?.message || "That didn't work, and nothing was paid.");
       }
     };
   } catch (err) {
@@ -276,6 +339,8 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
 export async function openLibrary({ worker, pubkey, resize, done }) {
   $("library").hidden = false;
   $("library-list").replaceChildren();
+  $("library-open").replaceChildren();
+  $("library-open-row").hidden = true;
   $("library-empty").hidden = true;
   $("library-note").textContent = "Opening your receipts.";
   $("library-tell").checked = tellsWorlds(pubkey);
@@ -307,6 +372,31 @@ export async function openLibrary({ worker, pubkey, resize, done }) {
       }
       for (const row of rows) status.set(row.receipt.event.id, row.status);
     }
+    // Purchases begun and not finished: shown as that, each with one press to finish it. Never as bought.
+    const settings = await worker.pay.settings().catch(() => ({ orders: [] }));
+    $("library-open-row").hidden = settings.orders.length === 0;
+    $("library-open").replaceChildren(
+      ...settings.orders.map((order) => {
+        const row = document.createElement("li");
+        const what = document.createElement("span");
+        what.className = "library-what";
+        const name = document.createElement("strong");
+        name.textContent = order.title || order.listing.slice(71);
+        const where = document.createElement("small");
+        where.textContent = `Not finished. ${order.via ? `Begun at ${host(order.via)}, ` : "Begun "}${day(order.at)}.`;
+        what.append(name, where);
+        const go = document.createElement("button");
+        go.type = "button";
+        go.className = "btn secondary";
+        go.textContent = "Finish";
+        go.onclick = () => {
+          $("library").hidden = true;
+          void openShop({ worker, pubkey, resize, request: { site: "", listing: order.listing }, done: () => void openLibrary({ worker, pubkey, resize, done }) });
+        };
+        row.append(what, go);
+        return row;
+      })
+    );
     const now = Date.now() / 1000;
     $("library-note").textContent = mine.offline
       ? "No relay answered, so this is the copy kept in this browser."

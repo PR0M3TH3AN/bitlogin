@@ -277,3 +277,42 @@ later one is not:
 What BitLogin can't do: get back what went to the seller if the purchase
 is never finished. That is the seller's to refund, or BitUnlock's to
 settle.
+
+**Kept before paying, and paid in an order that strands the least** (the
+coordinator's answer for the owner, 2026-11-21, from how BitUnlock treats
+a half-paid order):
+
+- The order's id and the key its quote was asked with are kept with the
+  account before the first payment: in the browser first, then in the
+  sealed settings record (PY5). If that can't be written, nothing is paid.
+- The smallest part is paid first and the seller's last, so a payment
+  that stops half way strands the fee and not the price.
+- An order is found again by the id that was kept, in whatever state short
+  of finished, and asked about again: what was paid is counted, and a part
+  whose invoice ran out unpaid is given a new one. Never a second order
+  for a listing that has one open.
+- Purchases shows it under "Not finished", with one press to finish it.
+  Nothing is shown as bought until every part is settled, the order is
+  unlocked, and the receipt passes its check.
+- If the seller withdrew the listing meanwhile, the page says it can't be
+  finished and that what was paid went to the seller or the service.
+
+## PY12. A test service with pretend sats
+
+BitUnlock's sandbox signs real receipts over pretend money. It is tried
+**only on a local copy of BitLogin** (owner's decision 30 allows beta too,
+once the sandbox has an address; it is not built for beta yet):
+
+- It is named on the local copy's own pages, as in PY10, and may be an
+  `https:` address on this machine or a private network. Its key is
+  believed there and nowhere else.
+- Its signed policy says `paymentAdapters: ["mock"]`. Then the page opens
+  a session of its own (`POST /sandbox/v1/sessions`), sends
+  `X-BitUnlock-Sandbox-Session` with every buyer call, shows "pretend
+  sats: a test service", and settles each part with
+  `POST /sandbox/v1/payments/<hash>/settle` in place of a wallet.
+- Anywhere a test service is not being tried, a `bitunlock-mock:` request
+  fails the plan check and never reaches a wallet. A test service's plan
+  with a Lightning part in it is refused too.
+- Not in a browser test: the code that reads and pays is tested against a
+  pretend sandbox, and the screen is to be tried against BitUnlock's own.

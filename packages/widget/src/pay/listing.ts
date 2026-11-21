@@ -31,15 +31,17 @@ export const UNLOCK_SERVICES: readonly UnlockService[] = [{ endpoint: "https://a
 
 /**
  * A service a local copy of BitLogin is tried against, written as
- * `http://127.0.0.1:8788|<its key>`. Read only where BitLogin itself is
- * served from this machine: the real address knows the list above and no other.
+ * `http://127.0.0.1:8788|<its key>`: an address on this machine or a private
+ * network, and never one on the internet. Read only where BitLogin itself is
+ * a local copy: the real address knows the list above and no other.
  */
+const NEAR = /^(?:localhost|127(?:\.[0-9]{1,3}){3}|10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})$/u;
 export function localService(input: unknown): UnlockService | null {
   if (typeof input !== "string" || input.length > 300) return null;
   const [endpoint, pubkey] = input.split("|");
   try {
     const url = new URL(endpoint ?? "");
-    if (url.protocol !== "http:" || !/^(localhost|127\.0\.0\.1)$/u.test(url.hostname) || url.origin !== endpoint) return null;
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || !NEAR.test(url.hostname) || url.origin !== endpoint) return null;
     return pubkey && HEX64.test(pubkey) ? { endpoint: url.origin, pubkey } : null;
   } catch {
     return null;
