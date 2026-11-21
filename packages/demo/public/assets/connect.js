@@ -361,6 +361,8 @@ const askBuy = async () => {
     pubkey: who.pubkey,
     resize: (size) => toClient({ t: "size", size }),
     request: { site: found.site, listing: found.ask.listing },
+    // The page showing this panel is the client that brought the buyer. In a window of BitLogin's own there is none.
+    client: inPanel && client ? client : "",
     openWallet: () => (wantsWallet = true),
     done: async (bought) => {
       if (!wantsWallet) return void answered(bought ? { bought } : null, "Done. The site has your receipt.");

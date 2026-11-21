@@ -124,6 +124,14 @@ export const BUYING_OPEN_AT: readonly string[] = ["https://bitlogin-beta.vercel.
 export const buyingOpenAt = (origin: unknown): boolean => typeof origin === "string" && (BUYING_OPEN_AT.includes(origin) || isLocalAddress(origin));
 
 /**
+ * Where a listing whose price is divided between several people is sold (docs/paying.md PY14): a local copy, and
+ * nowhere else yet. Built and tried, and left switched off, on the owner's word (2026-11-21). Anywhere else such a
+ * listing is not shown for sale at all. Opening it is the owner's decision, made by adding an address here.
+ */
+export const SHARES_OPEN_AT: readonly string[] = [];
+export const sharesOpenAt = (origin: unknown): boolean => typeof origin === "string" && (SHARES_OPEN_AT.includes(origin) || isLocalAddress(origin));
+
+/**
  * The reserved kinds a site may hold, given the address BitLogin itself is running at.
  *
  * At BitLogin's real address they are a named address's and nobody else's. Where BitLogin is itself a local

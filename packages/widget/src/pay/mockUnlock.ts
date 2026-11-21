@@ -11,12 +11,15 @@ import { createHash } from "node:crypto";
 import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
+import { readShares, splitPrice } from "./shares.js";
 
 const hex = (n = 32): string => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
 const PROTOCOL = "seller-unlock-service-v1";
 
 interface Leg {
-  role: "seller" | "bitunlock";
+  role: "seller" | "bitunlock" | "share";
+  recipientPubkey?: string;
+  label?: string;
   amountSats: number;
   rail: "lightning" | "sandbox";
   adapter: "lightning-nwc" | "mock";
@@ -58,6 +61,10 @@ export interface MockUnlock {
   expire(order: string): void;
   /** Withdraw a listing, as its seller might: an order for it can then not be finished. */
   withdraw(coordinate: string): void;
+  /** The keys registered here to be paid a share. A client named in a quote is paid only if it is one. */
+  payees: Set<string>;
+  /** Next quote for a shared listing: answer wrongly, as a service that cheats would. */
+  cheat: "" | "amount" | "who" | "drop" | "extra";
   /** Receipts taken back, by order. */
   revoked: Set<string>;
   orders: Map<string, Order>;
@@ -83,7 +90,7 @@ export async function startMockUnlock(
   const withdrawn = new Set<string>();
   const request = (sats: number, hash: string) => (sandbox ? `bitunlock-mock:1:${hash}` : wallet.invoice(sats));
   const service = new NostrSigner(generatePrivateKey());
-  const listings = new Map<string, { priceSats: number; delivers: string; termSeconds: number }>();
+  const listings = new Map<string, { priceSats: number; delivers: string; termSeconds: number; tags: string[][]; seller: string }>();
   const nonces = new Set<string>();
   const keys = new Map<string, string>();
   const now = () => Math.floor(Date.now() / 1000);
@@ -100,6 +107,8 @@ export async function startMockUnlock(
     comments: [],
     omitReceipt: false,
     failUnlocks: 0,
+    payees: new Set(),
+    cheat: "",
     revoked: new Set(),
     orders: new Map(),
     requests: [],
@@ -113,7 +122,7 @@ export async function startMockUnlock(
         tags: [["d", input.d], ["price", String(input.priceSats), "SAT"], ["status", "active"], ["br:delivery", PROTOCOL], ["br:delivery-mode", "static"], ["br:unlock-service", self.url], ["br:unlock-service-pubkey", self.pubkey], ["br:unlock-policy", `30078:${self.pubkey}:bitunlock:service-policy:v1`], ["br:claim-epoch", "1"], ...(input.tags ?? [])]
       });
       const coordinate = `30078:${seller.getPublicKey()}:${input.d}`;
-      listings.set(coordinate, { priceSats: input.priceSats, delivers: input.delivers ?? "", termSeconds: input.termSeconds ?? 0 });
+      listings.set(coordinate, { priceSats: input.priceSats, delivers: input.delivers ?? "", termSeconds: input.termSeconds ?? 0, tags: event.tags, seller: seller.getPublicKey() });
       return { event, coordinate, seller };
     },
     address: (name) => `${name}@${new URL(self.url).host}`,
@@ -183,7 +192,7 @@ export async function startMockUnlock(
     const path = url.pathname;
     const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     if (method === "GET" && path === "/.well-known/bitunlock.json") {
-      const document = { schemaVersion: 1, product: "BitUnlock", protocolVersions: [PROTOCOL], status: "active", endpoint: self.url, servicePubkey: self.pubkey, policyCoordinate: `30078:${self.pubkey}:bitunlock:service-policy:v1`, paymentAdapters: [sandbox ? "mock" : "lightning-nwc"], completionRule: "all", relays: [] };
+      const document = { schemaVersion: 1, product: "BitUnlock", protocolVersions: [PROTOCOL], status: "active", endpoint: self.url, servicePubkey: self.pubkey, policyCoordinate: `30078:${self.pubkey}:bitunlock:service-policy:v1`, paymentAdapters: [sandbox ? "mock" : "lightning-nwc"], completionRule: "all", feePolicy: { feeBps: 100, minimumSats: 1, maximumSats: 5000 }, relays: [] };
       return { schemaVersion: 1, signed: true, document, event: service.signEvent({ kind: 30078, created_at: now(), tags: [["d", "bitunlock:service-policy:v1"]], content: JSON.stringify(document) }) };
     }
     // A lightning address (LUD-16), for tips.
@@ -220,11 +229,27 @@ export async function startMockUnlock(
       const same = [...self.orders.values()].find((o) => o.buyerPubkey === buyer && keys.get(o.orderId) === body.idempotencyKey);
       if (same) return plan(same);
       const fee = Math.min(listing.priceSats - 1, Math.max(1, Math.floor(listing.priceSats / 100)));
-      const leg = (role: Leg["role"], amountSats: number): Leg => {
+      const leg = (role: Leg["role"], amountSats: number, share?: { to: string; label: string }): Leg => {
         const paymentHash = hex();
-        return { role, amountSats, rail: sandbox ? "sandbox" : "lightning", adapter: sandbox ? "mock" : "lightning-nwc", paymentRequest: request(amountSats, paymentHash), paymentHash, status: "pending", expiresAt: now() + 600 };
+        return { role, ...(share ? { recipientPubkey: share.to, label: share.label } : {}), amountSats, rail: sandbox ? "sandbox" : "lightning", adapter: sandbox ? "mock" : "lightning-nwc", paymentRequest: request(amountSats, paymentHash), paymentHash, status: "pending", expiresAt: now() + 600 };
       };
-      const order: Order = { orderId: `order_${hex(8)}`, productCoordinate: coordinate, buyerPubkey: buyer, state: "quoted", legs: [leg("seller", listing.priceSats - fee), leg("bitunlock", fee)], totalSats: listing.priceSats };
+      // A price shared between several people: divided by the rule, the seller's part and the fee first, as the
+      // real service lays a plan out, then one part for each other person. A client is paid only if registered here.
+      const read = readShares(listing.tags, listing.seller);
+      if (!read.ok) return fail(409, "shares_unavailable");
+      const client = typeof body.clientPubkey === "string" && self.payees.has(body.clientPubkey) ? body.clientPubkey : undefined;
+      const split = splitPrice(listing.priceSats, read.shares, listing.seller, { ...(client ? { client } : {}), charge: fee });
+      if (!split.ok) return fail(409, "shares_unavailable");
+      let others = split.parts.filter((part) => !part.seller).map((part) => ({ ...part }));
+      let forSeller = split.parts.find((part) => part.seller)!.sats;
+      const cheat = self.cheat;
+      self.cheat = "";
+      if (cheat === "amount" && others[0]) (others[0].sats += 5), (forSeller -= 5);
+      if (cheat === "who" && others[0]) others[0].to = hex();
+      // Not the client's, whose absence is one of the two right plans: a named person's share, kept by the seller.
+      if (cheat === "drop" && others.length) (forSeller += others[others.length - 1]!.sats), (others = others.slice(0, -1));
+      if (cheat === "extra") (others.push({ to: hex(), sats: 20, label: "friend", seller: false })), (forSeller -= 20);
+      const order: Order = { orderId: `order_${hex(8)}`, productCoordinate: coordinate, buyerPubkey: buyer, state: "quoted", legs: [leg("seller", forSeller), leg("bitunlock", fee), ...others.map((part) => leg("share", part.sats, part))], totalSats: listing.priceSats };
       self.orders.set(order.orderId, order);
       keys.set(order.orderId, String(body.idempotencyKey));
       return plan(order);

@@ -138,8 +138,9 @@ export async function receiptsFor(worker, pubkey, site, { always = false } = {})
  *   request     { site, listing }: the site that asked, and the listing's coordinate
  *   done        ({ receipt, delivery? } | null), once
  *   openWallet  called after a "no" where the person asked for their wallet, to add sats
+ *   client      the page showing this panel, by address, where one is: the client that brought the buyer
  */
-export async function openShop({ worker, pubkey, resize, request, done, openWallet }, lookedAtService = false) {
+export async function openShop({ worker, pubkey, resize, request, done, openWallet, client: shownBy = "" }, lookedAtService = false) {
   const views = [...document.querySelectorAll("#shop [data-shop]")];
   let finished = false;
   const show = (name) => {
@@ -216,7 +217,8 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     listing = lib.readListing(found.event, request.listing, services);
     if (!listing) return stop(found.event ? "This site asked to sell something BitLogin can't check: its listing isn't signed by its seller, or names a service BitLogin doesn't buy from. Nothing was spent." : found.answered ? "This site asked to sell something no relay knows of. Nothing was spent." : "No relay answered just now, so what is for sale couldn't be looked up. Nothing was spent.");
     // Its price is divided between several people, which BitLogin can't yet do: it is not sold with that ignored.
-    if (listing.shared) return stop("This is sold with its price shared between several people, which isn't switched on yet. Nothing was spent.");
+    if (listing.shared && !lib.sharesOpenAt(location.origin)) return stop("This is sold with its price shared between several people, which isn't switched on yet. Nothing was spent.");
+    if (listing.shared && !listing.shares) return stop("This is sold with its price shared between several people, and the shares its seller wrote don't add up. Nothing was spent.");
     // Nothing in a world is sold under the floor (owner, 2026-11-21): the service's fee would be too large a part of it.
     if (lib.underFloor(listing)) return stop(`This is listed at ${sats(listing.priceSats)}, under the ${sats(lib.LEAST_PRICE_SATS)} that is the least anything in a world is sold for. Nothing was spent.`);
     const at = clients.findIndex(({ service }) => service.pubkey === listing.service.pubkey);
@@ -236,7 +238,7 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     if (already) {
       await worker.pay.keep([{ event: already.receipt.event, title: listing.title, via: "" }]).catch(() => null);
       $("shop").hidden = true;
-      return void openShop({ worker, pubkey, resize, request, done, openWallet }, true);
+      return void openShop({ worker, pubkey, resize, request, done, openWallet, client: shownBy }, true);
     }
 
     if (!pretend) {
@@ -262,7 +264,15 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
       return stop(`${open?.title || listing.title} was withdrawn by its seller, and can't be finished. Anything you paid toward it went to the seller or to ${host(listing.service.endpoint)}, and can't be taken back from here: ask the seller.`);
     }
     const key = open?.key ?? lib.newOrderKey();
-    plan ??= await client.quote(listing, key);
+    // Who the client is, for a listing that shares its price with one: the page showing this panel, by the key its
+    // own /.well-known/nswp.json names. Never a world's word. Decided before the first quote, and kept with the order.
+    const clientKey = !listing.shared ? "" : open ? open.client : shownBy ? (await lib.readWorld(shownBy, { local })).share : "";
+    plan ??= await client.quote(listing, key, clientKey);
+    // The plan is held to what the seller wrote: an ordinary listing has no shares in it, and a shared one is divided
+    // here by the rule and must match. Anything else is refused before a word of it is shown.
+    lib.holdToListing(plan, listing, { client: clientKey, fee: policies[at].fee });
+    const shareNames = new Map();
+    for (const leg of plan.legs) if (leg.role === "share") shareNames.set(leg.to, (await worker.pay.profile(leg.to).catch(() => ({ name: "" }))).name);
     const seller = await sellerSoon;
 
     // What each unpaid part costs to send, from the mint: before anything is spent.
@@ -289,13 +299,16 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
       row.append(dt, dd);
       return row;
     };
-    const who = { seller: "To the seller", service: `To ${host(listing.service.endpoint)}, its fee` };
+    const sellerWord = listing.shares?.find((share) => share.to === listing.seller)?.label;
+    const who = { seller: sellerWord && sellerWord !== "seller" ? `To the seller, for the ${sellerWord}` : "To the seller", service: `To ${host(listing.service.endpoint)}, its fee` };
+    /** A share: the seller's word for it, the name in that person's own profile, and their key shortened beside it. */
+    const shareLine = (leg) => `To ${shareNames.get(leg.to) || "an account with no name"} (${leg.to.slice(0, 8)}…${leg.to.slice(-4)}), for the ${leg.label}`;
     $("shop-title").textContent = listing.title;
     $("shop-seller").textContent = seller.name || "an account with no name";
     $("shop-seller-key").textContent = listing.seller;
     $("shop-price").textContent = plan.totalSats.toLocaleString();
     $("shop-lines").replaceChildren(
-      ...plan.legs.map((leg) => line(`${who[leg.role] ?? "To another party"}${leg.status === "settled" ? " (paid already)" : ""}`, sats(leg.sats))),
+      ...plan.legs.map((leg) => line(`${leg.role === "share" ? shareLine(leg) : (who[leg.role] ?? "To another party")}${leg.status === "settled" ? " (paid already)" : ""}`, sats(leg.sats))),
       ...(pretend ? [line("Paid with", "pretend sats: a test service")] : quotes.size ? [line("Routing fees, at most", sats(fees)), line("From", host(mint)), line("You hold", sats(have))] : [])
     );
     $("shop-service").textContent = host(listing.service.endpoint);
@@ -323,7 +336,7 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
         // The order is kept with the account before a sat moves: its id, and the key it was asked with. If that
         // can't be written down, nothing is paid.
         try {
-          await worker.pay.keepOrder({ listing: listing.coordinate, order: plan.order, key, service: listing.service.endpoint, title: listing.title, via: request.site || "" });
+          await worker.pay.keepOrder({ listing: listing.coordinate, order: plan.order, key, service: listing.service.endpoint, title: listing.title, via: request.site || "", client: clientKey });
         } catch {
           return stop("This purchase couldn't be written down first, so nothing was paid. Ask again.");
         }
@@ -331,7 +344,7 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
           client,
           listing,
           plan,
-          progress: (step) => working("paying" in step ? `Paying ${sats(step.paying.sats)} ${step.paying.role === "seller" ? "to the seller" : step.paying.role === "service" ? `to ${host(listing.service.endpoint)}` : "to another party"}.` : "Paid. Fetching your receipt."),
+          progress: (step) => working("paying" in step ? `Paying ${sats(step.paying.sats)} ${step.paying.role === "seller" ? "to the seller" : step.paying.role === "service" ? `to ${host(listing.service.endpoint)}` : step.paying.role === "share" ? `for the ${step.paying.label}` : "to another party"}.` : "Paid. Fetching your receipt."),
           pay: async (leg) => {
             if (pretend) return client.settle(leg.hash).then(() => ({}));
             const quoted = quotes.get(leg.hash) ?? (await wallet.quote(leg.invoice));

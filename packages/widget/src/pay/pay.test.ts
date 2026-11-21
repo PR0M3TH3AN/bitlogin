@@ -3,7 +3,7 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { cleanLightningAddress, cleanPayLimit, invoiceFromAddress, invoiceSats, lightningAddressOfProfile, overPayLimit, PAY_LIMIT, readWorld, tipNote } from "./lightning.js";
 import { belongsTo, bestReceipt, cleanCoordinate, localService, readListing, readReceipt, receiptGood, UNLOCK_SERVICES } from "./listing.js";
-import { completePurchase, createUnlockClient, newOrderKey, openSandboxSession, PurchaseError, readPlan, type BuyerKeys } from "./unlock.js";
+import { completePurchase, createUnlockClient, holdToListing, newOrderKey, openSandboxSession, PurchaseError, readPlan, type BuyerKeys } from "./unlock.js";
 import { startMockUnlock, type MockUnlock } from "./mockUnlock.js";
 
 /** The seller's wallet, and the buyer's: an invoice is paid when the buyer's side says so. */
@@ -82,12 +82,13 @@ describe("a tip, and the limit on a payment with no receipt (docs/paying.md)", (
     const key = "ab".repeat(32);
     const fetcher = async (url: string) => {
       expect(url).toBe("https://world.example/.well-known/nswp.json");
-      return new Response(JSON.stringify({ tip: "World@Pay.example", publishers: { [key]: { worlds: ["w"] }, nonsense: {} } }));
+      return new Response(JSON.stringify({ tip: "World@Pay.example", share: key, publishers: { [key]: { worlds: ["w"] }, nonsense: {} } }));
     };
-    expect(await readWorld("https://world.example", { fetch: fetcher })).toEqual({ tip: "world@pay.example", publishers: [key] });
-    expect(await readWorld("https://world.example/path", { fetch: fetcher })).toEqual({ tip: "", publishers: [] });
-    expect(await readWorld("http://world.example", { fetch: fetcher })).toEqual({ tip: "", publishers: [] });
-    expect(await readWorld("https://gone.example", { fetch: async () => new Response("no", { status: 404 }) })).toEqual({ tip: "", publishers: [] });
+    expect(await readWorld("https://world.example", { fetch: fetcher })).toEqual({ tip: "world@pay.example", publishers: [key], share: key });
+    expect((await readWorld("https://world.example", { fetch: async () => new Response(JSON.stringify({ share: "client" })) })).share).toBe("");
+    expect(await readWorld("https://world.example/path", { fetch: fetcher })).toEqual({ tip: "", publishers: [], share: "" });
+    expect(await readWorld("http://world.example", { fetch: fetcher })).toEqual({ tip: "", publishers: [], share: "" });
+    expect(await readWorld("https://gone.example", { fetch: async () => new Response("no", { status: 404 }) })).toEqual({ tip: "", publishers: [], share: "" });
   });
 
   it("holds a payment with no receipt to a limit that is one of a few steps", () => {
@@ -136,7 +137,7 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     const services = [localService(service.named)!];
     const made = service.listing({ d: "season-pass", priceSats: 500, title: `Season pass${String.fromCodePoint(0x202e)}`, tags: [["nswp:for", `37300:${"cd".repeat(32)}:foundry`], ["nswp:term", "86400"]] });
     expect(cleanCoordinate(made.coordinate)).toBe(made.coordinate);
-    expect(readListing(made.event, made.coordinate, services)).toEqual({ coordinate: made.coordinate, seller: made.seller.getPublicKey(), title: "Season pass", priceSats: 500, service: services[0], for: `37300:${"cd".repeat(32)}:foundry`, termSeconds: 86400, nswp: true, shared: false });
+    expect(readListing(made.event, made.coordinate, services)).toEqual({ coordinate: made.coordinate, seller: made.seller.getPublicKey(), title: "Season pass", priceSats: 500, service: services[0], for: `37300:${"cd".repeat(32)}:foundry`, termSeconds: 86400, nswp: true, shared: false, shares: [] });
     // A listing whose price is divided between several people says so, and is not sold while that isn't built.
     const split = service.listing({ d: "shared-thing", priceSats: 1000, tags: [["nswp:share", made.seller.getPublicKey(), "9000"], ["nswp:share", "client", "1000"]] });
     expect(readListing(split.event, split.coordinate, services)).toMatchObject({ shared: true, nswp: true });
@@ -159,7 +160,7 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     const made = service.listing({ d: "key-to-the-vault", priceSats: 300, delivers: "open sesame" });
     const listing = readListing(made.event, made.coordinate, services)!;
     const client = createUnlockClient(services[0]!, buyerKeys(buyer));
-    expect(await client.policy()).toEqual({ relays: [], sandbox: false });
+    expect(await client.policy()).toEqual({ relays: [], sandbox: false, fee: { bps: 100, min: 1, max: 5000 } });
     expect(await client.resume(listing)).toBeNull();
     const plan = await client.quote(listing);
     expect(plan.totalSats).toBe(300);
@@ -308,6 +309,70 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
   });
 });
 
+describe("a price shared between several people (docs/paying.md PY14)", () => {
+  const maker = "9f".repeat(32);
+  const clientKey = "23".repeat(32);
+  const shared = (d: string, priceSats = 2100) => {
+    const seller = new NostrSigner(generatePrivateKey());
+    const made = service.listing({ d, priceSats, seller, tags: [["nswp:share", seller.getPublicKey(), "8500", "world"], ["nswp:share", maker, "1000", " maker "], ["nswp:share", "client", "500"]] });
+    return { made, listing: readListing(made.event, made.coordinate, [localService(service.named)!])! };
+  };
+
+  it("is paid as the seller wrote: the service first, the shares smallest first, the seller last", async () => {
+    const services = [localService(service.named)!];
+    const buyer = new NostrSigner(generatePrivateKey());
+    const client = createUnlockClient(services[0]!, buyerKeys(buyer));
+    const fee = (await client.policy()).fee;
+    const { made, listing } = shared("a shared world");
+    expect(listing.shared).toBe(true);
+    expect(listing.shares).toEqual([{ to: made.seller.getPublicKey(), parts: 8500, label: "world" }, { to: maker, parts: 1000, label: "maker" }, { to: "client", parts: 500, label: "client" }]);
+    // The client is registered with the service to be paid, and named in the quote: three people are paid.
+    service.payees.add(clientKey);
+    const plan = await client.quote(listing, newOrderKey(), clientKey);
+    holdToListing(plan, listing, { client: clientKey, fee });
+    expect(plan.legs.map((leg) => [leg.role, leg.sats, leg.label ?? ""])).toEqual([["seller", 1764, ""], ["service", 21, ""], ["share", 105, "client"], ["share", 210, "maker"]]);
+    const paidTo: string[] = [];
+    const done = await completePurchase({ client, listing, plan, wait: async () => {}, pay: async (leg) => (paidTo.push(`${leg.role} ${leg.sats}`), paid.add(leg.invoice), {}) });
+    expect(paidTo).toEqual(["service 21", "share 105", "share 210", "seller 1764"]);
+    expect(done.receipt.listing).toBe(made.coordinate);
+    // A client that isn't registered there is not paid, and its part is the seller's: the other right plan.
+    service.payees.clear();
+    const without = await client.quote(listing, newOrderKey(), clientKey);
+    expect(without.legs.map((leg) => [leg.role, leg.sats])).toEqual([["seller", 1869], ["service", 21], ["share", 210]]);
+    holdToListing(without, listing, { client: clientKey, fee });
+    // And with no client named at all.
+    holdToListing(await client.quote(listing, newOrderKey()), listing, { fee });
+  });
+
+  it("refuses any plan that isn't one of the two the seller's listing allows", async () => {
+    const services = [localService(service.named)!];
+    const client = createUnlockClient(services[0]!, buyerKeys(new NostrSigner(generatePrivateKey())));
+    const fee = (await client.policy()).fee;
+    const { listing } = shared("another shared world");
+    service.payees.add(clientKey);
+    for (const cheat of ["amount", "who", "drop", "extra"] as const) {
+      service.cheat = cheat;
+      const plan = await client.quote(listing, newOrderKey(), clientKey);
+      expect(() => holdToListing(plan, listing, { client: clientKey, fee }), cheat).toThrow(PurchaseError);
+    }
+    const honest = await client.quote(listing, newOrderKey(), clientKey);
+    holdToListing(honest, listing, { client: clientKey, fee });
+    // A client paid that the buyer's side never named: refused.
+    expect(() => holdToListing(honest, listing, { fee })).toThrow(PurchaseError);
+    // The service's own fee is held to its signed policy.
+    expect(() => holdToListing(honest, listing, { client: clientKey, fee: { bps: 300, min: 1, max: 5000 } })).toThrow(PurchaseError);
+    // An ordinary listing never has a share in its plan, and a shared one whose shares don't read is never sold.
+    const plain = readListing(service.listing({ d: "plain thing", priceSats: 2100 }).event, undefined as never, services);
+    expect(plain).toBeNull();
+    expect(() => holdToListing(honest, { ...listing, shared: false, shares: [] }, { fee })).toThrow(PurchaseError);
+    expect(() => holdToListing(honest, { ...listing, shares: null }, { client: clientKey, fee })).toThrow(PurchaseError);
+    // Too small to divide: the service says so, and it is not for sale.
+    const tiny = shared("a tiny shared world", 150);
+    await expect(client.quote(tiny.listing, newOrderKey(), clientKey)).rejects.toMatchObject({ code: "sold" });
+    service.payees.clear();
+  });
+});
+
 describe("paid in full, and the service gives no receipt (docs/paying.md PY11)", () => {
   it("is said as that, never as a failure: the order stands, and is unlocked when asked again with nothing more paid", async () => {
     const services = [localService(service.named)!];
@@ -338,7 +403,7 @@ describe("a test service with pretend sats, as BitUnlock's sandbox is (docs/payi
       const listing = readListing(made.event, made.coordinate, [named])!;
       // Without a session it is not a service anything can be bought from.
       const plain = createUnlockClient(named, buyerKeys(buyer));
-      expect(await plain.policy()).toEqual({ relays: [], sandbox: true });
+      expect(await plain.policy()).toEqual({ relays: [], sandbox: true, fee: { bps: 100, min: 1, max: 5000 } });
       await expect(plain.quote(listing)).rejects.toThrow();
       await expect(plain.settle("ab".repeat(32))).rejects.toMatchObject({ code: "plan" });
 

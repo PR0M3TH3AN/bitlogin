@@ -28,6 +28,8 @@ export interface OpenOrder {
   /** What the listing was called, and the site that asked, where one did. */
   title: string;
   via: string;
+  /** The client the quote was asked with, by key, for a listing that shares its price with one. It is part of what `key` names. */
+  client: string;
   at: number;
 }
 /** The most unfinished purchases kept. Past it, the oldest goes. */
@@ -40,7 +42,7 @@ function cleanOrder(input: unknown): OpenOrder | null {
   if (!listing || typeof o.order !== "string" || !/^order_[A-Za-z0-9_-]{12,80}$/u.test(o.order) || typeof o.key !== "string" || !/^[A-Za-z0-9_-]{16,128}$/u.test(o.key)) return null;
   const service = cleanOrigin(o.service);
   if (!service) return null;
-  return { listing, order: o.order, key: o.key, service, title: typeof o.title === "string" ? o.title.slice(0, 80) : "", via: cleanOrigin(o.via) || "", at: typeof o.at === "number" && Number.isFinite(o.at) ? o.at : 0 };
+  return { listing, order: o.order, key: o.key, service, title: typeof o.title === "string" ? o.title.slice(0, 80) : "", via: cleanOrigin(o.via) || "", client: typeof o.client === "string" && /^[0-9a-f]{64}$/u.test(o.client) ? o.client : "", at: typeof o.at === "number" && Number.isFinite(o.at) ? o.at : 0 };
 }
 const cleanOrders = (input: unknown): OpenOrder[] => (Array.isArray(input) ? input.map(cleanOrder).filter((o): o is OpenOrder => !!o).slice(-OPEN_ORDERS_MOST) : []);
 

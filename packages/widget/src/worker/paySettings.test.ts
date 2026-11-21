@@ -56,7 +56,7 @@ describe("the limit on a payment with no receipt, kept with the account (docs/pa
   it("keeps a purchase begun, before anything is paid, and lets it go when it is finished", async () => {
     const deps = { signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore(), relays: fakeRelays() };
     const listing = `30078:${"cd".repeat(32)}:season pass`;
-    const order = { listing, order: "order_0123456789abcdef", key: "k".repeat(32), service: "https://api.bitunlock.network", title: "Season pass", via: "https://world.example" };
+    const order = { listing, order: "order_0123456789abcdef", key: "k".repeat(32), service: "https://api.bitunlock.network", title: "Season pass", via: "https://world.example", client: "" };
     // No relay answers: it is kept in the browser all the same, which is what paying waits for.
     deps.relays.up = false;
     expect(await savePaySettings({ ...deps, now: 100 }, { addOrder: order })).toEqual({ limitSats: 1000, orders: [{ ...order, at: 100 }], unsaved: true });

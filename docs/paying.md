@@ -221,11 +221,7 @@ it, which a `buy` or opening Purchases does.
 - **Not tried against BitUnlock.** Its sandbox pays with a control call
   and not with Lightning, so a wallet can't pay it. See PY10.
 - **No real money**, and no real lightning address.
-- **Shares** between several parties, and the client's share: not built.
-  The rule is written (NSWP `protocol/10-identity.md`, "Shares") and is to
-  be built switched off. Until then a listing carrying `nswp:share` is not
-  shown for sale at all: selling it with the shares ignored would pay the
-  seller what they wrote was someone else's.
+- **Shares** are built and switched off (PY14).
 - **A token locked to a recipient's key**, paying from a wallet
   connection, a visitor's own issuers, refunds in the interface.
 - **The floor's screen** is not in a browser test: the rule is tested, the
@@ -366,3 +362,56 @@ slow relay held and was not waited for is found next time, and what it did
 not take is sent again then, as the receipts and settings stores already
 do. This covers a tip's profile lookup, a listing, the receipts and the
 settings. Nothing about signing in, or the account's own records, changes.
+
+## PY14. A price shared between several people (built, and switched off)
+
+Asked for by the owner on 2026-11-21: "build and test adjustable splits
+and leave it disabled for now." The rule is NSWP's (`protocol/10-identity.md`,
+"Shares"); `pay/shares.ts` is written from it and run against NSWP's own
+vectors (`pay/vectors/shares.json`, copied unchanged at NSWP f3ffc86), the
+same file the kit and BitUnlock are run against.
+
+**Where it is open:** on a local copy only (`SHARES_OPEN_AT`, empty). On
+beta and at bitlogin.network a listing carrying any `nswp:share` tag is
+not shown for sale at all.
+
+**The rule.** A listing carries one `["nswp:share", <key or the word
+client>, <parts in 10000>, <a word>]` for each person its price is divided
+between: four at most, nobody twice, the seller among them, adding up to
+exactly 10000. Each person but the seller gets their parts, rounded down.
+The seller gets what is left, and the service's fee comes out of the
+seller's part only. No part under 10 sats.
+
+**The client** is the page showing BitLogin's panel, and nothing else: the
+key in that page's own `/.well-known/nswp.json` `share`. In BitLogin's own
+window there is none, and a world is never asked. With no client, or where
+the client is the seller, that share is the seller's. It is decided before
+the first quote, named to the service as `clientPubkey`, and kept with the
+order.
+
+**What the screen shows:** every share before anything is paid: the
+seller's word for it, the name in that person's own profile with their key
+shortened beside it, and its amount. One total, one press.
+
+**What is checked.** BitLogin divides the price itself and holds the
+service's plan to it. Exactly two plans are right: the division with the
+client paid, and the one with no client (the service pays only a key
+registered with it to be paid, which BitLogin can't know of the client).
+Any other is refused before a word of it is shown: an amount the seller
+didn't write, a share left out or added, or one labelled for a key the
+seller didn't name. The service's fee is the one part taken from the plan,
+and it is held to the service's signed policy.
+
+**What that does not prove:** that an invoice really pays the key it is
+labelled for. An invoice doesn't say whose it is. That rests on the
+service being one BitLogin pins, as the seller's own part always has.
+
+**Paid** the service's part first, then the shares smallest first (two of
+a size by key), the seller's last. Each part costs its own routing reserve
+at the mint, so a ten-sat share costs about a fifth of itself to send.
+
+**Tried:** the rule against all of NSWP's vectors; the plan check against
+a pretend service that answers honestly, and dishonestly four ways; and a
+shared purchase in a real browser in BitLogin's own test, with a named
+maker and a client. **Not tried against BitUnlock**, whose sandbox doesn't
+sell shared listings yet.

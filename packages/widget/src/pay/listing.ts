@@ -9,6 +9,7 @@
  * No key and no network: this reads what it is given.
  */
 import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
+import { readShares, type Share } from "./shares.js";
 
 const HEX64 = /^[0-9a-f]{64}$/u;
 export const LISTING_KIND = 30078;
@@ -76,6 +77,8 @@ export interface Listing {
    * seller what they wrote was someone else's.
    */
   shared: boolean;
+  /** Those shares, read by the rule (shares.ts): none for an ordinary listing, and null where they don't read, which is a listing that can't be sold. */
+  shares: Share[] | null;
 }
 
 /**
@@ -135,7 +138,8 @@ export function readListing(event: unknown, coordinate: string, services: readon
     for: /^3730[0-9]:[0-9a-f]{64}:[^\s]{1,200}$/u.test(tag(e, "nswp:for")) ? tag(e, "nswp:for") : "",
     termSeconds: /^[1-9][0-9]{0,9}$/u.test(term) ? Number(term) : 0,
     nswp: e.tags.some((t) => typeof t[0] === "string" && t[0].startsWith("nswp:")),
-    shared: e.tags.some((t) => t[0] === "nswp:share")
+    shared: e.tags.some((t) => t[0] === "nswp:share"),
+    shares: ((read) => (read.ok ? read.shares : null))(readShares(e.tags, e.pubkey))
   };
 }
 

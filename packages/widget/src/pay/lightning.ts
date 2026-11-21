@@ -127,6 +127,8 @@ export interface WorldWord {
   tip: string;
   /** The keys it publishes with (`publishers`). */
   publishers: string[];
+  /** The key a client is paid a listing's client share at (`share`). Empty where it names none. */
+  share: string;
 }
 
 /**
@@ -136,10 +138,10 @@ export interface WorldWord {
  */
 export async function readWorld(origin: string, options: { fetch?: Fetch; local?: boolean } = {}): Promise<WorldWord> {
   const base = webAddress(origin, options.local === true);
-  if (!base || base.origin !== origin) return { tip: "", publishers: [] };
+  if (!base || base.origin !== origin) return { tip: "", publishers: [], share: "" };
   const found = await getJson(options.fetch ?? ((url, init) => fetch(url, init)), `${base.origin}/.well-known/nswp.json`);
   const named = found?.publishers && typeof found.publishers === "object" && !Array.isArray(found.publishers) ? Object.keys(found.publishers) : [];
-  return { tip: cleanLightningAddress(found?.tip, options), publishers: named.filter((key) => /^[0-9a-f]{64}$/u.test(key)).slice(0, 16) };
+  return { tip: cleanLightningAddress(found?.tip, options), publishers: named.filter((key) => /^[0-9a-f]{64}$/u.test(key)).slice(0, 16), share: typeof found?.share === "string" && /^[0-9a-f]{64}$/u.test(found.share) ? found.share : "" };
 }
 
 /**

@@ -1,0 +1,829 @@
+{
+  "description": "Shares (docs/plans/paying-for-things.md, section 8; protocol/10-identity.md, \"Shares\"). WRITTEN DOWN AND NOT IN FORCE: nothing pays a share yet. `reading`: what a listing's tags give for a listing sold by `seller` (`readShares`): its shares, none, or why it has none it can be sold with. `splitting`: what a `price` in sats comes to for those `shares`, where `client` is the key of the client that brought the buyer and can be paid (left out where none did, or where the selling service can't pay it: so one listing and one client have two right answers, with and without) and `charge` is what the selling service takes, in sats, out of the seller's part (`splitPrice`): the payments in the order they are made, smallest first and the seller last, or why it can't be sold this way. The parts of every split add up to the price less the charge.",
+  "testKeys": {
+    "note": "TEST-ONLY keys derived from public strings: sha256(utf8(label)). Anyone can sign as them. Signatures use 32 zero bytes of BIP-340 aux randomness so they are reproducible.",
+    "key1": {
+      "label": "nswp test vector key 1",
+      "secretKey": "a2b21391e4eb08443bfc5f24d7e778410f717b0509e82999e71a2bee98ad4912",
+      "pubkey": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6"
+    },
+    "key2": {
+      "label": "nswp test vector key 2",
+      "secretKey": "5bc5ca1924bd664c612999947060bd3785d1e568e3b0fde563b73fea0a4b9959",
+      "pubkey": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6"
+    },
+    "session": {
+      "label": "nswp test vector session key",
+      "secretKey": "2046112f77ef7e117c03898e53aec40c7d33e8aa5a164efe66d7b7672c4db4c9",
+      "pubkey": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f"
+    }
+  },
+  "limits": {
+    "most": 4,
+    "whole": 10000,
+    "least": 10,
+    "label": 32
+  },
+  "reading": [
+    {
+      "name": "none",
+      "description": "A listing with no share at all: the seller is paid everything.",
+      "tags": [
+        [
+          "d",
+          "a-lantern"
+        ],
+        [
+          "price",
+          "500",
+          "SAT"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": true,
+        "shares": []
+      }
+    },
+    {
+      "name": "seller_maker_client",
+      "description": "Three shares, adding up to the whole.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "8500",
+          "world"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "1000",
+          "maker"
+        ],
+        [
+          "nswp:share",
+          "client",
+          "500"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": true,
+        "shares": [
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "parts": 8500,
+            "label": "world"
+          },
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "parts": 1000,
+            "label": "maker"
+          },
+          {
+            "to": "client",
+            "parts": 500,
+            "label": "client"
+          }
+        ]
+      }
+    },
+    {
+      "name": "words_left_out",
+      "description": "A share with no word is called by what it is: seller, client, or share.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "9000"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "500"
+        ],
+        [
+          "nswp:share",
+          "client",
+          "500"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": true,
+        "shares": [
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "parts": 9000,
+            "label": "seller"
+          },
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "parts": 500,
+            "label": "share"
+          },
+          {
+            "to": "client",
+            "parts": 500,
+            "label": "client"
+          }
+        ]
+      }
+    },
+    {
+      "name": "not_whole",
+      "description": "Parts that don't add up to ten thousand: no shares at all, and nothing is made to fit.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "8500"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "1000"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "not-whole"
+      }
+    },
+    {
+      "name": "seller_left_out",
+      "description": "The seller must be among them.",
+      "tags": [
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "9500"
+        ],
+        [
+          "nswp:share",
+          "client",
+          "500"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "no-seller"
+      }
+    },
+    {
+      "name": "someone_twice",
+      "description": "Nobody is named twice.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "8000"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "1000"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "1000"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "twice"
+      }
+    },
+    {
+      "name": "two_clients",
+      "description": "Nor the client.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "9000"
+        ],
+        [
+          "nswp:share",
+          "client",
+          "500"
+        ],
+        [
+          "nswp:share",
+          "client",
+          "500"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "twice"
+      }
+    },
+    {
+      "name": "parts_not_digits",
+      "description": "Parts are whole numbers in digits, with no leading zero.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "09500"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "500"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "not-a-share"
+      }
+    },
+    {
+      "name": "parts_with_a_point",
+      "description": "No fractions.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "9500.5"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "499.5"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "not-a-share"
+      }
+    },
+    {
+      "name": "not_a_key",
+      "description": "Who is a key, or the word client.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "9500"
+        ],
+        [
+          "nswp:share",
+          "alice@example.com",
+          "500"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "not-a-share"
+      }
+    },
+    {
+      "name": "a_word_too_long",
+      "description": "A word of at most 32 characters.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "9500"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "500",
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "not-a-share"
+      }
+    },
+    {
+      "name": "a_hidden_mark_in_a_word",
+      "description": "Nothing unseen in a word.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "9500"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "500",
+          "maker\u202e"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "not-a-share"
+      }
+    },
+    {
+      "name": "four",
+      "description": "Four at most, the seller among them: this many is allowed.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "7000"
+        ],
+        [
+          "nswp:share",
+          "9b2193603716ba6549f27272315a3dc849ecde9c8a8bd90ae5fdd29e6dc7ab42",
+          "1000"
+        ],
+        [
+          "nswp:share",
+          "e0b843af26a482959db3b37dfa6a4c1a45b97365e033c2b18be550297ab3c951",
+          "1000"
+        ],
+        [
+          "nswp:share",
+          "b5c0ed4abefd52507822c55d3e23fa41f4a2e2c7205f4b941b0deea25eac936a",
+          "1000"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": true,
+        "shares": [
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "parts": 7000,
+            "label": "seller"
+          },
+          {
+            "to": "9b2193603716ba6549f27272315a3dc849ecde9c8a8bd90ae5fdd29e6dc7ab42",
+            "parts": 1000,
+            "label": "share"
+          },
+          {
+            "to": "e0b843af26a482959db3b37dfa6a4c1a45b97365e033c2b18be550297ab3c951",
+            "parts": 1000,
+            "label": "share"
+          },
+          {
+            "to": "b5c0ed4abefd52507822c55d3e23fa41f4a2e2c7205f4b941b0deea25eac936a",
+            "parts": 1000,
+            "label": "share"
+          }
+        ]
+      }
+    },
+    {
+      "name": "too_many",
+      "description": "And one more is too many.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "6000"
+        ],
+        [
+          "nswp:share",
+          "9b2193603716ba6549f27272315a3dc849ecde9c8a8bd90ae5fdd29e6dc7ab42",
+          "1000"
+        ],
+        [
+          "nswp:share",
+          "e0b843af26a482959db3b37dfa6a4c1a45b97365e033c2b18be550297ab3c951",
+          "1000"
+        ],
+        [
+          "nswp:share",
+          "b5c0ed4abefd52507822c55d3e23fa41f4a2e2c7205f4b941b0deea25eac936a",
+          "1000"
+        ],
+        [
+          "nswp:share",
+          "72d003f24c201ab007f1452c51ec6fbafe7cdd381691ae018cb4d20db683e16e",
+          "1000"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "too-many"
+      }
+    },
+    {
+      "name": "an_extra_piece",
+      "description": "A share is three pieces or four, and no more.",
+      "tags": [
+        [
+          "nswp:share",
+          "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "9500"
+        ],
+        [
+          "nswp:share",
+          "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "500",
+          "maker",
+          "more"
+        ]
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "expect": {
+        "ok": false,
+        "why": "not-a-share"
+      }
+    }
+  ],
+  "splitting": [
+    {
+      "name": "no_shares",
+      "description": "No shares: the seller is paid the price, less the service's charge.",
+      "price": 500,
+      "shares": [],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "charge": 10,
+      "expect": {
+        "ok": true,
+        "parts": [
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "sats": 490,
+            "label": "seller",
+            "seller": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "three_with_a_client",
+      "description": "A client brought the buyer: three payments, smallest first, the seller last. The charge comes out of the seller's part only.",
+      "price": 2100,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 8500,
+          "label": "world"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 1000,
+          "label": "maker"
+        },
+        {
+          "to": "client",
+          "parts": 500,
+          "label": "client"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "client": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f",
+      "charge": 21,
+      "expect": {
+        "ok": true,
+        "parts": [
+          {
+            "to": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f",
+            "sats": 105,
+            "label": "client",
+            "seller": false
+          },
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "sats": 210,
+            "label": "maker",
+            "seller": false
+          },
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "sats": 1764,
+            "label": "world",
+            "seller": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "three_and_no_client",
+      "description": "Nobody brought the buyer: the client's share is the seller's.",
+      "price": 2100,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 8500,
+          "label": "world"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 1000,
+          "label": "maker"
+        },
+        {
+          "to": "client",
+          "parts": 500,
+          "label": "client"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "charge": 21,
+      "expect": {
+        "ok": true,
+        "parts": [
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "sats": 210,
+            "label": "maker",
+            "seller": false
+          },
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "sats": 1869,
+            "label": "world",
+            "seller": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "the_client_is_the_seller",
+      "description": "A seller who is their own client is paid once.",
+      "price": 2100,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 8500,
+          "label": "world"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 1000,
+          "label": "maker"
+        },
+        {
+          "to": "client",
+          "parts": 500,
+          "label": "client"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "client": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "charge": 21,
+      "expect": {
+        "ok": true,
+        "parts": [
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "sats": 210,
+            "label": "maker",
+            "seller": false
+          },
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "sats": 1869,
+            "label": "world",
+            "seller": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "the_client_is_the_maker",
+      "description": "A client who is also named in the listing is one person, paid once.",
+      "price": 2100,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 8500,
+          "label": "world"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 1000,
+          "label": "maker"
+        },
+        {
+          "to": "client",
+          "parts": 500,
+          "label": "client"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "client": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+      "charge": 21,
+      "expect": {
+        "ok": true,
+        "parts": [
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "sats": 315,
+            "label": "maker",
+            "seller": false
+          },
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "sats": 1764,
+            "label": "world",
+            "seller": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "rounded_down",
+      "description": "Each other part is rounded down to a whole sat, and what is left over is the seller's.",
+      "price": 999,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 8500,
+          "label": "world"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 1000,
+          "label": "maker"
+        },
+        {
+          "to": "client",
+          "parts": 500,
+          "label": "client"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "client": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f",
+      "charge": 10,
+      "expect": {
+        "ok": true,
+        "parts": [
+          {
+            "to": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f",
+            "sats": 49,
+            "label": "client",
+            "seller": false
+          },
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "sats": 99,
+            "label": "maker",
+            "seller": false
+          },
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "sats": 841,
+            "label": "world",
+            "seller": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "a_part_too_small",
+      "description": "At 150 sats the client's 5% is 7 sats, under the least a payment may be: this can't be sold with shares.",
+      "price": 150,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 8500,
+          "label": "world"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 1000,
+          "label": "maker"
+        },
+        {
+          "to": "client",
+          "parts": 500,
+          "label": "client"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "client": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f",
+      "charge": 10,
+      "expect": {
+        "ok": false,
+        "why": "too-small"
+      }
+    },
+    {
+      "name": "the_same_and_no_client",
+      "description": "The same listing sells where nobody brought the buyer, since that part is then the seller's.",
+      "price": 150,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 8500,
+          "label": "world"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 1000,
+          "label": "maker"
+        },
+        {
+          "to": "client",
+          "parts": 500,
+          "label": "client"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "charge": 10,
+      "expect": {
+        "ok": true,
+        "parts": [
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "sats": 15,
+            "label": "maker",
+            "seller": false
+          },
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "sats": 125,
+            "label": "world",
+            "seller": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "the_charge_eats_the_seller",
+      "description": "A seller whose part doesn't cover the service's charge and the least payment: refused.",
+      "price": 200,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 1000,
+          "label": "seller"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 9000,
+          "label": "maker"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "charge": 15,
+      "expect": {
+        "ok": false,
+        "why": "too-small"
+      }
+    },
+    {
+      "name": "two_the_same",
+      "description": "Two parts of the same size go in the order of their keys, so everyone computes one order.",
+      "price": 1000,
+      "shares": [
+        {
+          "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+          "parts": 8000,
+          "label": "seller"
+        },
+        {
+          "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+          "parts": 1000,
+          "label": "maker"
+        },
+        {
+          "to": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f",
+          "parts": 1000,
+          "label": "host"
+        }
+      ],
+      "seller": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+      "charge": 10,
+      "expect": {
+        "ok": true,
+        "parts": [
+          {
+            "to": "23a35533eaea86ba656ca56746e877f082945ca174e2ec13e52ad1815840461f",
+            "sats": 100,
+            "label": "host",
+            "seller": false
+          },
+          {
+            "to": "9f291ef1d9b69e3f1bec4935f0fc53b2e471830509adcf8128076406bc5b6bd6",
+            "sats": 100,
+            "label": "maker",
+            "seller": false
+          },
+          {
+            "to": "01b5370e39784301c3e347b0130266ebb005c5c6141be582e32cda7c367285c6",
+            "sats": 790,
+            "label": "seller",
+            "seller": true
+          }
+        ]
+      }
+    }
+  ]
+}
