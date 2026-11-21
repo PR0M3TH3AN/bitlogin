@@ -15,6 +15,8 @@ would plausibly want. Newest first.
   account chooser, the lock and every account page are in it. Only
   `https://portal.bitblocks.network` may frame it. Nothing changes for a
   site that opens the window.
+- **The ecash wallet and the file browser are marked "Experimental"** in
+  the interface, on the way in and on every one of their screens.
 - **A person's files, on Blossom servers** (`docs/files.md`), on
   BitLogin's own sign-in page and panel: a file browser with folders,
   move, copy, rename and delete; public files, and private ones sealed

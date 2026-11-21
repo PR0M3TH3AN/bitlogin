@@ -11,6 +11,10 @@ person's press, so that no world ever reads a token. Later the same day:
 keep a copy in the browser in case relays are down; a list of the mints
 people recommend; and a wallet that is pleasant to use.
 
+**Flagged experimental in the interface** (owner, 2026-11-21): the way in
+and the screen itself carry an "Experimental" mark and a line saying what
+that means for the person.
+
 ## EC1. What it is
 
 - **Ecash** is bitcoin held as tokens a **mint** signed (Cashu). Whoever

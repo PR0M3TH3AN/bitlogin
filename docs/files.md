@@ -18,6 +18,10 @@ paid without asking up to a limit the person sets.
 Written from the Blossom documents themselves (BUD-01, 02, 03, 04, 06, 07,
 10, 11, 12, read 2026-11-21), not from memory.
 
+**Flagged experimental in the interface** (owner, 2026-11-21): the way in
+and the screen itself carry an "Experimental" mark and a line saying what
+that means for the person.
+
 ## F1. What Blossom is, and what it is not
 
 A Blossom server stores a blob under the SHA-256 of its bytes and hands it

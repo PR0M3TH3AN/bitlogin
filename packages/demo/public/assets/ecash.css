@@ -44,6 +44,12 @@
 
 .ecash-done { font-family: var(--font-display); font-size: 1.5rem; line-height: 1.25; margin: .6rem 0; }
 
+/* Experimental (owner, 2026-11-21): the wallet and the file browser say so wherever they are opened, and on the way in. */
+.exp-tag { display: inline-block; vertical-align: middle; margin-left: .35rem; padding: .05rem .5rem; border: 1px solid var(--brass); border-radius: 999px; color: var(--brass);
+  font: 600 .7rem var(--font-body); letter-spacing: .02em; }
+.connect-card p.exp-note { max-width: none; margin: 0 0 .8rem; padding-bottom: .6rem; border-bottom: 1px solid var(--line); font-size: .88rem; color: var(--muted); }
+.exp-note .exp-tag { margin: 0 .45rem 0 0; }
+
 /* The way in, from the account page. */
 .ecash-door { display: flex; flex-direction: column; gap: .15rem; width: 100%; text-align: left; margin: .2rem 0 1rem; padding: .8rem 1rem; border: 1px solid var(--brass-soft);
   border-radius: 12px; background: var(--ink-softer); color: var(--fg); font: inherit; cursor: pointer; }

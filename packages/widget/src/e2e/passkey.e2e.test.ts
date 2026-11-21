@@ -1021,6 +1021,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await panel.locator("#open-ecash").click();
           await panel.locator('[data-ecash="setup"]').waitFor({ state: "visible", timeout: 60_000 });
           expect(await panel.locator('[data-ecash="setup"]').textContent()).toContain("if a mint disappears");
+          // Said to be experimental, on the way in and wherever it is open (owner, 2026-11-21).
+          expect(await panel.locator("#ecash .exp-note").textContent()).toContain("Experimental");
+          expect(await panel.locator("#ecash .exp-note").isVisible()).toBe(true);
           await panel.locator("#ecash-mint").fill(mint.url);
           await panel.locator('#ecash-mint-form button[type="submit"]').click();
           await panel.locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
@@ -1086,6 +1089,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           // No server chosen yet: that comes first, and it says what a server is and is not.
           await panel.locator('[data-files="servers"]').waitFor({ state: "visible", timeout: 60_000 });
           expect(await panel.locator('[data-files="servers"]').textContent()).toContain("sealed before it leaves here");
+          expect(await panel.locator("#files .exp-note").textContent()).toContain("Experimental");
+          expect(await panel.locator("#files .exp-note").isVisible()).toBe(true);
           await panel.locator("#files-server").fill(blossom.url);
           await panel.locator('#files-server-form button[type="submit"]').click();
           await panel.locator(`#files-mine li[data-server="${blossom.url}"]`).waitFor({ timeout: 30_000 });
