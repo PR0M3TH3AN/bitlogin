@@ -14,3 +14,10 @@ f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/follows.ve
 f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/follows.vectors.json:generic-api-key:12
 f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/follows.vectors.json:generic-api-key:17
 f1578671b974ce39d1fbcf05c0f33589181540cc:packages/widget/src/embedded/follows.vectors.json:generic-api-key:22
+#
+# NSWP's vectors/shares.json at f3ffc86, copied whole on 2026-11-21 for the
+# rule on a shared price (docs/paying.md PY14). Its three keys are the same
+# three test-only keys as in saves.vectors.json above, already cleared.
+c61026cdda4043584b119b549e756ac83973e095:packages/widget/src/pay/vectors/shares.json:generic-api-key:7
+c61026cdda4043584b119b549e756ac83973e095:packages/widget/src/pay/vectors/shares.json:generic-api-key:12
+c61026cdda4043584b119b549e756ac83973e095:packages/widget/src/pay/vectors/shares.json:generic-api-key:17
