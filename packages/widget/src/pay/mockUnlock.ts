@@ -50,6 +50,8 @@ export interface MockUnlock {
   commentAllowed: number;
   /** Every note that came with a tip. */
   comments: string[];
+  /** How many unlocks to refuse next with 503 `fulfillment_unavailable`, though everything is paid. */
+  failUnlocks: number;
   /** Next unlock: give no receipt with it (it is then among the buyer's receipts). */
   omitReceipt: boolean;
   /** Let an order's unpaid invoices run out, as ten minutes would. Asked about again, each gets a new one. */
@@ -97,6 +99,7 @@ export async function startMockUnlock(
     commentAllowed: 0,
     comments: [],
     omitReceipt: false,
+    failUnlocks: 0,
     revoked: new Set(),
     orders: new Map(),
     requests: [],
@@ -251,6 +254,7 @@ export async function startMockUnlock(
     look(order, m[2] === "refresh");
     if (m[2] === "refresh") return plan(order);
     if (order.legs.some((leg) => leg.status !== "settled")) return fail(409, "payment_incomplete");
+    if (self.failUnlocks > 0) return (self.failUnlocks--, fail(503, "fulfillment_unavailable"));
     order.receipt ??= receiptFor(order);
     order.state = "fulfilled";
     const delivers = listings.get(order.productCoordinate)!.delivers;

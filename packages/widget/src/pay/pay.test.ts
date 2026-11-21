@@ -305,6 +305,26 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
   });
 });
 
+describe("paid in full, and the service gives no receipt (docs/paying.md PY11)", () => {
+  it("is said as that, never as a failure: the order stands, and is unlocked when asked again with nothing more paid", async () => {
+    const services = [localService(service.named)!];
+    const buyer = new NostrSigner(generatePrivateKey());
+    const made = service.listing({ d: "month pass", priceSats: 900 });
+    const listing = readListing(made.event, made.coordinate, services)!;
+    const client = createUnlockClient(services[0]!, buyerKeys(buyer));
+    const plan = await client.quote(listing);
+    service.failUnlocks = 1;
+    await expect(completePurchase({ client, listing, plan, wait: async () => {}, pay: async (leg) => (paid.add(leg.invoice), {}) })).rejects.toMatchObject({ name: "PurchaseError", code: "receipt", serviceCode: "fulfillment_unavailable" });
+    // Later: the same order, every part settled, nothing to pay, and the receipt.
+    const again = await client.resume(listing, plan.order);
+    expect(again?.legs.every((leg) => leg.status === "settled")).toBe(true);
+    const payments: string[] = [];
+    const done = await completePurchase({ client, listing, plan: again!, wait: async () => {}, pay: async (leg) => (payments.push(leg.invoice), {}) });
+    expect(payments).toEqual([]);
+    expect(done.receipt.order).toBe(plan.order);
+  });
+});
+
 describe("a test service with pretend sats, as BitUnlock's sandbox is (docs/paying.md PY12)", () => {
   it("is bought from with a session and a settle call, and no wallet", async () => {
     const test = await startMockUnlock(wallet, { sandbox: true });

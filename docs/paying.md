@@ -274,6 +274,17 @@ later one is not:
   again (a part whose invoice ran out unpaid is given a new one), and pays
   only what is left. Nothing is charged twice.
 
+**Paid in full, and no receipt.** If every part is settled and the service
+doesn't unlock (a 503, say), the page says it is paid, that nothing more
+is owed, and to try again later. The order is kept and shown as not
+finished. It is never forgotten, and never paid for again.
+
+**Before `buy` opens at bitlogin.network** (the coordinator, 2026-11-21):
+a purchase tried end to end on the buy screen against BitUnlock's sandbox;
+BitUnlock's fix for listings with a space in their name deployed live
+(until then such a listing can be paid for there and never unlocked); and
+the owner's word.
+
 What BitLogin can't do: get back what went to the seller if the purchase
 is never finished. That is the seller's to refund, or BitUnlock's to
 settle.

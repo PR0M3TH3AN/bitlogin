@@ -330,8 +330,10 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
         // Stopped after money went: said plainly, with how much, that there is no receipt yet, and how it is finished.
         if (err?.name === "PartPaidError" && err.cause_?.code === "withdrawn") return stop(`${sats(err.paidSats)} of this was paid, and then its seller withdrew it, so it can't be finished. What was paid can't be taken back from here: ask the seller.`);
         if (err?.name === "PartPaidError") return stop(`${sats(err.paidSats)} of this was paid, and the rest didn't go. You have no receipt yet, and what was paid can't be taken back from here. It is kept under Purchases as not finished: finish it there, or ask again from the site. What was paid is counted, and never charged twice.`);
-        // Nothing went: the order need not be remembered.
-        await worker.pay.dropOrder(plan.order).catch(() => null);
+        // Paid in full, and no receipt yet: the order is kept, and finished from Purchases or by asking again.
+        if (err?.code === "receipt" || err?.code === "delivery") return stop(`${err.message} It is kept under Purchases as not finished.`);
+        // Nothing went, now or before: the order need not be remembered. One that money ever went into is kept.
+        if (plan.legs.every((leg) => leg.status !== "settled")) await worker.pay.dropOrder(plan.order).catch(() => null);
         stop(err?.message || "That didn't work, and nothing was paid.");
       }
     };

@@ -318,6 +318,8 @@ export async function completePurchase(input: {
   try {
     return await run();
   } catch (err) {
+    // Paid in full with no receipt yet is not "a part was paid": it is said as what it is, and the order is kept.
+    if (err instanceof PurchaseError && (err.code === "receipt" || err.code === "delivery")) throw err;
     if (paidSats > 0) throw new PartPaidError(paidSats, err);
     throw err;
   }
@@ -346,6 +348,13 @@ export async function completePurchase(input: {
   }
   if (!coordinate || plan.legs.some((l) => l.status !== "settled")) throw new PurchaseError("not-settled", "Not every part of the payment arrived.");
   input.progress?.({ unlocking: true });
-  return client.unlock(listing, plan.order);
+  try {
+    return await client.unlock(listing, plan.order);
+  } catch (err) {
+    if (err instanceof PurchaseError && (err.code === "receipt" || err.code === "delivery")) throw err;
+    // Every part is settled and the service gave no receipt (it may be busy, or broken for this listing). Nothing
+    // is owed and nothing is lost: the order stays, and is unlocked when it is next asked for.
+    throw new PurchaseError("receipt", "It is paid in full, and the seller's service hasn't given your receipt yet. Nothing more is owed. Try again later: you won't be charged again.", err instanceof PurchaseError ? err.serviceCode : "");
+  }
   }
 }
