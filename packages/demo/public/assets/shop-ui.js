@@ -262,6 +262,8 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
         $("shop-nav").hidden = true;
         setTimeout(() => finish({ receipt: bought.receipt.event, ...(bought.delivery ? { delivery: bought.delivery } : {}) }), 1400);
       } catch (err) {
+        // Stopped after money went: said plainly, with how much, that there is no receipt yet, and how it is finished.
+        if (err?.name === "PartPaidError") return stop(`${sats(err.paidSats)} of this was paid, and the rest didn't go. You have no receipt yet, and what was paid can't be taken back from here. Ask again from the site to finish: what was paid is counted, and never charged twice.`);
         stop(err?.message || "That didn't work. Ask again from the site: anything already paid is counted, and never charged twice.");
       }
     };

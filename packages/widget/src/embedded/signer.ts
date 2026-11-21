@@ -32,7 +32,7 @@ import { bestReceipt, localService, readReceipt, receiptGood, UNLOCK_SERVICES, t
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
 import { knownFamily } from "./family.js";
 import { familyOf } from "./publicSuffix.js";
-import { APP_LIMITS, isLocalAddress, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
+import { APP_LIMITS, buyingOpenAt, isLocalAddress, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import type { Profile } from "./profile.js";
 import {
   ASK_LIMITS,
@@ -257,6 +257,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (from !== site) return;
     const ask = readSignerRequest(e.data);
     if (!ask) return;
+    // Buying is not yet open at every address BitLogin runs at (permissions.ts). Where it isn't, `buy` is not a
+    // request this signer knows, and gets no answer.
+    if (ask.t === "buy" && !buyingOpenAt(me)) return;
     await remember();
     if (ask.t === "state") return say(state(ask.id));
     if (ask.t === "lock") {

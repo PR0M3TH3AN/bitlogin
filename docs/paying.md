@@ -249,3 +249,31 @@ it, which a `buy` or opening Purchases does.
   `<html data-unlock-service="http://127.0.0.1:<port>|<its key>">` on
   `/connect/`, `/connect/panel/` and `/signer/`. The real address ignores
   it. The application client takes the same as `localUnlockService`.
+
+## PY11. Where buying is open, and a purchase that stops half way
+
+**`buy` is open at the test address and on a local copy only**
+(`BUYING_OPEN_AT` in `embedded/permissions.ts`), by the coordinator's
+answer for the owner on 2026-11-21. At `https://bitlogin.network` a site
+that sends `buy` gets no answer, as for a request the signer doesn't know,
+and `client.buy` returns null. Tips, the limit, `have` and Purchases are
+not held back. It opens there when a purchase has been tried end to end
+against BitUnlock's sandbox and the owner says so.
+
+**Two invoices, and the second fails.** BitUnlock's fee comes out of the
+price as a second invoice (490 and 10 at 500 sats). The person is shown
+one total and presses once. The parts are paid one after the other, and
+the service is asked after each before the next. If a part is paid and a
+later one is not:
+
+- the page says how much went, that the rest didn't, that there is no
+  receipt yet, and that what was paid can't be taken back from here;
+- the site hears `refused`;
+- the order stays with BitUnlock as part paid. The next `buy` for the same
+  listing takes that order up again, after asking the service to look
+  again (a part whose invoice ran out unpaid is given a new one), and pays
+  only what is left. Nothing is charged twice.
+
+What BitLogin can't do: get back what went to the seller if the purchase
+is never finished. That is the seller's to refund, or BitUnlock's to
+settle.

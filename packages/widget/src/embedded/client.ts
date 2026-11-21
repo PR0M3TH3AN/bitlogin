@@ -28,7 +28,7 @@ import { ASK_WAIT_MS, ASKED_KINDS, cleanOrigin, PROTOCOL_VERSION, SIGNER_PROTOCO
 import { cleanInvoice } from "../ecash/nip60.js";
 import { cleanSats } from "../pay/lightning.js";
 import { cleanCoordinate, localService, readReceipt as readReceiptOf, receiptGood, UNLOCK_SERVICES } from "../pay/listing.js";
-import { isLocalAddress } from "./permissions.js";
+import { buyingOpenAt, isLocalAddress } from "./permissions.js";
 
 export interface BitLoginClientOptions {
   /** The sign-in address: an origin, such as "https://bitlogin.network". */
@@ -365,7 +365,8 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
     },
     async buy(listing, options) {
       const coordinate = cleanCoordinate(listing);
-      if (!coordinate) return null;
+      // Not yet open at every sign-in address (permissions.ts): there, nothing is asked and nothing is bought.
+      if (!coordinate || !buyingOpenAt(at)) return null;
       const reply = await askThePerson({ t: "buy", listing: coordinate }, options);
       // Believed only as far as the receipt goes: a known service signed it, for this listing and this account.
       const receipt = reply?.t === "bought" ? readReceipt(reply.receipt) : null;

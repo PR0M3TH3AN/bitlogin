@@ -219,7 +219,28 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     expect(bestReceipt([done.receipt], { buyer: buyer.getPublicKey(), listing: made.coordinate, now: Date.now() / 1000 })).toEqual(done.receipt);
     // A payment the service never sees arrive is said, and not paid again here.
     const stuck = await client.quote(readListing(service.listing({ d: "stuck", priceSats: 50, seller: made.seller }).event, `30078:${made.seller.getPublicKey()}:stuck`, services)!);
-    await expect(completePurchase({ client, listing: { ...listing, coordinate: `30078:${made.seller.getPublicKey()}:stuck`, priceSats: 50 }, plan: stuck, wait: async () => {}, tries: 2, pay: async () => ({}) })).rejects.toMatchObject({ code: "not-settled" });
+    // The money went (as far as the wallet knows), so it is said to have: how much, and that the rest didn't go.
+    await expect(completePurchase({ client, listing: { ...listing, coordinate: `30078:${made.seller.getPublicKey()}:stuck`, priceSats: 50 }, plan: stuck, wait: async () => {}, tries: 2, pay: async () => ({}) })).rejects.toMatchObject({ name: "PartPaidError", paidSats: 49, cause_: { code: "not-settled" } });
+    // The first part is paid and the second fails outright: one part's worth is said to have gone, and the order is taken up again later.
+    const half = service.listing({ d: "half", priceSats: 500, seller: made.seller });
+    const halfListing = readListing(half.event, half.coordinate, services)!;
+    const halfPlan = await client.quote(halfListing);
+    let calls = 0;
+    await expect(
+      completePurchase({ client, listing: halfListing, plan: halfPlan, wait: async () => {}, pay: async (leg) => {
+        if (++calls === 2) throw new Error("the mint refused");
+        paid.add(leg.invoice);
+        return {};
+      } })
+    ).rejects.toMatchObject({ name: "PartPaidError", paidSats: 495 });
+    const later = await client.resume(halfListing);
+    expect(later?.order).toBe(halfPlan.order);
+    expect(later?.legs.map((leg) => leg.status)).toEqual(["settled", "pending"]);
+    const finished = await completePurchase({ client, listing: halfListing, plan: later!, wait: async () => {}, pay: async (leg) => (paid.add(leg.invoice), {}) });
+    expect(finished.receipt.order).toBe(halfPlan.order);
+    // Nothing paid at all: the plain error, and no word of money having gone.
+    const none = await client.quote(readListing(service.listing({ d: "none", priceSats: 500, seller: made.seller }).event, `30078:${made.seller.getPublicKey()}:none`, services)!);
+    await expect(completePurchase({ client, listing: { ...halfListing, coordinate: `30078:${made.seller.getPublicKey()}:none` }, plan: none, wait: async () => {}, pay: async () => { throw new Error("the mint refused"); } })).rejects.toThrow("the mint refused");
   });
 
   it("believes a payment plan only as far as it matches what was asked", () => {

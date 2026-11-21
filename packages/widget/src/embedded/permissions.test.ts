@@ -394,3 +394,15 @@ describe("describePermissions", () => {
     expect(describePermissions(perms!, SITE).ordinary).toEqual(["post notes"]);
   });
 });
+
+describe("where buying is open (docs/paying.md PY11)", () => {
+  it("is the test address and a local copy, and not yet BitLogin's real address", async () => {
+    const { BUYING_OPEN_AT, buyingOpenAt } = await import("./permissions.js");
+    expect(BUYING_OPEN_AT).toEqual(["https://bitlogin-beta.vercel.app"]);
+    expect(buyingOpenAt("https://bitlogin-beta.vercel.app")).toBe(true);
+    expect(buyingOpenAt("http://localhost:5173")).toBe(true);
+    expect(buyingOpenAt("https://bitlogin.network")).toBe(false);
+    expect(buyingOpenAt("https://evil.example")).toBe(false);
+    expect(buyingOpenAt(undefined)).toBe(false);
+  });
+});

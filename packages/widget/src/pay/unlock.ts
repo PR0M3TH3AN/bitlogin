@@ -15,6 +15,20 @@ import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
 import { invoiceSats } from "./lightning.js";
 import { cleanCoordinate, readReceipt, receiptGood, type Listing, type Receipt, type UnlockService } from "./listing.js";
 
+/**
+ * A purchase stopped after a part of it was paid. The money that went is with whoever it was paid to, there is no
+ * receipt yet, and the same order is taken up again the next time it is asked for: what went is counted, not charged again.
+ */
+export class PartPaidError extends Error {
+  constructor(
+    public readonly paidSats: number,
+    public readonly cause_: unknown
+  ) {
+    super("A part of this was paid, and the rest didn't go.");
+    this.name = "PartPaidError";
+  }
+}
+
 export class PurchaseError extends Error {
   constructor(
     public readonly code: "service" | "plan" | "expired" | "not-settled" | "delivery" | "receipt" | "sold",
@@ -167,7 +181,10 @@ export function createUnlockClient(service: UnlockService, keys: BuyerKeys, opti
         // One the buyer has put money into, or that is paid and was never unlocked: never a second charge for it.
         if (order?.state !== "partially_paid" && order?.state !== "paid") continue;
         try {
-          return readPlan(order.paymentPlan, want(listing));
+          // Asked to look again before it is taken up: a part whose invoice ran out unpaid is given a new one, and
+          // a part paid while the page was closed is counted.
+          const plan = readPlan(order.paymentPlan, want(listing));
+          return await client.refresh(listing, plan.order).catch(() => plan);
         } catch {
           continue;
         }
@@ -236,12 +253,22 @@ export async function completePurchase(input: {
   const coordinate = cleanCoordinate(listing.coordinate);
   let plan = input.plan;
   const proofs: string[] = [];
+  let paidSats = 0;
+  try {
+    return await run();
+  } catch (err) {
+    if (paidSats > 0) throw new PartPaidError(paidSats, err);
+    throw err;
+  }
+
+  async function run(): Promise<{ receipt: Receipt; delivery: string }> {
   for (const first of plan.legs) {
     let leg = plan.legs.find((l) => l.hash === first.hash)!;
     if (leg.status === "settled") continue;
     if (leg.status === "expired") throw new PurchaseError("expired", "This offer ran out before it was paid. Ask again from the site for a new one.");
     input.progress?.({ paying: leg });
     const paid = await input.pay(leg);
+    paidSats += leg.sats;
     if (typeof paid.preimage === "string" && HEX64.test(paid.preimage)) proofs.push(paid.preimage);
     let settled = false;
     for (let attempt = 0; attempt < (input.tries ?? 15) && !settled; attempt++) {
@@ -257,4 +284,5 @@ export async function completePurchase(input: {
   if (!coordinate || plan.legs.some((l) => l.status !== "settled")) throw new PurchaseError("not-settled", "Not every part of the payment arrived.");
   input.progress?.({ unlocking: true });
   return client.unlock(listing, plan.order);
+  }
 }
