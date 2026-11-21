@@ -446,7 +446,8 @@ const handOverReceipts = () => {
 const ask = () => {
   if (!found || !who || finished) return;
   $("signin").hidden = true;
-  if (found.ask) handOverReceipts();
+  // Not for a purchase: the buy screen reads the receipts itself, and hands the site the one it asked about.
+  if (found.ask && found.ask.what !== "buy") handOverReceipts();
   if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" || found.ask.what === "tip" ? void askPay() : found.ask.what === "buy" ? void askBuy() : found.ask.what === "save" || found.ask.what === "pick" ? void askFile() : void askSign();
   toClient({ t: "size", size: "menu" });
   void prepare().catch(() => {});

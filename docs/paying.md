@@ -347,3 +347,20 @@ once the sandbox has an address; it is not built for beta yet):
   `BITLOGIN_SANDBOX_RELAY`, `BITLOGIN_SANDBOX_LISTING` in the panel test),
   since it needs the sandbox running. Not tried: a world built on the
   NSWP kit doing the asking.
+
+## PY13. Not waiting on the slowest relay
+
+BitLogin's account flows wait for every relay, or the whole timeout,
+because for them the newest record matters more than a second. Tried in a
+real world on 2026-11-21, that made the buy screen take most of a minute
+to appear: one relay that never answers cost the whole timeout on every
+question, and the worker answers one question at a time.
+
+The paying screens ask relays another way (`worker/quickRelays.ts`): a
+question is finished when every relay has answered, or a moment (0.7 s)
+after two have. Sending is the same. Fewer than two answering still waits
+the whole time, so nothing is ever called "none" out of impatience. What a
+slow relay held and was not waited for is found next time, and what it did
+not take is sent again then, as the receipts and settings stores already
+do. This covers a tip's profile lookup, a listing, the receipts and the
+settings. Nothing about signing in, or the account's own records, changes.
