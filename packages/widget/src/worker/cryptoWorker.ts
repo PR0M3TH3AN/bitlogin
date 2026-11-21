@@ -64,6 +64,8 @@ import { buildMessageRelays, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS,
 import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/mints.js";
+import { blossomAuth, loadDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
+import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { loadEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
 import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
@@ -1774,6 +1776,62 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     // ---- An ecash wallet kept with the account (docs/ecash.md). A full session only: none of these is on the list a
     // handed-over session may ask, so no embedded signer, and so no site, can read a token.
+    // ---- A person's files (docs/files.md). A full session only: none of these is on the list a handed-over
+    // session may ask, so no embedded signer, and so no site, can read the index or have a permission note signed.
+    case "blossomAuth": {
+      const { signer } = requireUnlocked();
+      return { token: blossomAuth(signer, payload as { verb: unknown; server: unknown; sha256?: unknown }) };
+    }
+    case "driveLoad":
+    case "driveSave":
+    case "blossomServers":
+    case "blossomSetServers": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      const finderUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
+      let mine: string[] = session.relays;
+      if (mine.length === 0 && finderUrls.length) {
+        const finder = new RelayPool(finderUrls);
+        try {
+          mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+        } catch {
+          mine = [];
+        } finally {
+          finder.closeAll();
+        }
+      }
+      const pool = new RelayPool([...new Set([...mine, ...vaultRelayUrls, ...(action.startsWith("blossom") ? discoveryRelayUrls : [])])].slice(0, 16));
+      try {
+        const deps = { signer, store, relays: pool };
+        if (action === "driveLoad") return await loadDrive(deps);
+        if (action === "driveSave") return await saveDrive(deps, payload as DriveSave);
+        const ownList = async (): Promise<string[]> => {
+          const found = await pool.queryQuorum({ kinds: [SERVER_LIST_KIND], authors: [me], limit: 2 }, 4000);
+          const newest = found.outcomes.flatMap((o) => o.events).filter((event) => event.kind === SERVER_LIST_KIND && event.pubkey === me && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+          return newest ? serversIn(newest) : [];
+        };
+        if (action === "blossomSetServers") {
+          const servers = [...new Set(((payload as { servers?: unknown }).servers as unknown[] | undefined ?? []).map(cleanServer).filter(Boolean))].slice(0, DRIVE_LIMITS.servers);
+          if (servers.length === 0) throw new Error("Name at least one file server, by its https address.");
+          // The standard, public list (BUD-03): it is how other apps find a person's files when a link breaks.
+          const event = signer.signEvent({ kind: SERVER_LIST_KIND, created_at: Math.floor(Date.now() / 1000), tags: servers.map((server) => ["server", server]), content: "" });
+          if (countAcknowledgements(await pool.publishAll(event, 6000)) < Math.min(2, pool.relayUrls.length)) throw new Error("No relay took your server list. Try again when you are online.");
+          return { mine: servers };
+        }
+        const [own, lists, follows] = await Promise.all([
+          ownList(),
+          pool.queryQuorum({ kinds: [SERVER_LIST_KIND], limit: 500 }, 5000),
+          pool.queryQuorum({ kinds: [FOLLOWS_KIND], authors: [me], limit: 2 }, 4000)
+        ]);
+        const followList = follows.outcomes.flatMap((o) => o.events).filter((event) => event.pubkey === me && event.kind === FOLLOWS_KIND && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+        const followed = new Set((followList?.tags ?? []).filter((tag) => tag[0] === "p" && typeof tag[1] === "string").map((tag) => tag[1]!));
+        const byId = new Map(lists.outcomes.flatMap((o) => o.events).filter((event) => event.pubkey !== me && verifyNostrEvent(event)).map((event) => [event.id, event]));
+        return { mine: own, ranked: rankServers([...byId.values()], followed) };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
     // The words of their newest profile note, to show what a proposed one would change. Read-only, and theirs.
     case "profileContent": {
       const { signer } = requireUnlocked();
@@ -2008,6 +2066,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent",
+  "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

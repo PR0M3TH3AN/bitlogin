@@ -22,6 +22,7 @@ import type { AppPermissions } from "./embedded/permissions.js";
 import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
 import type { RankedMint } from "./ecash/mints.js";
+import type { DriveSave, DriveState, RankedServer } from "./worker/driveStore.js";
 import type { EcashRoll, EcashState, KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import type { WorldMore } from "./embedded/follows.js";
@@ -105,6 +106,17 @@ export interface HeadlessSigner {
    * `ok` false means nothing was taken back.
    */
   takeBack(what: { site: string } | { all: true }): Promise<{ ok: boolean; accepted: number; of: number }>;
+  /**
+   * The account's files (docs/files.md), for BitLogin's own pages: the index of folders, a permission note for
+   * one file at one server, and the list of servers. A full session only. A page that asks must be BitLogin's own.
+   */
+  drive: {
+    load(): Promise<DriveState>;
+    save(changes: DriveSave): Promise<DriveState>;
+    auth(verb: "upload" | "delete" | "get", server: string, sha256: string): Promise<string>;
+    servers(): Promise<{ mine: string[]; ranked: RankedServer[] }>;
+    setServers(servers: string[]): Promise<string[]>;
+  };
   /** The words of the account's newest profile note on relays, or null; and whether any relay answered. */
   profileContent(): Promise<{ content: string | null; answered: boolean }>;
   /**
@@ -291,6 +303,28 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async profileContent() {
       await requirePubkey();
       return client.profileContent();
+    },
+    drive: {
+      async load() {
+        await requirePubkey();
+        return client.driveLoad();
+      },
+      async save(changes) {
+        await requirePubkey();
+        return client.driveSave(changes);
+      },
+      async auth(verb, server, sha256) {
+        await requirePubkey();
+        return (await client.blossomAuth({ verb, server, sha256 })).token;
+      },
+      async servers() {
+        await requirePubkey();
+        return client.blossomServers();
+      },
+      async setServers(servers) {
+        await requirePubkey();
+        return (await client.blossomSetServers(servers)).mine;
+      }
     },
     ecash: {
       async load() {

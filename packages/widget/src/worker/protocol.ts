@@ -531,6 +531,10 @@ import type { EcashState, EcashRoll } from "./ecashStore.js";
 import type { RankedMint } from "../ecash/mints.js";
 export type { RankedMint };
 
+// ---- A person's files (docs/files.md; worker/driveStore.ts) ----
+import type { DriveSave, DriveState, RankedServer } from "./driveStore.js";
+export type { DriveSave, DriveState, RankedServer };
+
 export type WorkerActionMap = {
   configure: [ConfigurePayload, Record<string, never>];
   register: [RegisterPayload, RegisterResult];
@@ -590,6 +594,13 @@ export type WorkerActionMap = {
   worldSeal: [WorldSealPayload, WorldSealResult];
   worldUnwrap: [WorldUnwrapPayload, { message: ReadMessage }];
   worldReach: [WorldReachPayload, NostrEvent];
+  driveLoad: [Record<string, never>, DriveState];
+  driveSave: [DriveSave, DriveState];
+  /** A permission note for one file at one Blossom server (BUD-11), as the `Authorization` header carries it. */
+  blossomAuth: [{ verb: "upload" | "delete" | "get"; server: string; sha256: string }, { token: string }];
+  /** The account's own server list (BUD-03), and the servers people use, the user's follows first. */
+  blossomServers: [Record<string, never>, { mine: string[]; ranked: RankedServer[] }];
+  blossomSetServers: [{ servers: string[] }, { mine: string[] }];
   ecashLoad: [Record<string, never>, EcashState];
   ecashSetMints: [{ mints: string[] }, EcashState];
   ecashRoll: [EcashRoll, EcashState];

@@ -338,6 +338,21 @@ export class WorkerClient {
   vaultSaveNwc(payload: VaultSaveNwcPayload) {
     return this.call("vaultSaveNwc", payload);
   }
+  driveLoad() {
+    return this.call("driveLoad", {});
+  }
+  driveSave(changes: WorkerActionMap["driveSave"][0]) {
+    return this.call("driveSave", changes);
+  }
+  blossomAuth(payload: WorkerActionMap["blossomAuth"][0]) {
+    return this.call("blossomAuth", payload);
+  }
+  blossomServers() {
+    return this.call("blossomServers", {});
+  }
+  blossomSetServers(servers: string[]) {
+    return this.call("blossomSetServers", { servers });
+  }
   profileContent() {
     return this.call("profileContent", {});
   }
