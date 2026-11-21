@@ -1294,6 +1294,17 @@ site is signed in as, shows it, and brings back the answer.
 - **Not a follow list** (kind 3): a whole list signed for a site could
   unfollow everyone; following is one person at a time (§SW16b). Not a
   never-kind. Not anything unnamed.
+- **From an application, through the client** (`bitlogin-client.js`):
+  `client.propose(event, { show? })` and `client.pay(invoice, { show? })`.
+  The client sends the request and, on `asking`, has BitLogin's page shown:
+  `show()` is called once, and returns true where the host showed it itself
+  (its shell's panel); otherwise the client opens the window. It resolves
+  with the signed event, checked to be what was asked, or the proof of
+  payment; or null.
+- **A profile is shown as what would change,** against the newest profile
+  relays hold: each field changed, added or removed, with what it was, and
+  how many stay as they are. Where the current one can't be read in five
+  seconds, the whole new profile is shown, and a line says so.
 - **Said in words** (`embedded/careful.ts`): a profile field by field, with
   "this replaces your whole profile" and a word about the lightning
   address; a deletion's notes, and that it can't be undone and reaches

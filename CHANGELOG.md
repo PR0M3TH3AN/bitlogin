@@ -26,6 +26,12 @@ would plausibly want. Newest first.
 - **`/connect/` pages may reach https addresses** (a mint). No other page.
 - **New dependency:** `@cashu/cashu-ts` 4.13.1, in `bitlogin-ecash.js`
   only. A site that vendors the widget does not need that file.
+- **`propose` and `pay` on the client** (`bitlogin-client.js`), for an
+  application: `client.propose(event, { show? })`,
+  `client.pay(invoice, { show? })`. An approved application may ask what a
+  world may, except a wallet.
+- **A proposed profile is shown as what would change,** against the one
+  relays hold now.
 - **A site can put a careful kind to the person** (§SW20): `propose`, for
   a profile, a deletion or a relay list. Answered `asking`, shown in words
   on BitLogin's own page (the panel or the window), signed there on a

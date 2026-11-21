@@ -338,6 +338,9 @@ export class WorkerClient {
   vaultSaveNwc(payload: VaultSaveNwcPayload) {
     return this.call("vaultSaveNwc", payload);
   }
+  profileContent() {
+    return this.call("profileContent", {});
+  }
   ecashMints() {
     return this.call("ecashMints", {});
   }

@@ -278,10 +278,19 @@ const answered = async (result, done) => {
   status(result === null ? "Nothing was signed or shared." : ok ? done : "That didn't work, and nothing reached the site. Ask again from the site.");
   setTimeout(() => leave(ok && result !== null), result === null ? 0 : 700);
 };
-const askSign = () => {
+const askSign = async () => {
   if (!sameAccount()) return;
   const event = found.ask.event;
-  const words = describeAsked(event);
+  // A profile is replaced whole, so what is shown is what would change, against the one relays hold now. Where
+  // that can't be read in a few seconds, the whole new one is shown, and a line says so.
+  let current;
+  if (event.kind === 0) {
+    status("Reading your profile as it is now.");
+    const read = await Promise.race([prepare().then((session) => session.profileContent()), new Promise((done) => setTimeout(() => done(null), 5000))]).catch(() => null);
+    current = read?.answered ? (read.content ?? "{}") : null;
+    if (finished) return;
+  }
+  const words = describeAsked(event, current);
   $("confirm-title").textContent = words.title;
   $("confirm-site").textContent = found.site;
   $("confirm-who").textContent = who.name || "An account with no name";
@@ -356,7 +365,7 @@ const askWallet = () => {
 const ask = () => {
   if (!found || !who || finished) return;
   $("signin").hidden = true;
-  if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" ? void askPay() : askSign();
+  if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" ? void askPay() : void askSign();
   toClient({ t: "size", size: "menu" });
   void prepare().catch(() => {});
   if (found.wants) return askApp();

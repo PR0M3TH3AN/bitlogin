@@ -957,11 +957,15 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await asking("p1");
         await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
         await panel.locator("#confirm").waitFor({ state: "visible", timeout: 30_000 });
-        expect(await panel.locator("#confirm-title").textContent()).toBe("Replace your Nostr profile?");
+        // Against the profile relays hold now (sign-up published one, with only a name): what would change.
+        expect(await panel.locator("#confirm-title").textContent()).toBe("Change your Nostr profile?");
         expect(await panel.locator("#confirm-site").textContent()).toBe(world);
         expect(await panel.locator("#confirm-who-key").textContent()).toBe(me);
-        expect(await panel.locator("#confirm-lines li").allTextContents()).toEqual(["Name: Ada", "About: Mathematician", "Lightning address: ada@wallet.example"]);
-        expect(await panel.locator("#confirm-warning").textContent()).toContain("whole profile");
+        const changes = await panel.locator("#confirm-lines li").allTextContents();
+        expect(changes.find((l) => l.startsWith("Name: Ada. It was: "))).toBeTruthy();
+        expect(changes).toContain("About, added: Mathematician");
+        expect(changes).toContain("Lightning address, added: ada@wallet.example");
+        expect(await panel.locator("#confirm-warning").textContent()).toContain("lightning address");
         // Said no: the world hears "refused", and nothing was signed.
         await panel.locator("#confirm-no").click();
         expect((await waitFor("p1")).t).toBe("refused");
@@ -2585,7 +2589,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           return void res.end(await readFile(file));
         }
         res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-        res.end(`<!doctype html><meta charset="utf-8"><title>an application</title><button id="open">Sign in with BitLogin</button>
+        res.end(`<!doctype html><meta charset="utf-8"><title>an application</title><button id="open">Sign in with BitLogin</button><button id="propose">Delete a post</button><button id="propose-shown">Delete, shown by the host</button>
 <script type="module">
   import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
   const more = new URLSearchParams(location.search).has("more");
@@ -2610,6 +2614,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     }
   };
   document.getElementById("open").onclick = () => { window.signedIn = window.bl.signIn(); };
+  const NOTE = "ab".repeat(32);
+  document.getElementById("propose").onclick = () => { window.proposed = window.bl.propose({ kind: 5, content: "", tags: [["e", NOTE], ["k", "1"]] }); };
+  document.getElementById("propose-shown").onclick = () => { window.shownCalls = 0; window.proposedShown = window.bl.propose({ kind: 5, content: "", tags: [["e", NOTE]] }, { show: () => { window.shownCalls++; return true; } }); };
   window.isReady = window.bl.ready();
 </script>`);
       });
@@ -2693,6 +2700,29 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow-app").click();
         expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
         expect(await page.evaluate(() => (window as any).bl.state())).toMatchObject({ signedIn: true, pubkey: me });
+
+        // An application can put a careful kind to the person too (§SW20), through the client: BitLogin's page
+        // shows it in words, signs it on a press, and the client hands back exactly what was asked.
+        if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 10_000 }).catch(() => popup.close());
+        const [asked] = await Promise.all([context.waitForEvent("page"), page.click("#propose")]);
+        await asked.locator("#confirm-yes").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await asked.locator("#confirm-title").textContent()).toBe("Ask relays to delete this?");
+        expect(await asked.locator("#confirm-site").textContent()).toBe(site);
+        expect(await asked.locator("#confirm-lines li").allTextContents()).toEqual([`Note ${"ab".repeat(32)}`]);
+        // The application's own permission question is not shown in its place.
+        expect(await asked.locator("#ask-app").isVisible()).toBe(false);
+        await asked.waitForTimeout(1000);
+        await asked.locator("#confirm-yes").click();
+        const deletion = await page.evaluate(() => (window as any).proposed);
+        expect(verifyNostrEvent(deletion)).toBe(true);
+        expect(deletion).toMatchObject({ kind: 5, pubkey: me, content: "", tags: [["e", "ab".repeat(32)], ["k", "1"], ["nswp:world", site]] });
+        // Where the host shows BitLogin's page itself (a client that keeps the screen), no window is opened: `show`
+        // is called once, and the question waits. Here nobody answers it, and a new question ends it.
+        if (!asked.isClosed()) await asked.waitForEvent("close", { timeout: 10_000 }).catch(() => asked.close());
+        const openBefore = context.pages().length;
+        await page.click("#propose-shown");
+        await page.waitForFunction(() => (window as any).shownCalls === 1, null, { timeout: 15_000 });
+        expect(context.pages().length).toBe(openBefore);
 
         // What it was approved for is signed with no prompt, marked with the application's address.
         const note = await sign({ kind: 1, content: "from an application", tags: [["t", "x"], ["bitlogin:site", "https://elsewhere.example"]] });

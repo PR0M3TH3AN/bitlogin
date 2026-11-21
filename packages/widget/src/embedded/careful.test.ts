@@ -65,6 +65,30 @@ describe("what a site may put to the person (sign-in-window.md §SW20)", () => {
     expect(describeAsked({ kind: 0, content: "not json", tags: [] }).lines).toEqual(["An empty profile: no name, no picture, nothing about you."]);
   });
 
+  it("says what a new profile would change, against the one relays hold now", () => {
+    const now = JSON.stringify({ name: "Ada", about: "Mathematician", picture: "https://p.example/a.png", lud16: "ada@wallet.example", website: "https://ada.example", custom: { a: 1 } });
+    const next = JSON.stringify({ name: "Ada", about: "Mathematician", picture: "https://p.example/b.png", lud16: "thief@evil.example", banner: "https://p.example/banner.png", custom: { a: 1 } });
+    const words = describeAsked({ kind: 0, content: next, tags: [] }, now);
+    expect(words.title).toBe("Change your Nostr profile?");
+    expect(words.lines).toEqual([
+      "Picture: https://p.example/b.png. It was: https://p.example/a.png",
+      "Banner, added: https://p.example/banner.png",
+      "Website, removed. It was: https://ada.example",
+      "Lightning address: thief@evil.example. It was: ada@wallet.example",
+      "3 other fields stay as they are."
+    ]);
+    expect(words.warning).toContain("lightning address");
+    // The same profile again changes nothing, and says so.
+    expect(describeAsked({ kind: 0, content: now, tags: [] }, now).lines).toEqual(["Nothing would change: it says what your profile says now.", "6 other fields stay as they are."]);
+    // A field BitLogin has no name for is named as it is written, and a changed one is not counted as unchanged.
+    expect(describeAsked({ kind: 0, content: JSON.stringify({ name: "Ada", bot: true }), tags: [] }, JSON.stringify({ name: "Ada", bot: false })).lines).toEqual(['"bot": true. It was: false', "1 other field stays as it is."]);
+    // Where the current one couldn't be read, the whole new one is shown, and a line says so.
+    expect(describeAsked({ kind: 0, content: next, tags: [] }, null).lines.at(-1)).toContain("couldn't be read");
+    expect(describeAsked({ kind: 0, content: next, tags: [] }, null).title).toBe("Replace your Nostr profile?");
+    // No profile yet at all: everything is an addition.
+    expect(describeAsked({ kind: 0, content: JSON.stringify({ name: "Ada" }), tags: [] }, "{}").lines).toEqual(["Name, added: Ada"]);
+  });
+
   it("says a deletion and a relay list in words", () => {
     const gone = describeAsked({ kind: 5, content: "tidying", tags: [["e", HEX], ["a", `30023:${HEX}:post`], ["nswp:world", SITE]] });
     expect(gone.title).toBe("Ask relays to delete these 2 things?");

@@ -34,19 +34,66 @@ const PROFILE_FIELDS: readonly [string, string][] = [
   ["lud06", "Lightning address (LNURL)"]
 ];
 
-export function describeAsked(event: { kind: number; content: string; tags: string[][] }): AskedWords {
+const readProfileContent = (content: string): Record<string, unknown> => {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    /* not a profile anyone can read */
+  }
+  return {};
+};
+const PROFILE_LABELS = new Map(PROFILE_FIELDS);
+const fieldValue = (key: string, value: unknown): string => {
+  if (key === "name" || key === "display_name") return cleanName(value) || line(value, 48);
+  if (typeof value === "string") return line(value);
+  return value === undefined || value === null ? "" : line(JSON.stringify(value), 120);
+};
+
+/**
+ * What a new profile would change, against the one relays hold now: each
+ * field changed, added or removed, with what it was. A profile is replaced
+ * whole, so the question a person is really asked is "what is different",
+ * and a changed lightning address must not hide among nine unchanged lines.
+ */
+function describeProfileChange(next: Record<string, unknown>, current: Record<string, unknown>): AskedWords {
+  const label = (key: string) => PROFILE_LABELS.get(key) ?? `"${line(key, 40)}"`;
+  // The fields BitLogin names first, in its own order; then any others, by name.
+  const keys = [...PROFILE_FIELDS.map(([key]) => key), ...[...new Set([...Object.keys(current), ...Object.keys(next)])].filter((key) => !PROFILE_LABELS.has(key)).sort()];
+  const lines: string[] = [];
+  let same = 0;
+  for (const key of keys) {
+    const was = fieldValue(key, current[key]);
+    const now = fieldValue(key, next[key]);
+    if (!was && !now) continue;
+    if (was === now && JSON.stringify(current[key]) === JSON.stringify(next[key])) same += 1;
+    else if (!was) lines.push(`${label(key)}, added: ${now}`);
+    else if (!now) lines.push(`${label(key)}, removed. It was: ${was}`);
+    else lines.push(`${label(key)}: ${now}. It was: ${was}`);
+  }
+  if (lines.length === 0) lines.push("Nothing would change: it says what your profile says now.");
+  if (same > 0) lines.push(`${same} other ${same === 1 ? "field stays" : "fields stay"} as ${same === 1 ? "it is" : "they are"}.`);
+  return {
+    title: "Change your Nostr profile?",
+    warning: "This is what would change, everywhere you use this account. A lightning address is where people send you money: if it is changing, check it.",
+    lines
+  };
+}
+
+/**
+ * `current`, for a profile: the words of the profile relays hold now, so the
+ * change can be shown. Null where it couldn't be read: then the whole new
+ * profile is shown, and a line says so. Leave it out to show the whole new one.
+ */
+export function describeAsked(event: { kind: number; content: string; tags: string[][] }, current?: string | null): AskedWords {
+  if (event.kind === 0 && typeof current === "string") return describeProfileChange(readProfileContent(event.content), readProfileContent(current));
   if (event.kind === 0) {
-    let profile: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(event.content) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) profile = parsed as Record<string, unknown>;
-    } catch {
-      /* not a profile anyone can read: said below */
-    }
+    const profile = readProfileContent(event.content);
     const lines = PROFILE_FIELDS.filter(([key]) => line(profile[key])).map(([key, label]) => `${label}: ${key === "name" || key === "display_name" ? cleanName(profile[key]) || line(profile[key], 48) : line(profile[key])}`);
     const others = Object.keys(profile).filter((key) => !PROFILE_FIELDS.some(([known]) => known === key));
     if (others.length) lines.push(`And ${others.length} other ${others.length === 1 ? "field" : "fields"}: ${line(others.join(", "), 120)}`);
     if (lines.length === 0) lines.push("An empty profile: no name, no picture, nothing about you.");
+    if (current === null) lines.push("Your profile as it is now couldn't be read, so this is the whole new one, not only what changes.");
     return {
       title: "Replace your Nostr profile?",
       warning: "This replaces your whole profile, everywhere you use this account. Anything not listed here is removed from it. A lightning address is where people send you money: check it.",

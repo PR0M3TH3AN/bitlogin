@@ -565,6 +565,8 @@ export type WorkerActionMap = {
   appDecrypt: [AppCryptPayload, { text: string }];
   appDecryptEvent: [AppDecryptEventPayload, { text: string }];
   loadProfile: [LoadProfilePayload, { profile?: Profile; relays?: string[] }];
+  /** The words of the account's newest profile note, as relays hold them: to show what a new one would change (§SW20). Null where none was found. */
+  profileContent: [Record<string, never>, { content: string | null; answered: boolean }];
   takeBack: [TakeBackPayload, TakeBackResult];
   signerCheck: [SignerSitePayload, SignerCheckResult];
   accountsList: [Record<string, never>, { accounts: KeptAccountInfo[] }];

@@ -1774,6 +1774,22 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     // ---- An ecash wallet kept with the account (docs/ecash.md). A full session only: none of these is on the list a
     // handed-over session may ask, so no embedded signer, and so no site, can read a token.
+    // The words of their newest profile note, to show what a proposed one would change. Read-only, and theirs.
+    case "profileContent": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      const relayUrls = [...new Set([...session.relays, ...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 10);
+      if (relayUrls.length === 0) return { content: null, answered: false };
+      const pool = new RelayPool(relayUrls);
+      try {
+        const found = await pool.queryQuorum({ kinds: [0], authors: [me], limit: 2 }, 3500);
+        const newest = found.outcomes.flatMap((o) => o.events).filter((event) => event.kind === 0 && event.pubkey === me && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+        return { content: newest ? newest.content : null, answered: found.respondedCount > 0 };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
     // The mints people recommend (NIP-87): read from relays, counted one voice per account, the user's own follows
     // first. It reads public notes and the user's follow list, and writes nothing.
     case "ecashMints": {
@@ -1991,7 +2007,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
-  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints",
+  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

@@ -105,6 +105,8 @@ export interface HeadlessSigner {
    * `ok` false means nothing was taken back.
    */
   takeBack(what: { site: string } | { all: true }): Promise<{ ok: boolean; accepted: number; of: number }>;
+  /** The words of the account's newest profile note on relays, or null; and whether any relay answered. */
+  profileContent(): Promise<{ content: string | null; answered: boolean }>;
   /**
    * The account's ecash wallet (docs/ecash.md), for BitLogin's own pages: what it holds, its mints, and the
    * roll-over that replaces spent records. A full session only. The tokens returned are bearer money: a page
@@ -285,6 +287,10 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async loadProfile(options = {}) {
       await requirePubkey();
       return (await client.loadProfile(options)).profile ?? null;
+    },
+    async profileContent() {
+      await requirePubkey();
+      return client.profileContent();
     },
     ecash: {
       async load() {
