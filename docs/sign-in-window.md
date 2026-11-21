@@ -1162,7 +1162,7 @@ nothing about the visitor: no key, no name, no account, no public key.
 
 | From | `t` | Fields | Meaning |
 |---|---|---|---|
-| client | `hello` | `world?`, `mode?` | Which world asked, and what for: `"ask"` (the default when `world` is given), `"switch"` (the account chooser), `"account"` (the account pages; the default without `world`). Sent again every few hundred milliseconds until `ready`. |
+| client | `hello` | `world?`, `mode?` | Which world asked, and what for: `"ask"` (the default when `world` is given), `"switch"` (the account chooser), `"account"` (the account pages; the default without `world`), `"files"` (straight to the person's file browser), `"wallet"` (straight to their ecash wallet). Sent again every few hundred milliseconds until `ready`. |
 | panel | `ready` | | It heard a listed client. Nothing is said to any page before this. |
 | panel | `size` | `size: "menu" \| "tall"`, `height?` | The size it would like: the menu's, or taller for sign-in and the account pages; and how tall its content is, in CSS pixels. Sent again when that changes. The client decides, and clamps both. |
 | panel | `close` | `allowed: boolean` | Done; the client removes the frame. Whether the world was allowed. The world learns the rest from its own signer. |

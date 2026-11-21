@@ -727,7 +727,16 @@ if (inPanel) {
     $("panel-client").textContent = `shown by ${new URL(client).host}`;
     toClient({ t: "ready" });
     if (hello.mode === "account") showAccount();
-    else {
+    else if (hello.mode === "files" || hello.mode === "wallet") {
+      // Straight to the file browser or the wallet. Both are the signed-in person's: with nobody signed in, the
+      // account page comes first, and says why.
+      who = await readCachedSession();
+      const restored = who ? await (await theWorker()).restore().catch(() => null) : null;
+      if (!restored) {
+        showAccount();
+        status(hello.mode === "files" ? "Sign in first, below. Then open Files." : "Sign in first, below. Then open your wallet.");
+      } else void (hello.mode === "files" ? showFiles() : showEcash());
+    } else {
       status("Looking for the world that asked.");
       found = await findEmbeddedSigner({ inClient: true, world: hello.world });
       if (!found) status("BitLogin's signer wasn't found in that world, so there is nothing to allow. The world may not support it yet.");

@@ -38,6 +38,10 @@ describe("the sign-in panel (sign-in-window.md §SW19)", () => {
     expect(readPanelHello(hello({ world: "https://gallery.bitblocks.network/room?x=1", mode: "switch" }))).toEqual({ t: "hello", mode: "switch", world: "https://gallery.bitblocks.network" });
     expect(readPanelHello(hello({}))).toEqual({ t: "hello", mode: "account" });
     expect(readPanelHello(hello({ mode: "account", world: "https://gallery.bitblocks.network" }))).toEqual({ t: "hello", mode: "account", world: "https://gallery.bitblocks.network" });
+    // Straight to the file browser, or the wallet: no world is needed.
+    expect(readPanelHello(hello({ mode: "files" }))).toEqual({ t: "hello", mode: "files" });
+    expect(readPanelHello(hello({ mode: "wallet" }))).toEqual({ t: "hello", mode: "wallet" });
+    expect(readPanelHello(hello({ mode: "switch" }))).toBeNull();
     // Asking for a world needs the world.
     expect(readPanelHello(hello({ mode: "ask" }))).toBeNull();
     expect(readPanelHello(hello({ world: "javascript:alert(1)" }))).toBeNull();

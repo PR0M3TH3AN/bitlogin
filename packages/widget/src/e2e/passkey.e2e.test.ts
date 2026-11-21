@@ -1169,6 +1169,15 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await blossom.close();
         }
 
+        // Opened for the files alone, or the wallet alone, it goes straight there: one press from anywhere in a game.
+        await page.evaluate(() => (window as any).showPanel({ mode: "files" }));
+        await panel.locator("#files-path").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await panel.locator("#account").isVisible()).toBe(false);
+        await page.evaluate(() => (window as any).showPanel({ mode: "wallet" }));
+        // (A wallet was started earlier in this test, so it opens at its balance.)
+        await panel.locator("#ecash-total").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await panel.locator("#account").isVisible()).toBe(false);
+
         // Opened for the account alone, it shows the account.
         await page.evaluate(() => (window as any).showPanel({ mode: "account" }));
         await panel.locator("#account").waitFor({ state: "visible", timeout: 30_000 });
