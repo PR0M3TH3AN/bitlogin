@@ -338,8 +338,38 @@ export class WorkerClient {
   vaultSaveNwc(payload: VaultSaveNwcPayload) {
     return this.call("vaultSaveNwc", payload);
   }
-  vaultFindForOrigin() {
-    return this.call("vaultFindForOrigin", {});
+  driveLoad() {
+    return this.call("driveLoad", {});
+  }
+  driveSave(changes: WorkerActionMap["driveSave"][0]) {
+    return this.call("driveSave", changes);
+  }
+  blossomAuth(payload: WorkerActionMap["blossomAuth"][0]) {
+    return this.call("blossomAuth", payload);
+  }
+  blossomServers() {
+    return this.call("blossomServers", {});
+  }
+  blossomSetServers(servers: string[]) {
+    return this.call("blossomSetServers", { servers });
+  }
+  profileContent() {
+    return this.call("profileContent", {});
+  }
+  ecashMints() {
+    return this.call("ecashMints", {});
+  }
+  ecashLoad() {
+    return this.call("ecashLoad", {});
+  }
+  ecashSetMints(mints: string[]) {
+    return this.call("ecashSetMints", { mints });
+  }
+  ecashRoll(roll: WorkerActionMap["ecashRoll"][0]) {
+    return this.call("ecashRoll", roll);
+  }
+  vaultFindForOrigin(payload: VaultFindForOriginPayload = {}) {
+    return this.call("vaultFindForOrigin", payload);
   }
   vaultRevealNwc(payload: VaultRevealNwcPayload) {
     return this.call("vaultRevealNwc", payload);

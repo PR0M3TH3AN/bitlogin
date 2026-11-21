@@ -456,13 +456,17 @@ export interface VaultListResult {
 export interface VaultSaveNwcPayload {
   uri: string;
   label: string;
+  /** The site it is for, where that is not this page: honoured only at one of BitLogin's sign-in addresses (§SW20). */
+  site?: string;
 }
 
 /** No origin field: the worker derives its own (see selfOrigin). */
-export type VaultFindForOriginPayload = Record<string, never>;
+export type VaultFindForOriginPayload = { /** As in VaultSaveNwcPayload. */ site?: string };
 
 export interface VaultRevealNwcPayload {
   connectionId: string;
+  /** As in VaultSaveNwcPayload. */
+  site?: string;
 }
 export interface VaultRevealNwcResult {
   uri: string;
@@ -521,6 +525,16 @@ export interface WorkerNotification {
   url: string;
 }
 
+// ---- An ecash wallet kept with the account (docs/ecash.md; worker/ecashStore.ts) ----
+export type { EcashState, EcashRoll } from "./ecashStore.js";
+import type { EcashState, EcashRoll } from "./ecashStore.js";
+import type { RankedMint } from "../ecash/mints.js";
+export type { RankedMint };
+
+// ---- A person's files (docs/files.md; worker/driveStore.ts) ----
+import type { DriveSave, DriveState, RankedServer } from "./driveStore.js";
+export type { DriveSave, DriveState, RankedServer };
+
 export type WorkerActionMap = {
   configure: [ConfigurePayload, Record<string, never>];
   register: [RegisterPayload, RegisterResult];
@@ -555,6 +569,8 @@ export type WorkerActionMap = {
   appDecrypt: [AppCryptPayload, { text: string }];
   appDecryptEvent: [AppDecryptEventPayload, { text: string }];
   loadProfile: [LoadProfilePayload, { profile?: Profile; relays?: string[] }];
+  /** The words of the account's newest profile note, as relays hold them: to show what a new one would change (§SW20). Null where none was found. */
+  profileContent: [Record<string, never>, { content: string | null; answered: boolean }];
   takeBack: [TakeBackPayload, TakeBackResult];
   signerCheck: [SignerSitePayload, SignerCheckResult];
   accountsList: [Record<string, never>, { accounts: KeptAccountInfo[] }];
@@ -578,6 +594,18 @@ export type WorkerActionMap = {
   worldSeal: [WorldSealPayload, WorldSealResult];
   worldUnwrap: [WorldUnwrapPayload, { message: ReadMessage }];
   worldReach: [WorldReachPayload, NostrEvent];
+  driveLoad: [Record<string, never>, DriveState];
+  driveSave: [DriveSave, DriveState];
+  /** A permission note for one file at one Blossom server (BUD-11), as the `Authorization` header carries it. */
+  blossomAuth: [{ verb: "upload" | "delete" | "get"; server: string; sha256: string }, { token: string }];
+  /** The account's own server list (BUD-03), and the servers people use, the user's follows first. */
+  blossomServers: [Record<string, never>, { mine: string[]; ranked: RankedServer[] }];
+  blossomSetServers: [{ servers: string[] }, { mine: string[] }];
+  ecashLoad: [Record<string, never>, EcashState];
+  ecashSetMints: [{ mints: string[] }, EcashState];
+  ecashRoll: [EcashRoll, EcashState];
+  /** The mints people recommend (NIP-87), the user's own follows first. */
+  ecashMints: [Record<string, never>, { mints: RankedMint[] }];
   logout: [Record<string, never>, Record<string, never>];
   vaultStatus: [Record<string, never>, VaultStatusResult];
   vaultList: [Record<string, never>, VaultListResult];

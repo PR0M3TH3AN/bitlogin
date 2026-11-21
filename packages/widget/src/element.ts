@@ -164,6 +164,15 @@ export class BitLoginAuthElement extends HTMLElement {
   private sessionWarnings: string[] = [];
   private lastSignedEventJson = "";
   private exportedNsec = "";
+  /**
+   * When the person last proved who they are in this widget: a sign-in, or the lock opened. Not a session taken
+   * up from what the browser kept, and not a switch between kept accounts. Where the page asks for it
+   * (`fresh-secrets`: BitLogin's panel, sign-in-window.md §SW19.4), the private key is shown only within five
+   * minutes of that, so someone who finds the panel open cannot simply read it off.
+   */
+  private provedAt = 0;
+  private takingUpKept = false;
+  private revealNeedsProof = false;
   private changePasswordNewCredential = "";
 
   // Imported keys only (spec §15.7): a generated identity is derived from the
@@ -217,6 +226,8 @@ export class BitLoginAuthElement extends HTMLElement {
     appName: string;
     reason?: string;
     origin: string;
+    /** The site the connection is for, where that is not this page: BitLogin's own panel, answering for a world. */
+    site?: string;
     stage: "auth" | "active";
     resolve: (uri: string | null) => void;
   } | null = null;
@@ -498,15 +509,15 @@ export class BitLoginAuthElement extends HTMLElement {
    * to this origin, the user sees a one-tap approval; otherwise a guided
    * import (Bitcoin Connect chooser, or paste).
    */
-  async requestNwcConnection(options: { appName?: string; reason?: string } = {}): Promise<string | null> {
+  async requestNwcConnection(options: { appName?: string; reason?: string; /** The site the connection is for, where that is not this page. Refused by the worker anywhere but BitLogin's own sign-in addresses (sign-in-window.md §SW20). */ forSite?: string } = {}): Promise<string | null> {
     if (this.vaultRequest) throw new Error("A wallet connection request is already in progress.");
     // Extension sessions are signer-only (§LM7): no vault, and prompting a password
     // sign-in over an active session would be worse than an honest decline.
     if (this.altSigner) return null;
-    const origin = window.location.origin;
+    const origin = options.forSite ?? window.location.origin;
     const appName = options.appName?.trim() || window.location.hostname || "This app";
     return new Promise<string | null>((resolve) => {
-      this.vaultRequest = { appName, reason: options.reason, origin, stage: "auth", resolve };
+      this.vaultRequest = { appName, reason: options.reason, origin, ...(options.forSite ? { site: options.forSite } : {}), stage: "auth", resolve };
       // Symmetric with bitlogin-offer-pending. Without it, a host following
       // the recommended hidden-mount pattern navigated a HIDDEN element to a
       // consent screen nobody could see, and the promise never settled.
@@ -639,7 +650,7 @@ export class BitLoginAuthElement extends HTMLElement {
       return;
     }
     this.vaultUnsaved = false;
-    const found = await this.worker.vaultFindForOrigin();
+    const found = await this.worker.vaultFindForOrigin(request.site ? { site: request.site } : {});
     if (found.connection) {
       this.vaultCandidate = found.connection;
       this.goto("vault-consent");
@@ -653,7 +664,8 @@ export class BitLoginAuthElement extends HTMLElement {
     if (!candidate || !this.vaultRequest) return;
     this.setBusy(true);
     try {
-      const { uri } = await this.worker.vaultRevealNwc({ connectionId: candidate.connectionId });
+      const site = this.vaultRequest.site;
+      const { uri } = await this.worker.vaultRevealNwc({ connectionId: candidate.connectionId, ...(site ? { site } : {}) });
       this.setBusy(false);
       this.finishVaultRequest(uri);
       this.flashSuccess(this.screen, "Wallet shared");
@@ -702,7 +714,7 @@ export class BitLoginAuthElement extends HTMLElement {
       return;
     }
     const label = labelDraft.trim() || `${request.appName} wallet`;
-    await this.worker.vaultSaveNwc({ uri, label });
+    await this.worker.vaultSaveNwc({ uri, label, ...(request.site ? { site: request.site } : {}) });
     this.setBusy(false);
     this.finishVaultRequest(uri);
     this.flashSuccess(this.screen, "Wallet connected");
@@ -788,6 +800,7 @@ export class BitLoginAuthElement extends HTMLElement {
    * detail shape: which method granted the session and what it can do (§LM3). The
    * pre-existing `publicKey` field is unchanged for hosts written before `method`. */
   private dispatchLogin(): void {
+    if (!this.takingUpKept) this.provedAt = Date.now();
     void this.refreshAccounts();
     const capabilities: SignerCapabilities = this.altSigner?.capabilities ?? {
       nip44: true,
@@ -866,6 +879,7 @@ export class BitLoginAuthElement extends HTMLElement {
     // A revealed private key stays on the main thread only while one of the
     // two screens that display it is showing.
     if (screen !== "export" && screen !== "save-key") this.exportedNsec = "";
+    if (screen !== "export") this.revealNeedsProof = false;
     this.screen = screen;
     this.errorMessage = undefined;
     this.render();
@@ -1813,6 +1827,8 @@ export class BitLoginAuthElement extends HTMLElement {
     if (result.ok && result.everydayPublicKey) {
       this.lock = await this.worker.lockStatus();
       this.takeRestored(result);
+      // The PIN or the device's own unlock was just given: that is proof.
+      this.provedAt = Date.now();
       return;
     }
     if (result.ok) {
@@ -1906,7 +1922,9 @@ export class BitLoginAuthElement extends HTMLElement {
     };
     this.phraseRebuildsIdentity = result.everydayKeyDerived ?? false;
     this.noteSignerClaim(this.claimSigner());
+    this.takingUpKept = true;
     this.dispatchLogin();
+    this.takingUpKept = false;
     this.goto("dashboard");
   }
 
@@ -1925,7 +1943,9 @@ export class BitLoginAuthElement extends HTMLElement {
       };
       this.phraseRebuildsIdentity = result.everydayKeyDerived ?? false;
       this.noteSignerClaim(this.claimSigner());
+      this.takingUpKept = true;
       this.dispatchLogin();
+      this.takingUpKept = false;
       this.goto("dashboard");
     } catch {
       // No cached session, or the worker/IndexedDB isn't available -- fall
@@ -2231,6 +2251,12 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   private async handleRevealNsec(): Promise<void> {
+    if (this.hasAttribute("fresh-secrets") && Date.now() - this.provedAt > 5 * 60_000) {
+      this.revealNeedsProof = true;
+      this.render();
+      return;
+    }
+    this.revealNeedsProof = false;
     const { nsec } = await this.worker.exportIdentity();
     this.exportedNsec = nsec;
     this.render();
@@ -3065,6 +3091,12 @@ export class BitLoginAuthElement extends HTMLElement {
           <p class="small">To bring an account back with a file saved here: on the sign-in screen, open "More sign-in options" and choose "Restore from an export file". The recovery export needs your recovery phrase too; the key file does not.</p>
           ${this.renderError()}
           <button class="secondary" type="button" data-action="reveal-nsec">Reveal private key (nsec)</button>
+          ${
+            this.revealNeedsProof
+              ? `<div class="notice warn" data-reveal-needs-proof>To show your private key here, prove it's you first: sign out, sign in again, and come back to this screen within five minutes. That way someone who finds this open can't read your key.</div>
+                <button class="secondary" type="button" data-action="logout">Sign out now</button>`
+              : ""
+          }
           ${
             this.exportedNsec
               ? `<div class="notice warn">Never share this. Anyone with it controls your identity.</div><div class="credential-box" id="credential-box">${escapeHtml(

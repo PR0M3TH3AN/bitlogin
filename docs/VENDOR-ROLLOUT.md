@@ -115,7 +115,7 @@ branch, so nobody's work in progress was touched.
 
 | App | Branch | Commit | Deployed by | Live |
 |---|---|---|---|---|
-| COMBATRIG | `chore/bitlogin-revendor-1120b` → `main` | `69d6b250e9` | its AI Session Manager | in its landing queue; main SHA to follow |
+| COMBATRIG | `chore/bitlogin-revendor-1120b` → `main` | `69d6b250e9`, landed on `main` as `ffb5577993` (full battery green) | its AI Session Manager | not yet: combatrig.net still serves `adf754e312` (BitLogin `4eb99aa`); goes live with its next deploy |
 | BitPortal | `main` | `efb0ac3` | its own session | vendored; deploy is the owner's, with that session |
 | Satisfied | `beta` | `3f99d5e` | push | beta.imsatisfied.app ✓ |
 | Satisfied | `master` | `f921853` (promotion merge, tree = beta) | `npx vercel --prod` | imsatisfied.app ✓ |

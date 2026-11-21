@@ -27,13 +27,19 @@
  * in is worked out here, from the address the browser gave, by the Public
  * Suffix List: never by the site, and never by the window.
  */
+import { verifyNostrEvent } from "@bitlogin/core/nostr";
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
 import { knownFamily } from "./family.js";
 import { familyOf } from "./publicSuffix.js";
 import { APP_LIMITS, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import type { Profile } from "./profile.js";
 import {
+  ASK_LIMITS,
+  ASK_WAIT_MS,
   cleanOrigin,
+  cleanWalletUri,
+  prepareAsked,
+  type Asked,
   createSignGate,
   handoffMessage,
   prepareForSite,
@@ -97,6 +103,21 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     sensitive: createSignGate(APP_LIMITS.sensitive, signedSensitive),
     read: createSignGate(APP_LIMITS.read)
   });
+  /**
+   * What the site has put to the person, and is waiting on (§SW20): one thing at a time. This page signs none of
+   * it and shows none of it. BitLogin's panel or window shows it, and brings back the answer.
+   */
+  let pending: { id: string; ask: Asked; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** Counted apart: asking for a wallet does not use up a question about a profile, nor the other way round. */
+  const askGates: Record<Asked["what"], SignGate> = { sign: createSignGate(ASK_LIMITS), wallet: createSignGate(ASK_LIMITS), pay: createSignGate(ASK_LIMITS), save: createSignGate(ASK_LIMITS), pick: createSignGate(ASK_LIMITS) };
+  /** The question is over, unanswered: the site is told "refused", like every other no. */
+  const dropPending = () => {
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    const { id } = pending;
+    pending = null;
+    if (site) window.parent.postMessage(signerMessage({ t: "refused", id }), site);
+  };
   /** The hand-off in flight: the window that asked, and the word it gave. */
   let asking: { nonce: string; from: MessageEventSource } | null = null;
 
@@ -105,6 +126,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
   /** No longer unlocked, with nothing forgotten: the grant is gone already (taken back), or is to be kept (too
    *  long unchecked, and no relay answered). */
   const drop = () => {
+    dropPending();
     const held = headless;
     headless = null;
     pubkey = null;
@@ -130,6 +152,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
   };
   /** Lock: the site is forgotten, and the key goes with the worker that held it. */
   const lock = () => {
+    dropPending();
     const held = headless;
     const forSite = site;
     headless = null;
@@ -226,6 +249,20 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     const refuse = () => say({ t: "refused", id: ask.id });
     if (pubkey && Date.now() / 1000 >= until) lock();
     if (!headless || !pubkey) return refuse();
+
+    if (ask.t === "propose" || ask.t === "wallet" || ask.t === "pay" || ask.t === "file-save" || ask.t === "file-pick") {
+      // Put to the person on a page of BitLogin's own. An application the user approved may ask too (BitPortal's own
+      // room is one, and should behave as a world does): asking widens nothing it may do on its own say, because
+      // every answer is a press on BitLogin's page, and what is signed there is signed by BitLogin's own session.
+      // Not a wallet: an application asks for one through the widget, at its own address.
+      const asked: Asked | null = app && ask.t === "wallet" ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ask.t === "file-pick" ? { what: "pick" } : ask.t === "file-save" ? { what: "save", name: ask.name, type: ask.type, bytes: ask.bytes, private: ask.private } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
+      if (!asked || !askGates[asked.what].take(Date.now())) return refuse();
+      // One question at a time: a new one ends the one before it.
+      dropPending();
+      const id = ask.id;
+      pending = { id, ask: asked, timer: setTimeout(() => pending?.id === id && dropPending(), ASK_WAIT_MS) };
+      return say({ t: "asking", id });
+    }
 
     if (ask.t === "encrypt" || ask.t === "decrypt" || ask.t === "read") {
       // Only an application the user approved may ask, and BitLogin's worker holds it to what they approved.
@@ -347,11 +384,36 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}) });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}), ...(pubkey && pending ? { ask: pending.ask, pubkey } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }
       return;
+    }
+    if (msg.t === "answer") {
+      // Only from the window that said hello, with the word it gave, and for the site this is really in.
+      if (!asking || asking.nonce !== msg.nonce || asking.from !== e.source || msg.world !== site) return;
+      const was = pending;
+      if (!was || !pubkey) return back({ t: "done", nonce: msg.nonce, ok: false });
+      clearTimeout(was.timer);
+      pending = null;
+      let reply: SignerReply = { t: "refused", id: was.id };
+      if (was.ask.what === "wallet" && cleanWalletUri(msg.wallet)) reply = { t: "wallet", id: was.id, uri: cleanWalletUri(msg.wallet) };
+      // Paid: only where it is the invoice this site asked to have paid. The site learns that, and nothing of the wallet.
+      if (was.ask.what === "pay" && msg.paid?.invoice === was.ask.invoice) reply = { t: "paid", id: was.id, ...(msg.paid.preimage ? { preimage: msg.paid.preimage } : {}) };
+      // A file saved, or the one file the person chose: passed on as BitLogin's own page gave it.
+      if (was.ask.what === "save" && msg.saved) reply = { t: "file-saved", id: was.id, ...msg.saved };
+      if (was.ask.what === "pick" && msg.file) reply = { t: "file", id: was.id, ...msg.file };
+      if (was.ask.what === "sign" && msg.event) {
+        // BitLogin's own page signed it, with the person's say. It is passed on only if it is exactly what was
+        // put to them: signed by the account this site is signed in as, the same kind, words and tags, and now.
+        const signed = msg.event;
+        const asked = was.ask.event;
+        const sameAsAsked = verifyNostrEvent(signed) && signed.pubkey === pubkey && signed.kind === asked.kind && signed.content === asked.content && JSON.stringify(signed.tags) === JSON.stringify(asked.tags) && Math.abs(signed.created_at - Date.now() / 1000) < 600;
+        if (sameAsAsked) reply = { t: "signed", id: was.id, event: signed };
+      }
+      say(reply);
+      return back({ t: "done", nonce: msg.nonce, ok: reply.t !== "refused" || (!msg.event && !msg.wallet && !msg.paid && !msg.saved && !msg.file) });
     }
     if (msg.t !== "grant") return;
     // Only from the window that said hello, with the word it gave, and for the site this is really in.
@@ -372,6 +434,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       name = msg.name ?? null;
       gate = createSignGate();
       passGate = createSignGate(passLimits);
+      dropPending();
       // A site the user left "remember" ticked for is kept, so they are not asked again when its page is next
       // loaded: thirty days for one BitLogin knows, seven for any other. A site they unticked it for is allowed
       // for this visit: it lasts as long as the page does, and nothing is written down. So does one that can't

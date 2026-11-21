@@ -55,7 +55,7 @@ import { describe as describeKept, forget as forgetKept, keep as keepKept, loadK
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { inFamily, readFamily } from "../embedded/family.js";
-import { mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
+import { isSignInAddress, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
 import { createSignGate, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
 import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
@@ -63,7 +63,11 @@ import { ACHIEVEMENT_LIMITS, achievementForWorld } from "../embedded/achievement
 import { buildMessageRelays, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS, sealMessage, UNWRAP_WORLD_LIMITS } from "../embedded/messages.js";
 import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
-import { deleteSignerGrant, grantedAt, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/mints.js";
+import { blossomAuth, loadDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
+import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
+import { loadEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
+import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
   checkDue,
   checkLearned,
@@ -520,6 +524,20 @@ function selfOrigin(): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * The site a wallet connection is for. This page's own origin, always, except in one place: at one of BitLogin's
+ * own sign-in addresses the page may name the site, because there the page is BitLogin's panel or window
+ * answering for a world, and the person is shown that world's address before anything is shared (§SW20). In a
+ * vendored copy at an application's address a named site is refused, so a host can never adopt, or be handed, a
+ * wallet the user connected to another site.
+ */
+function walletSite(named: unknown): string {
+  if (named === undefined) return selfOrigin();
+  const site = grantSite(named);
+  if (!site || !isSignInAddress(selfOrigin())) throw new Error("A wallet connection is for this site only.");
+  return site;
 }
 
 function requireVault(): VaultSession {
@@ -1756,6 +1774,131 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
 
     // ---- Connection Vault (connection-vault.md §12, reveal mode) ----
 
+    // ---- An ecash wallet kept with the account (docs/ecash.md). A full session only: none of these is on the list a
+    // handed-over session may ask, so no embedded signer, and so no site, can read a token.
+    // ---- A person's files (docs/files.md). A full session only: none of these is on the list a handed-over
+    // session may ask, so no embedded signer, and so no site, can read the index or have a permission note signed.
+    case "blossomAuth": {
+      const { signer } = requireUnlocked();
+      return { token: blossomAuth(signer, payload as { verb: unknown; server: unknown; sha256?: unknown }) };
+    }
+    case "driveLoad":
+    case "driveSave":
+    case "blossomServers":
+    case "blossomSetServers": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      const finderUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
+      let mine: string[] = session.relays;
+      if (mine.length === 0 && finderUrls.length) {
+        const finder = new RelayPool(finderUrls);
+        try {
+          mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+        } catch {
+          mine = [];
+        } finally {
+          finder.closeAll();
+        }
+      }
+      const pool = new RelayPool([...new Set([...mine, ...vaultRelayUrls, ...(action.startsWith("blossom") ? discoveryRelayUrls : [])])].slice(0, 16));
+      try {
+        const deps = { signer, store, relays: pool };
+        if (action === "driveLoad") return await loadDrive(deps);
+        if (action === "driveSave") return await saveDrive(deps, payload as DriveSave);
+        const ownList = async (): Promise<string[]> => {
+          const found = await pool.queryQuorum({ kinds: [SERVER_LIST_KIND], authors: [me], limit: 2 }, 4000);
+          const newest = found.outcomes.flatMap((o) => o.events).filter((event) => event.kind === SERVER_LIST_KIND && event.pubkey === me && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+          return newest ? serversIn(newest) : [];
+        };
+        if (action === "blossomSetServers") {
+          const servers = [...new Set(((payload as { servers?: unknown }).servers as unknown[] | undefined ?? []).map(cleanServer).filter(Boolean))].slice(0, DRIVE_LIMITS.servers);
+          if (servers.length === 0) throw new Error("Name at least one file server, by its https address.");
+          // The standard, public list (BUD-03): it is how other apps find a person's files when a link breaks.
+          const event = signer.signEvent({ kind: SERVER_LIST_KIND, created_at: Math.floor(Date.now() / 1000), tags: servers.map((server) => ["server", server]), content: "" });
+          if (countAcknowledgements(await pool.publishAll(event, 6000)) < Math.min(2, pool.relayUrls.length)) throw new Error("No relay took your server list. Try again when you are online.");
+          return { mine: servers };
+        }
+        const [own, lists, follows] = await Promise.all([
+          ownList(),
+          pool.queryQuorum({ kinds: [SERVER_LIST_KIND], limit: 500 }, 5000),
+          pool.queryQuorum({ kinds: [FOLLOWS_KIND], authors: [me], limit: 2 }, 4000)
+        ]);
+        const followList = follows.outcomes.flatMap((o) => o.events).filter((event) => event.pubkey === me && event.kind === FOLLOWS_KIND && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+        const followed = new Set((followList?.tags ?? []).filter((tag) => tag[0] === "p" && typeof tag[1] === "string").map((tag) => tag[1]!));
+        const byId = new Map(lists.outcomes.flatMap((o) => o.events).filter((event) => event.pubkey !== me && verifyNostrEvent(event)).map((event) => [event.id, event]));
+        return { mine: own, ranked: rankServers([...byId.values()], followed) };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    // The words of their newest profile note, to show what a proposed one would change. Read-only, and theirs.
+    case "profileContent": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      const relayUrls = [...new Set([...session.relays, ...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 10);
+      if (relayUrls.length === 0) return { content: null, answered: false };
+      const pool = new RelayPool(relayUrls);
+      try {
+        const found = await pool.queryQuorum({ kinds: [0], authors: [me], limit: 2 }, 3500);
+        const newest = found.outcomes.flatMap((o) => o.events).filter((event) => event.kind === 0 && event.pubkey === me && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+        return { content: newest ? newest.content : null, answered: found.respondedCount > 0 };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    // The mints people recommend (NIP-87): read from relays, counted one voice per account, the user's own follows
+    // first. It reads public notes and the user's follow list, and writes nothing.
+    case "ecashMints": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      const relayUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
+      if (relayUrls.length === 0) return { mints: [] };
+      const pool = new RelayPool(relayUrls);
+      try {
+        const [recommended, lists] = await Promise.all([
+          pool.queryQuorum({ kinds: [MINT_RECOMMENDATION_KIND], "#k": [CASHU_MINT_KIND], limit: 500 }, 5000),
+          pool.queryQuorum({ kinds: [FOLLOWS_KIND], authors: [me], limit: 2 }, 4000)
+        ]);
+        const newest = lists.outcomes.flatMap((o) => o.events).filter((event) => event.pubkey === me && event.kind === FOLLOWS_KIND && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+        const follows = new Set((newest?.tags ?? []).filter((tag) => tag[0] === "p" && typeof tag[1] === "string").map((tag) => tag[1]!));
+        const byId = new Map(recommended.outcomes.flatMap((o) => o.events).filter((event) => verifyNostrEvent(event)).map((event) => [event.id, event]));
+        return { mints: rankMints([...byId.values()], follows) };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    case "ecashLoad":
+    case "ecashSetMints":
+    case "ecashRoll": {
+      const { signer } = requireUnlocked();
+      const me = signer.getPublicKey();
+      // Their own write relays, and BitLogin's: the same place a take-back is kept.
+      const finder = new RelayPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
+      let mine: string[] = session.relays;
+      if (mine.length === 0) {
+        try {
+          mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+        } catch {
+          mine = [];
+        } finally {
+          finder.closeAll();
+        }
+      } else finder.closeAll();
+      const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
+      const pool = new RelayPool(relayUrls);
+      try {
+        const deps = { signer, store, relays: pool };
+        if (action === "ecashLoad") return await loadEcash(deps);
+        if (action === "ecashSetMints") return await setEcashMints({ ...deps, newKey: () => bytesToHex(generatePrivateKey()) }, (payload as { mints?: unknown }).mints);
+        return await rollEcash(deps, payload as EcashRoll);
+      } finally {
+        pool.closeAll();
+      }
+    }
+
     case "vaultStatus": {
       if (!session.signer) return { enabled: false };
       if (session.connectionVaultRoot) {
@@ -1770,8 +1913,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultSaveNwc": {
-      const p = payload as { uri: string; label: string };
-      const origin = selfOrigin();
+      const p = payload as { uri: string; label: string; site?: unknown };
+      const origin = walletSite(p.site);
       const vault = requireVault();
       const credential = parseNwcUri(p.uri);
       const label = p.label.trim().slice(0, 120) || "Wallet connection";
@@ -1798,7 +1941,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultFindForOrigin": {
-      const origin = selfOrigin();
+      const origin = walletSite((payload as { site?: unknown }).site);
       const { connections } = await listLiveConnections();
       const match = connections.find(
         (c) =>
@@ -1810,7 +1953,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
     }
 
     case "vaultRevealNwc": {
-      const p = payload as { connectionId: string };
+      const p = payload as { connectionId: string; site?: unknown };
+      const forSite = walletSite(p.site);
       const { connection } = await findConnection(p.connectionId);
       if (connection.record.connection_type !== "nwc" || connection.record.state !== "active") {
         throw new Error("That connection is not an active wallet connection.");
@@ -1822,7 +1966,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       // management UI's markup) could pull a wallet the user connected to a
       // different site entirely.
       const boundOrigin = connection.record.application_binding.origin;
-      if (boundOrigin !== null && boundOrigin !== selfOrigin()) {
+      if (boundOrigin !== null && boundOrigin !== forSite) {
         throw new Error("That connection belongs to a different site.");
       }
       const credential = connection.record.credential as unknown as NwcCredential;
@@ -1921,6 +2065,8 @@ const KNOWN_ACTIONS = new Set<string>([
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
+  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent",
+  "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
   "nip46Connect", "nip46NostrconnectStart", "nip46NostrconnectAwait", "nip46SignEvent",

@@ -28,6 +28,8 @@ import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
 import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "../../../core/src/nostr/event.js";
 import { NostrSigner } from "../../../core/src/account/signer.js";
 import { sealMessage } from "../embedded/messages.js";
+import { startMockMint } from "../ecash/mockMint.js";
+import { startMockBlossom } from "../drive/mockBlossom.js";
 import { RelayPool } from "../../../core/src/nostr/pool.js";
 
 const DIST = fileURLToPath(new URL("../../../demo/dist/", import.meta.url));
@@ -79,7 +81,7 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
       }
       // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
       // signer reads it. Each is given the mock relays, as the account page is.
-      if (relative === "/connect/index.html" || relative === "/sites/index.html" || relative === "/signer/index.html") {
+      if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/signer/index.html") {
         body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}">`);
       }
       res.writeHead(200, {
@@ -781,6 +783,416 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       } finally {
         await browser.close();
         asking.close();
+      }
+    },
+    240_000
+  );
+
+  it(
+    "a client that keeps the screen shows the sign-in panel over a world, and the world is allowed without a window (sign-in-window.md §SW19)",
+    async () => {
+      // Two pages of one site, as BitPortal's shell and a world under it are: the client, and the world it shows.
+      const start = (body: (url: URL) => string) =>
+        new Promise<{ server: Server; at: string }>((resolve) => {
+          const server = createServer((req, res) => {
+            res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+            res.end(body(new URL(req.url ?? "/", "http://x")));
+          });
+          server.listen(0, "127.0.0.1", () => {
+            const a = server.address();
+            resolve({ server, at: `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}` });
+          });
+        });
+      const worldServer = await start(
+        () => `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`
+      );
+      const world = worldServer.at;
+      // The client: the world in one frame, and BitLogin's panel drawn over it in another, where the menu is. It says
+      // hello until the panel is ready, and keeps everything the panel says.
+      const clientServer = await start(
+        () => `<!doctype html><meta charset="utf-8"><title>a client that keeps the screen</title>
+<iframe id="world" src="${world}/" style="width:900px;height:600px;border:0"></iframe>
+<div id="slot"></div>
+<script type="module">
+  const SIGNIN = "${origin}";
+  window.said = [];
+  addEventListener("message", (e) => { if (e.origin === SIGNIN && e.data && e.data.bitlogin === "bitlogin-panel") window.said.push(e.data); });
+  window.showPanel = (hello) => {
+    const panel = document.createElement("iframe");
+    panel.id = "panel";
+    panel.src = SIGNIN + "/connect/panel/";
+    panel.allow = "publickey-credentials-get " + SIGNIN + "; publickey-credentials-create " + SIGNIN;
+    panel.style.cssText = "width:780px;height:640px;border:0";
+    document.getElementById("slot").replaceChildren(panel);
+    window.said = [];
+    const again = setInterval(() => {
+      if (window.said.some((m) => m.t === "ready")) return clearInterval(again);
+      panel.contentWindow?.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hello", ...hello }, SIGNIN);
+    }, 200);
+  };
+</script>`
+      );
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const page = context.pages()[0]!;
+        const errors: string[] = [];
+        page.on("pageerror", (err) => errors.push(String(err)));
+        await page.goto(`${clientServer.at}/`);
+        const worldFrame = page.frames().find((f) => f.url().startsWith(world))!;
+        await worldFrame.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        const ask = (message: Record<string, unknown>) => worldFrame.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+        expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+
+        // The world asks its client, and the client shows the panel, naming the world.
+        await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        const panel = page.frameLocator("#panel");
+        await page.waitForFunction(() => (window as any).said.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        // Nobody is signed in in this panel yet: it offers sign-in, with BitLogin's own address and the client's, and
+        // says plainly that a world can draw a copy of it.
+        await panel.locator("#signin").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await panel.locator("#panel-me").textContent()).toBe(new URL(origin).host);
+        expect(await panel.locator("#panel-client").textContent()).toBe(`shown by ${new URL(clientServer.at).host}`);
+        expect(await panel.locator("#signin").textContent()).toContain("A world can draw a copy of this panel");
+        for (const hidden of await panel.locator("#signin [data-window-only]").all()) expect(await hidden.isVisible()).toBe(false);
+        expect(await page.evaluate(() => (window as any).said.some((m: any) => m.t === "size" && m.size === "tall"))).toBe(true);
+        // It says how tall its content is, so the client need not leave empty space under a short page.
+        await page.waitForFunction(() => (window as any).said.some((m: any) => m.t === "size" && m.height > 300 && m.height < 640), null, { timeout: 30_000 });
+        // The panel is dark whatever the browser's theme (this browser's is light): it is drawn over a game.
+        const lightness = await panel.locator("body").evaluate((el) => (getComputedStyle(el).backgroundColor.match(/[\d.]+/gu) ?? []).slice(0, 3).reduce((sum, v) => sum + Number(v), 0));
+        expect(lightness).toBeLessThan(120);
+        // The widget fills the panel's width, and at a phone's size sign-in fits with nothing to scroll.
+        const shown = panel.locator("#widget-slot bitlogin-auth");
+        await shown.locator('[data-action="goto-login"]').waitFor({ timeout: 30_000 });
+        expect((await shown.locator(".card").boundingBox())!.width).toBeGreaterThan(600);
+        if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/panel-signin.png` });
+        await page.evaluate(() => ((document.getElementById("panel") as HTMLElement).style.cssText = "width:370px;height:822px;border:0"));
+        expect(await panel.locator("html").evaluate((el) => el.scrollHeight)).toBeLessThanOrEqual(822);
+        if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/panel-signin-phone.png` });
+        await page.evaluate(() => ((document.getElementById("panel") as HTMLElement).style.cssText = "width:780px;height:640px;border:0"));
+
+        // A passkey account, made inside the panel's frame: the client delegated passkeys to it.
+        const widget = panel.locator("#widget-slot bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+
+        // Then the question, for the world as its own signer reported it.
+        await panel.locator("#allow").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await panel.locator("#site").textContent()).toBe(world);
+        await panel.locator("#who-key").filter({ hasText: /^npub1/u }).waitFor({ timeout: 30_000 });
+        const me = await panel.locator("#who-key").textContent();
+        // At the menu's size, the address, the account and both buttons are on screen with nothing to scroll.
+        for (const id of ["#site", "#who", "#allow", "#deny"]) {
+          const box = (await panel.locator(id).boundingBox())!;
+          expect(box.y + box.height, id).toBeLessThanOrEqual(640 + (await page.locator("#panel").boundingBox())!.y);
+        }
+        if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/panel-ask.png` });
+        await page.waitForTimeout(1000);
+        await panel.locator("#allow").click();
+        await page.waitForFunction(() => (window as any).said.some((m: any) => m.t === "close"), null, { timeout: 30_000 });
+        expect((await page.evaluate(() => (window as any).said)).find((m: any) => m.t === "close")).toEqual({ bitlogin: "bitlogin-panel", v: 1, t: "close", allowed: true });
+        // The world is allowed, as that account, and signs. No window was ever opened.
+        await worldFrame.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        const state = await ask({ t: "state" });
+        expect(state).toMatchObject({ unlocked: true, remembered: true });
+        expect(encodeNpub(state.pubkey)).toBe(me);
+        expect((await ask({ t: "sign", event: { kind: 1, content: "from inside the world", tags: [] } })).t).toBe("signed");
+        expect(context.pages().length).toBe(1);
+        // Nothing the panel said to the client named the person.
+        expect(JSON.stringify(await page.evaluate(() => (window as any).said))).not.toContain(state.pubkey);
+
+        // The next time, the panel remembers who is signed in in it. Asked to switch, it offers the accounts kept in
+        // it, with no password, and the question follows.
+        await page.evaluate((w) => (window as any).showPanel({ world: w, mode: "switch" }), world);
+        await panel.locator("#choose").waitFor({ state: "visible", timeout: 30_000 });
+        await panel.locator(".connect-account-row").first().click();
+        await panel.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+        // And everything else BitLogin does is in it too, under "Account and more", with no window.
+        await panel.locator("#advanced").click();
+        await panel.locator("#account").waitFor({ state: "visible", timeout: 10_000 });
+        await panel.locator("#account-slot bitlogin-auth .pubkey").waitFor({ timeout: 30_000 });
+        expect(await panel.locator("#account-slot bitlogin-auth .who .pubkey").textContent()).toBe(me);
+        // The private key is not shown to whoever finds the panel open: this session was taken up from what the
+        // browser kept, so they are asked to prove who they are first.
+        const accountWidget = panel.locator("#account-slot bitlogin-auth");
+        await accountWidget.locator('[data-action="goto-export"]').click();
+        await accountWidget.locator('[data-action="reveal-nsec"]').click();
+        await accountWidget.locator("[data-reveal-needs-proof]").waitFor({ timeout: 10_000 });
+        expect(await accountWidget.locator("#credential-box").count()).toBe(0);
+        expect(await accountWidget.textContent()).not.toContain("nsec1");
+        await panel.locator("#account-back").click();
+        await panel.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+
+        // A careful kind (§SW20): the world may not have a profile signed the ordinary way, but may put it to the
+        // person. It is told "asking" at once, the client shows the panel, and the panel says what it is in words.
+        expect((await ask({ t: "sign", event: { kind: 0, content: "{}", tags: [] } })).t).toBe("refused");
+        const waitFor = (id: string) => worldFrame.waitForFunction((i) => (window as any).heard.map((m: any) => m.data).find((d: any) => d?.id === i && d.t !== "asking"), id, { timeout: 30_000 }).then((h) => h.jsonValue() as Promise<Record<string, any>>);
+        const propose = (message: Record<string, unknown>, id: string) => worldFrame.evaluate(({ m, i, to }) => (document.getElementById("signer") as HTMLIFrameElement).contentWindow!.postMessage({ nswp: "nswp-signer", v: 1, id: i, ...m }, to), { m: message, i: id, to: origin });
+        const asking = (id: string) => worldFrame.waitForFunction((i) => (window as any).heard.some((m: any) => m.data?.id === i && m.data.t === "asking"), id, { timeout: 30_000 });
+        const profile = JSON.stringify({ name: "Ada", about: "Mathematician", lud16: "ada@wallet.example" });
+        await propose({ t: "propose", event: { kind: 0, content: profile, tags: [["nswp:world", "https://evil.example"]] } }, "p1");
+        await asking("p1");
+        await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await panel.locator("#confirm").waitFor({ state: "visible", timeout: 30_000 });
+        // Against the profile relays hold now (sign-up published one, with only a name): what would change.
+        expect(await panel.locator("#confirm-title").textContent()).toBe("Change your Nostr profile?");
+        expect(await panel.locator("#confirm-site").textContent()).toBe(world);
+        expect(await panel.locator("#confirm-who-key").textContent()).toBe(me);
+        const changes = await panel.locator("#confirm-lines li").allTextContents();
+        expect(changes.find((l) => l.startsWith("Name: Ada. It was: "))).toBeTruthy();
+        expect(changes).toContain("About, added: Mathematician");
+        expect(changes).toContain("Lightning address, added: ada@wallet.example");
+        expect(await panel.locator("#confirm-warning").textContent()).toContain("lightning address");
+        // Said no: the world hears "refused", and nothing was signed.
+        await panel.locator("#confirm-no").click();
+        expect((await waitFor("p1")).t).toBe("refused");
+        // Asked again, and this time yes. What comes back is exactly what was shown, signed by them, marked with the world.
+        await propose({ t: "propose", event: { kind: 0, content: profile, tags: [] } }, "p2");
+        await asking("p2");
+        await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await panel.locator("#confirm-yes").waitFor({ state: "visible", timeout: 30_000 });
+        await page.waitForTimeout(1000);
+        await panel.locator("#confirm-yes").click();
+        const signedProfile = await waitFor("p2");
+        expect(signedProfile.t).toBe("signed");
+        expect(verifyNostrEvent(signedProfile.event)).toBe(true);
+        expect(signedProfile.event).toMatchObject({ kind: 0, content: profile, pubkey: state.pubkey, tags: [["nswp:world", world]] });
+        // A kind that is never signed can't be put to them either, and nor can a whole follow list.
+        expect((await ask({ t: "propose", event: { kind: 3, content: "", tags: [] } })).t).toBe("refused");
+        expect((await ask({ t: "propose", event: { kind: 1059, content: "", tags: [] } })).t).toBe("refused");
+
+        // A wallet (§SW20): the world asks, the panel offers to connect one for this world, and a pasted connection
+        // is saved for the world's address and handed to it.
+        const nwc = `nostr+walletconnect://${"ab".repeat(32)}?relay=${encodeURIComponent(relays[0]!.url)}&secret=${"cd".repeat(32)}`;
+        await propose({ t: "wallet" }, "w1");
+        await asking("w1");
+        await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await panel.locator("#wallet").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await panel.locator("#wallet-site").textContent()).toBe(world);
+        expect(await panel.locator("#wallet").textContent()).toContain("will receive a wallet connection");
+        const walletWidget = panel.locator("#wallet-slot bitlogin-auth");
+        await walletWidget.locator('form[data-form="vault-import"] input[name="vaultUri"]').waitFor({ timeout: 60_000 });
+        expect(await walletWidget.locator('[data-action="vault-bc"]').count()).toBe(1);
+        await walletWidget.locator('form[data-form="vault-import"] input[name="vaultUri"]').fill(nwc);
+        await walletWidget.locator('form[data-form="vault-import"] button[type="submit"]').click();
+        expect(await waitFor("w1")).toMatchObject({ t: "wallet", uri: nwc });
+        // Asked again: the connection made for this world is offered with one press, and no other world's would be.
+        await propose({ t: "wallet" }, "w2");
+        await asking("w2");
+        await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await walletWidget.locator('[data-action="vault-approve"]').waitFor({ timeout: 60_000 });
+        await walletWidget.locator('[data-action="vault-approve"]').click();
+        expect(await waitFor("w2")).toMatchObject({ t: "wallet", uri: nwc });
+        // And refused: the world hears only "refused".
+        // Two a minute: the third question in a minute is not put to anyone.
+        expect((await ask({ t: "wallet" })).t).toBe("refused");
+
+        // Ecash (docs/ecash.md): the person's own wallet, in the panel. Started with a mint, filled by Lightning, and
+        // then a world is paid with one press, and learns nothing of the wallet.
+        const mint = await startMockMint();
+        try {
+          await page.evaluate(() => (window as any).showPanel({ mode: "account" }));
+          await panel.locator("#open-ecash").waitFor({ state: "visible", timeout: 30_000 });
+          await panel.locator("#account-slot bitlogin-auth .pubkey").waitFor({ timeout: 30_000 });
+          await panel.locator("#open-ecash").click();
+          await panel.locator('[data-ecash="setup"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator('[data-ecash="setup"]').textContent()).toContain("if a mint disappears");
+          // Said to be experimental, on the way in and wherever it is open (owner, 2026-11-21).
+          expect(await panel.locator("#ecash .exp-note").textContent()).toContain("Experimental");
+          expect(await panel.locator("#ecash .exp-note").isVisible()).toBe(true);
+          await panel.locator("#ecash-mint").fill(mint.url);
+          await panel.locator('#ecash-mint-form button[type="submit"]').click();
+          await panel.locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#ecash-total").textContent()).toBe("0");
+          await panel.locator("#ecash-go-fund").click();
+          await panel.locator("#ecash-fund-amount").fill("100");
+          await panel.locator('#ecash-fund-form button[type="submit"]').click();
+          await panel.locator("#ecash-qr svg").waitFor({ timeout: 30_000 });
+          expect(await panel.locator("#ecash-invoice-text").textContent()).toMatch(/^lnbc1000n1/u);
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/ecash-fund.png` });
+          mint.payAllFunding();
+          await panel.locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 30_000 });
+          expect(await panel.locator("#ecash-total").textContent()).toBe("100");
+          expect(await panel.locator("#ecash-note").textContent()).toBe("Added 100 sats.");
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/ecash-home.png` });
+
+          // The world asks to be paid. It is told "asking", the panel says how much and what it may cost, and on a
+          // press the mint pays the invoice. The world hears "paid", with the proof, and nothing else.
+          const invoice = mint.invoice(40);
+          await propose({ t: "pay", invoice }, "e1");
+          await asking("e1");
+          await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await panel.locator('[data-ecash="confirm"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#ecash-site").textContent()).toBe(world);
+          expect(await panel.locator("#ecash-pay-amount").textContent()).toBe("40");
+          expect(await panel.locator("#ecash-pay-fee").textContent()).toBe("2 sats");
+          expect(await panel.locator("#ecash-pay-have").textContent()).toBe("100 sats");
+          expect(await panel.locator("#ecash-pay-yes").textContent()).toBe("Pay 40 sats");
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/ecash-pay.png` });
+          await page.waitForTimeout(1000);
+          await panel.locator("#ecash-pay-yes").click();
+          const paidReply = await waitFor("e1");
+          expect(paidReply).toMatchObject({ t: "paid", preimage: "00".repeat(32) });
+          expect(Object.keys(paidReply).sort()).toEqual(["id", "nswp", "preimage", "t", "v"]);
+          expect(mint.paid).toEqual([invoice]);
+          const allHeard = JSON.stringify(await worldFrame.evaluate(() => (window as any).heard));
+          expect(allHeard).not.toContain(mint.url);
+          expect(allHeard).not.toMatch(/"C":|"proofs"|cashu[AB]/u);
+          // Said no: the world hears "refused" and nothing is spent.
+          const second = mint.invoice(10);
+          await propose({ t: "pay", invoice: second }, "e2");
+          await asking("e2");
+          await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await panel.locator("#ecash-pay-no").waitFor({ state: "visible", timeout: 60_000 });
+          // 100, less the 40 paid and the one sat routing cost: the rest of the reserve came back as change.
+          expect(await panel.locator("#ecash-pay-have").textContent()).toBe("59 sats");
+          await panel.locator("#ecash-pay-no").click();
+          expect((await waitFor("e2")).t).toBe("refused");
+          expect(mint.paid).toEqual([invoice]);
+          // Not an invoice: not put to anyone.
+          expect((await ask({ t: "pay", invoice: "https://evil.example/pay" })).t).toBe("no answer");
+        } finally {
+          await mint.close();
+        }
+
+        // Files (docs/files.md): the person's own file browser, in the panel. A server is chosen, a folder made, a file
+        // added sealed, copied, and deleted; then a world saves a file into its own folder, and is handed one back.
+        const blossom = await startMockBlossom();
+        try {
+          await page.evaluate(() => (window as any).showPanel({ mode: "account" }));
+          await panel.locator("#account-slot bitlogin-auth .pubkey").waitFor({ timeout: 30_000 });
+          await panel.locator("#open-files").click();
+          // No server chosen yet: that comes first, and it says what a server is and is not.
+          await panel.locator('[data-files="servers"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator('[data-files="servers"]').textContent()).toContain("sealed before it leaves here");
+          expect(await panel.locator("#files .exp-note").textContent()).toContain("Experimental");
+          expect(await panel.locator("#files .exp-note").isVisible()).toBe(true);
+          await panel.locator("#files-server").fill(blossom.url);
+          await panel.locator('#files-server-form button[type="submit"]').click();
+          await panel.locator(`#files-mine li[data-server="${blossom.url}"]`).waitFor({ timeout: 30_000 });
+          await panel.locator(`#files-mine li[data-server="${blossom.url}"] .files-tag.free`).waitFor({ timeout: 15_000 });
+          await panel.locator("#files-back").click();
+          await panel.locator('[data-files="browse"]').waitFor({ state: "visible", timeout: 30_000 });
+          expect(await panel.locator("#files-usage").textContent()).toBe("You keep nothing on any server yet.");
+
+          // A folder, and a file added to the top, private unless they say otherwise.
+          await panel.locator("#files-new-folder").click();
+          await panel.locator("#files-ask-input").fill("Notes");
+          await panel.locator("#files-ask-yes").click();
+          await panel.locator('#files-list li[data-folder="Notes"]').waitFor({ timeout: 30_000 });
+          await panel.locator("#files-input").setInputFiles({ name: "diary.txt", mimeType: "text/plain", buffer: Buffer.from("dear diary, a secret") });
+          const diary = panel.locator('#files-list li[data-file="diary.txt"]');
+          await diary.waitFor({ timeout: 30_000 });
+          expect(await diary.locator(".files-seal").textContent()).toBe("Private");
+          // What the server holds says nothing of it: not its words, and not what kind of file it is.
+          expect(blossom.blobs.size).toBe(1);
+          const stored = [...blossom.blobs.values()][0]!;
+          expect(stored.bytes.toString("utf8")).not.toContain("diary");
+          expect(stored.type).toBe("application/octet-stream");
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/files-browse.png` });
+
+          // Copied into the folder: a second name, nothing uploaded again. Then the first is deleted: the bytes stay.
+          await diary.locator(".files-more").click();
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/files-actions.png` });
+          await diary.locator(".files-acts button", { hasText: "Copy" }).first().click();
+          await panel.locator('#files-list li[data-folder="Notes"] .files-open').click();
+          await panel.locator("#files-carry-here").click();
+          await panel.locator('#files-list li[data-file="diary.txt"]').waitFor({ timeout: 30_000 });
+          expect(blossom.blobs.size).toBe(1);
+          await panel.locator("#files-path button", { hasText: "Files" }).click();
+          await diary.locator(".files-more").click();
+          await diary.locator(".files-acts button", { hasText: "Delete" }).click();
+          expect(await panel.locator("#files-ask-label").textContent()).toContain("can't be undone");
+          await panel.locator("#files-ask-yes").click();
+          await diary.waitFor({ state: "detached", timeout: 30_000 });
+          expect(blossom.blobs.size).toBe(1);
+
+          // A world offers a file. The file browser opens in that world's own folder, made for it, with the name to
+          // save it under; the person may go elsewhere first. Saved private, the world is told its name and no link.
+          const offered = Array.from(Buffer.from(JSON.stringify({ scene: "a sculpture" })));
+          // Addressed to the sign-in address and nothing else, as a world's kit does.
+          await worldFrame.evaluate(({ bytes, to }) => (document.getElementById("signer") as HTMLIFrameElement).contentWindow!.postMessage({ nswp: "nswp-signer", v: 1, id: "f1", t: "file-save", name: "scene.json", type: "application/json", bytes: new Uint8Array(bytes) }, to), { bytes: offered, to: origin });
+          await asking("f1");
+          await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await panel.locator("#files-save-yes").waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#files-site").textContent()).toBe(world);
+          expect((await panel.locator("#files-path button").allTextContents()).join(" > ")).toBe(`Files > Worlds > ${new URL(world).host}`);
+          expect(await panel.locator("#files-save-name").inputValue()).toBe("scene.json");
+          expect(await panel.locator("#files-save-private").isChecked()).toBe(true);
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/files-save.png` });
+          await panel.locator("#files-save-yes").click();
+          const savedReply = await waitFor("f1");
+          expect(savedReply).toMatchObject({ t: "file-saved", name: "scene.json", size: offered.length, private: true });
+          expect(savedReply.url).toBeUndefined();
+          expect(blossom.blobs.size).toBe(2);
+          for (const held of blossom.blobs.values()) expect(held.bytes.toString("utf8")).not.toContain("sculpture");
+
+          // The world asks for a file. The person chooses one, and that one is handed over, opened: no other.
+          await propose({ t: "file-pick" }, "f2");
+          await asking("f2");
+          await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await panel.locator("#files-pick-no").waitFor({ state: "visible", timeout: 60_000 });
+          await panel.locator('#files-list li[data-folder="Worlds"] .files-open').click();
+          await panel.locator(`#files-list li[data-folder="${new URL(world).host}"] .files-open`).click();
+          await panel.locator('#files-list li[data-file="scene.json"] .files-more', { hasText: "Send this" }).click();
+          expect(await panel.locator("#files-ask-label").textContent()).toContain("the site will be able to read it");
+          await panel.locator("#files-ask-yes").click();
+          await waitFor("f2");
+          const handed = await worldFrame.evaluate(() => {
+            const d = (window as any).heard.map((m: any) => m.data).find((x: any) => x?.id === "f2" && x.t === "file");
+            return d ? { name: d.name, type: d.type, text: new TextDecoder().decode(d.bytes), keys: Object.keys(d).sort() } : null;
+          });
+          expect(handed).toEqual({ name: "scene.json", type: "application/json", text: JSON.stringify({ scene: "a sculpture" }), keys: ["bytes", "id", "name", "nswp", "t", "type", "v"] });
+          // Nothing the world heard names a server, a hash or a key.
+          const heardFiles = JSON.stringify(await worldFrame.evaluate(() => (window as any).heard.filter((m: any) => String(m.data?.id).startsWith("f")).map((m: any) => ({ ...m.data, bytes: undefined }))));
+          expect(heardFiles).not.toContain(blossom.url);
+          expect(heardFiles).not.toMatch(/sha256|"key"|servers/u);
+        } finally {
+          await blossom.close();
+        }
+
+        // Opened for the files alone, or the wallet alone, it goes straight there: one press from anywhere in a game.
+        await page.evaluate(() => (window as any).showPanel({ mode: "files" }));
+        await panel.locator("#files-path").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await panel.locator("#account").isVisible()).toBe(false);
+        await page.evaluate(() => (window as any).showPanel({ mode: "wallet" }));
+        // (A wallet was started earlier in this test, so it opens at its balance.)
+        await panel.locator("#ecash-total").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await panel.locator("#account").isVisible()).toBe(false);
+
+        // Opened for the account alone, it shows the account.
+        await page.evaluate(() => (window as any).showPanel({ mode: "account" }));
+        await panel.locator("#account").waitFor({ state: "visible", timeout: 30_000 });
+        expect(context.pages().length).toBe(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await browser.close();
+        worldServer.server.close();
+        clientServer.server.close();
       }
     },
     240_000
@@ -2286,7 +2698,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           return void res.end(await readFile(file));
         }
         res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-        res.end(`<!doctype html><meta charset="utf-8"><title>an application</title><button id="open">Sign in with BitLogin</button>
+        res.end(`<!doctype html><meta charset="utf-8"><title>an application</title><button id="open">Sign in with BitLogin</button><button id="propose">Delete a post</button><button id="propose-shown">Delete, shown by the host</button>
 <script type="module">
   import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
   const more = new URLSearchParams(location.search).has("more");
@@ -2311,6 +2723,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     }
   };
   document.getElementById("open").onclick = () => { window.signedIn = window.bl.signIn(); };
+  const NOTE = "ab".repeat(32);
+  document.getElementById("propose").onclick = () => { window.proposed = window.bl.propose({ kind: 5, content: "", tags: [["e", NOTE], ["k", "1"]] }); };
+  document.getElementById("propose-shown").onclick = () => { window.shownCalls = 0; window.proposedShown = window.bl.propose({ kind: 5, content: "", tags: [["e", NOTE]] }, { show: () => { window.shownCalls++; return true; } }); };
   window.isReady = window.bl.ready();
 </script>`);
       });
@@ -2394,6 +2809,29 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow-app").click();
         expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
         expect(await page.evaluate(() => (window as any).bl.state())).toMatchObject({ signedIn: true, pubkey: me });
+
+        // An application can put a careful kind to the person too (§SW20), through the client: BitLogin's page
+        // shows it in words, signs it on a press, and the client hands back exactly what was asked.
+        if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 10_000 }).catch(() => popup.close());
+        const [asked] = await Promise.all([context.waitForEvent("page"), page.click("#propose")]);
+        await asked.locator("#confirm-yes").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await asked.locator("#confirm-title").textContent()).toBe("Ask relays to delete this?");
+        expect(await asked.locator("#confirm-site").textContent()).toBe(site);
+        expect(await asked.locator("#confirm-lines li").allTextContents()).toEqual([`Note ${"ab".repeat(32)}`]);
+        // The application's own permission question is not shown in its place.
+        expect(await asked.locator("#ask-app").isVisible()).toBe(false);
+        await asked.waitForTimeout(1000);
+        await asked.locator("#confirm-yes").click();
+        const deletion = await page.evaluate(() => (window as any).proposed);
+        expect(verifyNostrEvent(deletion)).toBe(true);
+        expect(deletion).toMatchObject({ kind: 5, pubkey: me, content: "", tags: [["e", "ab".repeat(32)], ["k", "1"], ["nswp:world", site]] });
+        // Where the host shows BitLogin's page itself (a client that keeps the screen), no window is opened: `show`
+        // is called once, and the question waits. Here nobody answers it, and a new question ends it.
+        if (!asked.isClosed()) await asked.waitForEvent("close", { timeout: 10_000 }).catch(() => asked.close());
+        const openBefore = context.pages().length;
+        await page.click("#propose-shown");
+        await page.waitForFunction(() => (window as any).shownCalls === 1, null, { timeout: 15_000 });
+        expect(context.pages().length).toBe(openBefore);
 
         // What it was approved for is signed with no prompt, marked with the application's address.
         const note = await sign({ kind: 1, content: "from an application", tags: [["t", "x"], ["bitlogin:site", "https://elsewhere.example"]] });
@@ -2589,6 +3027,124 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     },
     300_000
   );
+
+  /**
+   * The panel in each engine, with a password account: the part a virtual passkey can't reach outside Chromium.
+   * A client and a world on one site, BitLogin on another, as a browser counts them: so the panel's storage, its
+   * worker and the hand-off to the world's signer are all those of a framed page of another site.
+   */
+  for (const engine of ["chromium", "firefox", "webkit"] as const) {
+    const installed = (() => {
+      try {
+        const path = playwright?.[engine].executablePath();
+        return !!path && existsSync(path);
+      } catch {
+        return false;
+      }
+    })();
+    it.skipIf(!installed)(
+      `the sign-in panel signs a password account in, allows a world, and remembers them (${engine}; sign-in-window.md §SW19)`,
+      async () => {
+        const start = (body: string) =>
+          new Promise<{ server: Server; at: string }>((resolve) => {
+            const server = createServer((_req, res) => {
+              res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+              res.end(body);
+            });
+            server.listen(0, "127.0.0.1", () => {
+              const a = server.address();
+              resolve({ server, at: `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}` });
+            });
+          });
+        const worldServer = await start(`<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  window.ask = (message, wait = 4000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`);
+        const world = worldServer.at;
+        const clientServer = await start(`<!doctype html><meta charset="utf-8"><title>a client</title>
+<iframe id="world" src="${world}/" style="width:900px;height:300px;border:0"></iframe>
+<div id="slot"></div>
+<script type="module">
+  const SIGNIN = "${origin}";
+  window.said = [];
+  addEventListener("message", (e) => { if (e.origin === SIGNIN && e.data && e.data.bitlogin === "bitlogin-panel") window.said.push(e.data); });
+  window.showPanel = (hello) => {
+    const panel = document.createElement("iframe");
+    panel.id = "panel";
+    panel.src = SIGNIN + "/connect/panel/";
+    panel.style.cssText = "width:780px;height:640px;border:0";
+    document.getElementById("slot").replaceChildren(panel);
+    window.said = [];
+    const again = setInterval(() => {
+      if (window.said.some((m) => m.t === "ready")) return clearInterval(again);
+      panel.contentWindow?.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hello", ...hello }, SIGNIN);
+    }, 200);
+  };
+</script>`);
+        const browser = await playwright![engine].launch();
+        try {
+          const context = await browser.newContext();
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (err) => errors.push(String(err)));
+          const open = async () => {
+            await page.goto(`${clientServer.at}/`);
+            await page.waitForFunction(() => window.frames.length > 0);
+            const frame = page.frames().find((f) => f.url().startsWith(world))!;
+            await frame.waitForFunction(() => typeof (window as any).ask === "function", null, { timeout: 30_000 });
+            return frame;
+          };
+          let worldFrame = await open();
+          const ask = (message: Record<string, unknown>) => worldFrame.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+          expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
+
+          await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          const panel = page.frameLocator("#panel");
+          await panel.locator("#signin").waitFor({ state: "visible", timeout: 30_000 });
+          // A password account, made in the panel: the generated password in a real field a manager can save from.
+          const widget = panel.locator("#widget-slot bitlogin-auth");
+          await widget.locator('[data-action="goto-create"]').click();
+          await startPasswordSignUp(widget, `panel-${engine}`);
+          await completeRecoveryCeremony(widget);
+          await panel.locator("#allow").waitFor({ state: "visible", timeout: 120_000 });
+          expect(await panel.locator("#site").textContent()).toBe(world);
+          await page.waitForTimeout(1000);
+          await panel.locator("#allow").click();
+          await page.waitForFunction(() => (window as any).said.some((m: any) => m.t === "close" && m.allowed), null, { timeout: 30_000 });
+          await worldFrame.waitForFunction(async () => (await (window as any).ask({ t: "state" })).unlocked === true, null, { timeout: 30_000, polling: 500 });
+          const signed = await ask({ t: "sign", event: { kind: 1, content: `from ${engine}`, tags: [] } });
+          expect(signed.t).toBe("signed");
+          expect(verifyNostrEvent(signed.event)).toBe(true);
+
+          // The client's page loaded again: the world is still allowed, and the panel still knows who is signed in
+          // in it, so the next question comes with no password.
+          worldFrame = await open();
+          await worldFrame.waitForFunction(async () => (await (window as any).ask({ t: "state" })).unlocked === true, null, { timeout: 30_000, polling: 500 });
+          await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await panel.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+          expect(await panel.locator("#signin").isVisible()).toBe(false);
+          expect(context.pages().length).toBe(1);
+          expect(errors).toEqual([]);
+        } finally {
+          await browser.close();
+          worldServer.server.close();
+          clientServer.server.close();
+        }
+      },
+      300_000
+    );
+  }
 
   /**
    * A browser's password manager saves from, and fills into, real form fields:

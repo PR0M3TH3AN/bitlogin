@@ -119,7 +119,7 @@ Unlocking is not agreeing to everything. `embedded/policy.ts` is the list.
 | | Kinds | When |
 |---|---|---|
 | Ordinary | A note (1), a reaction (7) | Once the user has allowed that site, in the window |
-| Careful | A profile (0), a follow list (3), a deletion (5), a relay list (10002), and anything not named | Only with their say each time, on a page of the sign-in address. **Not built: refused.** A follow list is changed another way, for a site the user let (§SW16b); a save (37304) is written only by the signer (§SW16a) |
+| Careful | A profile (0), a follow list (3), a deletion (5), a relay list (10002), and anything not named | Only with their say each time, on a page of the sign-in address. A profile, a deletion and a relay list can be put to them: §SW20. The rest is refused. A follow list is changed another way, for a site the user let (§SW16b); a save (37304) is written only by the signer (§SW16a) |
 | Never | Private messages and their wrappings (4, 13, 14, 15, 1059, 1060); passes and room signals (27300, 27301); proofs of identity (22242, 27235); wallet and remote-signer traffic (13194, 23194, 23195, 24133); application data (30078), which is where an account's capsules live | Refused, whatever anyone says |
 
 - **The signer finishes the event.** It sets `created_at` itself and adds
@@ -172,6 +172,8 @@ the version an application's permissions will need (§SW9).
   published from this page.
 - The window's page must keep its link to the page that opened it (no
   `Cross-Origin-Opener-Policy: same-origin` on that one page).
+- The sign-in panel's page (§SW19) may be framed by the clients BitLogin
+  lists, by exact origin, and by nothing else; it may use passkeys.
 - Every other page keeps `frame-ancestors 'none'` and the rest of the
   pinned headers. BitLogin's own demo is unchanged: it serves neither page.
 
@@ -1117,3 +1119,216 @@ Opening the site from the list and telling its signer to forget was looked
 at and left out: the opened site would hold a link back to a page of the
 sign-in address, and could send that page somewhere else.
 
+
+# SW19. The sign-in panel: BitLogin inside a client that keeps the screen (built on `beta`)
+
+Asked for by the owner on 2026-11-21, after trying BitPortal's shell (one
+top-level page that shows the room, the Airlock and each world in a frame,
+so the screen stays filled from world to world): "Make them a part of our
+menu rather than an escape and click situation", and then: "Keep all of it
+in app and not in a separate window. I want all of bitportal to feel like
+one cohesive experience." The owner confirmed in this repository's session
+that day: "Yes that's what I want. In world as seamless as possible."
+
+Opening a window gives up a filled screen, so every new world used to cost
+the visitor the screen, a second window and the screen again. The panel is
+the window's own page, drawn by the client where the world's menu is.
+
+## SW19.1 What it is
+
+- **The same page.** `/connect/panel/` is made from `/connect/index.html`
+  at build time (`packages/demo/build.mjs`), so the panel and the window can
+  never say different things. Only the paths and the headers differ. The
+  page knows which it is by its own address.
+- **Shown by a listed client, never by a world.** `PANEL_CLIENTS` in
+  `embedded/panel.ts` is the list, by exact origin: today
+  `https://portal.bitblocks.network`. The panel's `frame-ancestors` is that
+  list and nothing else, and a test pins the two together. `/connect/`
+  itself stays `frame-ancestors 'none'`.
+- **It finds the world's signer the way the window does** (§SW3), in the
+  client's frames and in theirs, two levels deep, never deeper. The signer
+  reports which site embeds it, as the browser told it. The client says
+  which world the panel is for, and the panel takes only a signer that
+  reports that world. With none, it offers no Allow.
+- **The embedded signer is unchanged.** The panel is a page of BitLogin's
+  own origin, as the window is, and everything after "found" is the
+  window's: the question, the account chooser, the lock, the hand-off
+  (§SW4), the remembered grant (§SW11), more permissions (§SW9.3a).
+
+## SW19.2 What the panel and its client say
+
+Messages are `{ bitlogin: "bitlogin-panel", v: 1, t, ... }`. They carry
+nothing about the visitor: no key, no name, no account, no public key.
+
+| From | `t` | Fields | Meaning |
+|---|---|---|---|
+| client | `hello` | `world?`, `mode?` | Which world asked, and what for: `"ask"` (the default when `world` is given), `"switch"` (the account chooser), `"account"` (the account pages; the default without `world`), `"files"` (straight to the person's file browser), `"wallet"` (straight to their ecash wallet). Sent again every few hundred milliseconds until `ready`. |
+| panel | `ready` | | It heard a listed client. Nothing is said to any page before this. |
+| panel | `size` | `size: "menu" \| "tall"`, `height?` | The size it would like: the menu's, or taller for sign-in and the account pages; and how tall its content is, in CSS pixels. Sent again when that changes. The client decides, and clamps both. |
+| panel | `close` | `allowed: boolean` | Done; the client removes the frame. Whether the world was allowed. The world learns the rest from its own signer. |
+
+- The panel listens only to `window.parent`, and only where the browser
+  says the message came from a listed client (`panelClientAllowed`). A
+  local copy of BitLogin answers only a local client, and the real address
+  never answers a local page.
+- The client frames `https://bitlogin.network/connect/panel/` (with the
+  trailing slash: without it the window's headers apply, and framing is
+  refused), with `allow="publickey-credentials-get https://bitlogin.network;
+  publickey-credentials-create https://bitlogin.network"`. One panel load
+  per question: for the next, the client loads it again.
+
+## SW19.3 Signing in, in the panel
+
+Everything is in the panel, by the owner's choice, including a typed
+password. The panel's own headers allow passkeys
+(`publickey-credentials-get=(self), publickey-credentials-create=(self)`).
+
+- **Storage.** The panel is a frame of BitLogin's origin under the client's
+  site, so a browser gives it storage of its own, apart from what
+  bitlogin.network keeps when visited directly. Someone signed in at
+  bitlogin.network is not signed in in the panel: they sign in once there,
+  and the panel remembers them for that client, as the sign-in address
+  does. The signer frames inside the client's worlds are under the same
+  site, as before.
+- **A passkey works in the frame** where the browser allows it and the
+  client delegates it: tested in Chromium with a virtual authenticator
+  (creating a passkey account in the panel's frame; signing in again with it there is not yet tested). Not yet tried: Brave, Firefox,
+  Safari, and real platform passkeys.
+- **A browser that clears a framed page's storage when the client's last
+  tab closes** (Brave does this for third-party storage) signs the visitor
+  out of the panel each time. With a passkey that is one press. Not yet
+  measured.
+
+## SW19.4 Everything else, in the panel
+
+"Account and more" opens the whole widget, as the account page has it:
+switching and adding accounts, the lock, changing the password, the
+recovery phrase, the key, the recovery file, the relays' health, and the
+vault of connections. A client may open the panel for this alone
+(`mode: "account"`). Everyday steps are up front; this is behind the one
+button.
+
+## SW19.5 What it costs: the threat model
+
+- **There is no address bar.** The window's defence against a look-alike
+  is the address bar (§SW3). A panel has none, and a filled screen shows
+  none anyway. A hostile world can draw a copy of the panel inside its own
+  frame, whatever BitLogin does, and ask for a password or a recovery
+  phrase. What still tells them apart: a passkey, which can't be phished; a
+  password manager, which fills only at BitLogin's own origin; and
+  BitLogin's passwords being generated (§9.2), so they live in a manager.
+  The panel says this where a password is typed ("A world can draw a copy
+  of this panel… if your password manager offers nothing, stop"), and
+  where the recovery phrase and key are shown. A recovery phrase typed into
+  a copy has no such protection. That is the risk the owner accepted.
+- **The client is trusted with the panel.** A page that frames the panel
+  can cover it, shrink it or slide it under a press. That is why only a
+  listed client may frame it, and never a world: the client is a top-level
+  page the world inside it can't script. A client that is compromised could
+  do to the panel what a hostile site could do to any framed page. It still
+  can't read the panel, the key or the session: those are BitLogin's
+  origin's, and the browser keeps them apart.
+- **A press too soon is ignored,** as in the window: Allow does nothing for
+  900 ms after the question appears.
+- **The client learns only that the panel closed, and whether the world was
+  allowed.** It hears nothing a world couldn't learn from its own signer.
+
+## SW19.6 Not built yet, and not yet tried
+
+- **Tried:** Chromium, Firefox and WebKit as Playwright ships them, with a
+  password account made in the panel (sign-up, Allow, the world signs, and
+  the panel still knows them after the client's page is loaded again); and
+  Chromium with a virtual passkey. **Not tried:** Brave, Safari on a real
+  device, a real platform passkey or password manager in the frame, and
+  signing in again with an existing passkey in the frame.
+- **Phones and headsets,** where BitPortal does not yet use the shell: the
+  world opens the window as before. A world framing the panel itself would
+  mean listing world origins, and the clickjacking question again: a
+  separate decision.
+- **Ecash (NIP-60)** is `docs/ecash.md`.
+
+## SW19.7 The private key, in the panel
+
+In the panel's account pages the widget is given `fresh-secrets`: "Reveal
+private key" works only within five minutes of a proof of who is there (a
+sign-in, or the lock opened with its PIN or the device). A session taken up
+from what the browser kept, or a switch between kept accounts, is not
+proof. Otherwise the widget says so and offers to sign out, so someone who
+finds the panel open cannot read the key off it. The account page at the
+sign-in address is unchanged. The recovery phrase is shown only while an
+account is being made, as everywhere.
+
+# SW20. Asking the person: careful kinds, and a wallet (built on `beta`)
+
+A site the user allowed can have a note and a reaction signed without
+asking (§SW5). Two more things can now be **put to the person, each time,
+on a page of BitLogin's own**: the panel where a client shows it, the
+window otherwise. Nothing here is ever done without a press on that page.
+
+| The site sends its signer | The signer answers at once | And later, under the same `id` |
+|---|---|---|
+| `{ t: "propose", id, event }`: a profile (kind 0), a deletion (5) or a relay list (10002) | `{ t: "asking", id }` | `{ t: "signed", id, event }`, or `refused` |
+| `{ t: "wallet", id }` | `{ t: "asking", id }` | `{ t: "wallet", id, uri }`, or `refused` |
+| `{ t: "pay", id, invoice }`: a Lightning invoice, paid from the person's own ecash wallet (`docs/ecash.md`) | `{ t: "asking", id }` | `{ t: "paid", id, preimage? }`, or `refused` |
+| `{ t: "file-save", id, name, type, bytes, private? }`: a file to keep in the person's files (`docs/files.md`) | `{ t: "asking", id }` | `{ t: "file-saved", id, name, size, private, url? }`, or `refused` |
+| `{ t: "file-pick", id }`: one of the person's files, of their choosing | `{ t: "asking", id }` | `{ t: "file", id, name, type, bytes, url? }`, or `refused` |
+
+On `asking`, the site has BitLogin's page shown: it asks its client for the
+panel (`hello` with its `world`, §SW19.2), or opens `/connect/`. The page
+finds the signer as always, is told what is waiting and which account the
+site is signed in as, shows it, and brings back the answer.
+
+- **Only for a site already allowed.** An application the user approved
+  may ask too (BitPortal's own room is one): asking widens nothing it may
+  do on its own say, because every answer is a press on BitLogin's page.
+  Not a wallet: an application asks for one through the widget, at its own
+  address. Anything else answers `refused`.
+- **One question at a time,** dropped after five minutes; a new one ends
+  the one before. Two a minute and ten an hour for each kind of question.
+- **The embedded signer signs none of it.** Its session still signs a note
+  and a reaction and nothing else: the worker's floor (§SW4) is unchanged.
+  A careful kind is signed by the session of BitLogin's own page, after the
+  press, and passed back through the signer, which hands it to the site
+  only if it is exactly what was put to the person: signed by the account
+  the site is signed in as, the same kind, words and tags, and timed now.
+- **Marked with the site,** like everything signed for one
+  (`["nswp:world", origin]`).
+- **Not a follow list** (kind 3): a whole list signed for a site could
+  unfollow everyone; following is one person at a time (§SW16b). Not a
+  never-kind. Not anything unnamed.
+- **From an application, through the client** (`bitlogin-client.js`):
+  `client.propose(event, { show? })` and `client.pay(invoice, { show? })`.
+  The client sends the request and, on `asking`, has BitLogin's page shown:
+  `show()` is called once, and returns true where the host showed it itself
+  (its shell's panel); otherwise the client opens the window. It resolves
+  with the signed event, checked to be what was asked, or the proof of
+  payment; or null.
+- **A profile is shown as what would change,** against the newest profile
+  relays hold: each field changed, added or removed, with what it was, and
+  how many stay as they are. Where the current one can't be read in five
+  seconds, the whole new profile is shown, and a line says so.
+- **Said in words** (`embedded/careful.ts`): a profile field by field, with
+  "this replaces your whole profile" and a word about the lightning
+  address; a deletion's notes, and that it can't be undone and reaches
+  beyond this world; a relay list's relays, and what a wrong one costs.
+- **The same account.** If the page is signed in as another account than
+  the site, nothing is shown and the site hears `refused`.
+
+**A wallet** is the widget's own wallet step (`nwc-connections.md`,
+`vault-ux.md`), in reveal mode, said plainly: the site receives the
+connection and can spend within the budget the wallet enforces.
+
+- **Bitcoin Connect first, a pasted NWC connection second,** as the widget
+  has always offered. A connection already made for this site is offered
+  with one press.
+- **Bound to the site's address,** the one shown on the page. The worker
+  takes a named site (`site` on `vaultSaveNwc`, `vaultFindForOrigin`,
+  `vaultRevealNwc`) only where it runs at one of BitLogin's own sign-in
+  addresses (`SIGN_IN_ADDRESSES`, or a local copy). In a vendored copy at
+  an application's address a named site is refused, as before: a host can
+  never be handed a wallet the user connected to another site.
+- **Bitcoin Connect may open a wallet's own page** to approve the
+  connection. That is the wallet's doing and leaves a filled screen;
+  pasting a connection does not.
+- **The site's kit has to use what it is given.** That, and the name of
+  these two requests in NSWP-10, are the NSWP session's.

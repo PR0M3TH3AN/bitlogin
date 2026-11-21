@@ -56,3 +56,48 @@
 
 /* An element marked hidden is hidden, whatever else its class says about how it is laid out. */
 .connect [hidden] { display: none !important; }
+
+/* The sign-in panel (docs/sign-in-window.md §SW19): the same page, drawn by a client where its menu is. One bar:
+   the mark, the name, this page's own address in a pill that never wraps, and the way out. */
+.panel-where, .panel-mark, .panel-name, .panel-foot, .panel-close { display: none; }
+/* Always dark, whatever the browser's theme: the panel is drawn over a game, where the world's own menu is dark glass,
+   and the two should read as one thing (owner, 2026-11-21: "one cohesive experience"). */
+body.panel {
+  --ink: #0d0b12; --ink-soft: #17141f; --ink-softer: #201c2b; --paper: #f3ead9; --paper-dim: #e8dcc2; --seal: #8368ff; --seal-deep: #6a4de8;
+  --brass: #d1a85a; --brass-soft: #9c824f; --fg: #f4f1ea; --muted: #a49cb0; --line: rgba(244, 241, 234, 0.11); --line-strong: rgba(244, 241, 234, 0.2);
+  --code-bg: #100e17; color-scheme: dark; color: var(--fg); background: var(--ink); border-top: 2px solid var(--brass-soft);
+}
+/* The widget fills the panel's width: a narrow card with half the panel empty beside it reads as a page inside a page. */
+body.panel bitlogin-auth { --bl-max-width: 100%; display: block; }
+body.panel #widget-slot { margin: .6rem 0 0; }
+body.panel .connect-warning { font-size: .9rem; padding: 8px 12px; margin: 8px 0; }
+body.panel .connect-warning p { margin: 0; }
+body.panel .connect-card > p { margin: .3rem 0 .5rem; }
+/* The panel has its own way out, in the bar: a second "Not now" under sign-in only pushes the page past the fold. */
+body.panel #signin .cta-row { display: none; }
+body.panel .nav { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: nowrap; align-items: center; gap: .6rem; padding: .5rem .8rem; background: var(--ink); border-bottom: 1px solid var(--line-strong); }
+body.panel .nav .brand { display: flex; align-items: center; gap: .5rem; flex: none; }
+body.panel .nav .lockup { display: none; }
+body.panel .nav .panel-mark { display: block; height: 1.5rem; width: 1.5rem; }
+body.panel .nav .panel-name { display: block; color: var(--fg); font-size: 1rem; }
+body.panel .panel-where { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; padding: .2rem .65rem; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--fg);
+  font: .82rem ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: nowrap; }
+body.panel .panel-where svg { flex: none; color: var(--brass); }
+body.panel #panel-me { overflow: hidden; text-overflow: ellipsis; }
+body.panel .panel-close { display: block; flex: none; margin-left: auto; background: none; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--fg); font: 700 1.1rem/1 inherit; width: 2rem; height: 2rem; cursor: pointer; }
+body.panel .panel-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .3rem 1rem; margin: .7rem .2rem 0; font-size: .82rem; color: var(--muted); }
+body.panel .panel-foot .connect-link { padding: 0; font-size: inherit; }
+body.panel .connect-main { max-width: none; padding: .7rem .8rem 1rem; }
+body.panel .connect-card { padding: .9rem 1rem 1rem; }
+body.panel .connect-card h1 { font-size: 1.15rem; margin-bottom: .5rem; }
+body.panel .connect-status { margin-bottom: .6rem; font-size: .92rem; }
+body.panel .connect-status:empty { display: none; }
+body.panel [data-window-only] { display: none !important; }
+/* At the menu's width, the question and what it allows sit side by side, so Allow is on screen without scrolling. */
+@media (min-width: 640px) {
+  body.panel #ask:not([hidden]) { display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: dense; column-gap: 1.2rem; align-items: start; }
+  body.panel #ask > * { grid-column: 1; }
+  body.panel #ask > .connect-what { grid-column: 2; margin-top: 0; }
+  body.panel #ask > ul { grid-column: 2; grid-row: span 9; margin-top: .3rem; font-size: .92rem; }
+  body.panel #ask > p:last-child { grid-column: 1 / -1; margin-bottom: 0; }
+}

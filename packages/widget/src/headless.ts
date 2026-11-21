@@ -21,7 +21,9 @@
 import type { AppPermissions } from "./embedded/permissions.js";
 import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
-import type { KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
+import type { RankedMint } from "./ecash/mints.js";
+import type { DriveSave, DriveState, RankedServer } from "./worker/driveStore.js";
+import type { EcashRoll, EcashState, KeptAccountInfo, LockStatusResult, SignEventPayload } from "./worker/protocol.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 import type { WorldMore } from "./embedded/follows.js";
 import type { ReadMessage, WrittenMessage } from "./embedded/messages.js";
@@ -104,6 +106,31 @@ export interface HeadlessSigner {
    * `ok` false means nothing was taken back.
    */
   takeBack(what: { site: string } | { all: true }): Promise<{ ok: boolean; accepted: number; of: number }>;
+  /**
+   * The account's files (docs/files.md), for BitLogin's own pages: the index of folders, a permission note for
+   * one file at one server, and the list of servers. A full session only. A page that asks must be BitLogin's own.
+   */
+  drive: {
+    load(): Promise<DriveState>;
+    save(changes: DriveSave): Promise<DriveState>;
+    auth(verb: "upload" | "delete" | "get", server: string, sha256: string): Promise<string>;
+    servers(): Promise<{ mine: string[]; ranked: RankedServer[] }>;
+    setServers(servers: string[]): Promise<string[]>;
+  };
+  /** The words of the account's newest profile note on relays, or null; and whether any relay answered. */
+  profileContent(): Promise<{ content: string | null; answered: boolean }>;
+  /**
+   * The account's ecash wallet (docs/ecash.md), for BitLogin's own pages: what it holds, its mints, and the
+   * roll-over that replaces spent records. A full session only. The tokens returned are bearer money: a page
+   * that asks for them must be BitLogin's own, and must never pass them to a site.
+   */
+  ecash: {
+    load(): Promise<EcashState>;
+    setMints(mints: string[]): Promise<EcashState>;
+    roll(roll: EcashRoll): Promise<EcashState>;
+    /** The mints people recommend (NIP-87), the user's own follows first. */
+    recommended(): Promise<RankedMint[]>;
+  };
   /**
    * In the embedded signer: ask the user's relays whether this site was
    * taken back, if it is time to. "ended" means the grant is gone.
@@ -272,6 +299,50 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async loadProfile(options = {}) {
       await requirePubkey();
       return (await client.loadProfile(options)).profile ?? null;
+    },
+    async profileContent() {
+      await requirePubkey();
+      return client.profileContent();
+    },
+    drive: {
+      async load() {
+        await requirePubkey();
+        return client.driveLoad();
+      },
+      async save(changes) {
+        await requirePubkey();
+        return client.driveSave(changes);
+      },
+      async auth(verb, server, sha256) {
+        await requirePubkey();
+        return (await client.blossomAuth({ verb, server, sha256 })).token;
+      },
+      async servers() {
+        await requirePubkey();
+        return client.blossomServers();
+      },
+      async setServers(servers) {
+        await requirePubkey();
+        return (await client.blossomSetServers(servers)).mine;
+      }
+    },
+    ecash: {
+      async load() {
+        await requirePubkey();
+        return client.ecashLoad();
+      },
+      async setMints(mints) {
+        await requirePubkey();
+        return client.ecashSetMints(mints);
+      },
+      async roll(roll) {
+        await requirePubkey();
+        return client.ecashRoll(roll);
+      },
+      async recommended() {
+        await requirePubkey();
+        return (await client.ecashMints()).mints;
+      }
     },
     async takeBack(what) {
       await requirePubkey();

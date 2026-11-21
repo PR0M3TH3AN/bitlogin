@@ -24,7 +24,8 @@
  */
 import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
 import { readPermissions, type AppPermissions } from "./permissions.js";
-import { cleanOrigin, PROTOCOL_VERSION, SIGNER_PROTOCOL } from "./policy.js";
+import { ASK_WAIT_MS, ASKED_KINDS, cleanOrigin, PROTOCOL_VERSION, SIGNER_PROTOCOL, SITE_TAG } from "./policy.js";
+import { cleanInvoice } from "../ecash/nip60.js";
 
 export interface BitLoginClientOptions {
   /** The sign-in address: an origin, such as "https://bitlogin.network". */
@@ -93,8 +94,36 @@ export interface BitLoginClient {
   nip04: { encrypt(peer: string, plaintext: string): Promise<string>; decrypt(peer: string, ciphertext: string): Promise<string> };
   /** The content of a whole signed event of a kind the application may read. */
   decryptEvent(event: NostrEvent): Promise<string>;
+  /**
+   * Put a careful kind to the user: a profile (0), a deletion (5) or a relay
+   * list (10002) (§SW20). The application can't have these signed on its own
+   * say. BitLogin's own page shows what it says, in words, and signs it only
+   * on a press there. Call it from the user's own press. Resolves with the
+   * signed event, checked to be exactly what was asked, or null: they said
+   * no, nobody answered, or the application isn't signed in.
+   */
+  propose(event: UnsignedEvent, options?: AskOptions): Promise<NostrEvent | null>;
+  /**
+   * Ask to be paid: a Lightning invoice, paid from the user's own ecash
+   * wallet if they press Pay on BitLogin's page (docs/ecash.md). The
+   * application never sees the wallet. Call it from the user's own press.
+   * Resolves with the proof of payment where the mint gave one (check it
+   * against the invoice, or go by your own word from whoever made the
+   * invoice), or null if it was not paid.
+   */
+  pay(invoice: string, options?: AskOptions): Promise<{ preimage?: string } | null>;
   /** Remove the frame and stop listening. */
   destroy(): void;
+}
+
+export interface AskOptions {
+  /**
+   * Called once, when BitLogin has taken the question and its page must be
+   * shown. Return true if the host showed it itself (a client that keeps the
+   * screen, asking its shell for BitLogin's panel). Return false, or leave
+   * this out, and the sign-in window is opened, as `signIn()` opens it.
+   */
+  show?: () => boolean | Promise<boolean>;
 }
 
 export class BitLoginRefused extends Error {
@@ -275,6 +304,23 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
     async signOut() {
       await request({ t: "lock" });
     },
+    async propose(event, options) {
+      if (!ASKED_KINDS.includes(event.kind)) return null;
+      const reply = await askThePerson({ t: "propose", event: { kind: event.kind, content: event.content, tags: event.tags } }, options);
+      const signed = reply?.event;
+      if (reply?.t !== "signed" || !verifyNostrEvent(signed)) return null;
+      // Believed only as far as its signature goes, and only if it is what was asked: BitLogin's mark aside.
+      const unmarked = (tags: string[][]) => JSON.stringify(tags.filter((tag) => tag[0] !== SITE_TAG));
+      if (signed.pubkey !== raw.pubkey || signed.kind !== event.kind || signed.content !== event.content || unmarked(signed.tags) !== unmarked(event.tags)) return null;
+      return signed;
+    },
+    async pay(invoice, options) {
+      const clean = cleanInvoice(invoice);
+      if (!clean) return null;
+      const reply = await askThePerson({ t: "pay", invoice: clean }, options);
+      if (reply?.t !== "paid") return null;
+      return typeof reply.preimage === "string" && /^[0-9a-f]{64}$/u.test(reply.preimage) ? { preimage: reply.preimage } : {};
+    },
     async getPublicKey() {
       if (!current.signedIn || !current.pubkey) throw new BitLoginRefused("say who is signed in");
       return current.pubkey;
@@ -302,6 +348,46 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
       frame.remove();
     }
   };
+
+  /**
+   * Put something to the person (§SW20): send it, and once the signer says
+   * "asking", have BitLogin's page shown and wait for the answer under the
+   * same id. Null for every way it can end without one.
+   */
+  async function askThePerson(message: Record<string, unknown>, options?: AskOptions): Promise<Record<string, unknown> | null> {
+    if (!raw.unlocked) return null;
+    await introduce();
+    const id = newId();
+    const answer = (waitMs: number) =>
+      new Promise<Record<string, unknown> | null>((resolve) => {
+        const timer = setTimeout(() => {
+          waiting.delete(id);
+          resolve(null);
+        }, waitMs);
+        waiting.set(id, { resolve, reject: () => resolve(null), timer });
+      });
+    const first = answer(8000);
+    post({ ...message, id });
+    if ((await first)?.t !== "asking") return null;
+    // The answer comes later, under the same id, once they have answered on BitLogin's page.
+    const second = answer(ASK_WAIT_MS + 10_000);
+    let shown = false;
+    try {
+      shown = (await options?.show?.()) === true;
+    } catch {
+      shown = false;
+    }
+    // Without `noopener`, as for signing in: the window finds this page's frame through its link back to this page.
+    if (!shown && !window.open(`${at}/connect/`, "bitlogin-connect", "popup,width=480,height=760")) {
+      const pending = waiting.get(id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        waiting.delete(id);
+      }
+      return null;
+    }
+    return second;
+  }
 
   /** Listen until `listener` returns true. */
   function onChangeOnce(listener: (state: BitLoginClientState) => boolean): () => void {

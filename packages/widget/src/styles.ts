@@ -44,6 +44,10 @@ export const WIDGET_STYLES = /* css */ `
   --bl-muted: #9a94ab;
   --bl-border: #322d40;
   --bl-input-bg: #201d2b;
+  --bl-danger: #fca5a5;
+  --bl-danger-bg: #3a1414;
+  --bl-warn: #fcd34d;
+  --bl-warn-bg: #3a2a0a;
 }
 :host([data-theme="light"]) {
   --bl-bg: #ffffff;
