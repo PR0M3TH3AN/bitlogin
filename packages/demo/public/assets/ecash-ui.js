@@ -22,10 +22,25 @@ let wallet = null;
  * Open the wallet's screens.
  *   worker   the page's headless signer, with a full session
  *   resize   tell a client the size this would like
- *   request  where a site asked to be paid: { site, invoice }. Then `done` is called once, with the answer.
- *   done     (paid | null) for a request; () for the wallet opened on its own, when Back is pressed at home
+ *   pubkey   whose wallet this is: the limit on a payment with no receipt is kept for each account
+ *   request  where a site asked to be paid: { site, invoice }, or to send a tip: { site, tip: { to?, sats } }.
+ *            Then `done` is called once, with the answer.
+ *   done     ({ invoice, preimage? } | null) for a request; () for the wallet opened on its own, when Back is pressed at home
  */
-export async function openEcash({ worker, resize, request, done }) {
+export async function openEcash({ worker, pubkey = "", resize, request, done }) {
+  if (request) request = { ...request };
+  /** A local copy of BitLogin may ask a lightning address on this machine. The real address never does. */
+  const local = /^(localhost|127\.0\.0\.1)$/u.test(location.hostname);
+  const storage = () => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  };
+  const limit = () => lib.readPayLimit(storage(), pubkey);
+  /** Whom a tip is for, once found: the name in their own profile, and the lightning address it goes to. */
+  let tipTo = null;
   const views = [...document.querySelectorAll("#ecash [data-ecash]")];
   let funding = null;
   let polling = null;
@@ -102,8 +117,48 @@ export async function openEcash({ worker, resize, request, done }) {
     );
     $("ecash-fund-mint").hidden = state.mints.length < 2;
     document.querySelector('label[for="ecash-fund-mint"]').hidden = state.mints.length < 2;
+    $("ecash-limit").value = String(limit());
     show("home");
   };
+
+  /** The site's question can't go on: say why, and offer only Close. Nothing was spent. */
+  const stop = (text) => {
+    show("done");
+    $("ecash-done-text").textContent = text;
+    $("ecash-nav").hidden = false;
+    $("ecash-back").textContent = "Close";
+  };
+  const overLimit = (asked) =>
+    stop(`This site asked for ${sats(asked)}, with no receipt. The most you allow for that is ${sats(limit())}, so nothing was spent. You can change that limit in your wallet, then ask again from the site.`);
+  /**
+   * A tip (docs/paying.md): the site named who and how much, and nothing else. The lightning address is found here,
+   * from that person's own signed profile, or for the site itself from its own /.well-known/nswp.json, and an
+   * invoice for exactly that amount is asked of it.
+   */
+  const startTip = async () => {
+    const { to, sats: asked } = request.tip;
+    if (asked > limit()) return overLimit(asked);
+    if (wallet.state().mints.length === 0) return show("setup");
+    try {
+      let name = "";
+      let address = "";
+      if (to) {
+        const found = await worker.pay.profile(to);
+        if (!found.address) return stop(found.answered ? "That person's profile names no lightning address, so a tip can't reach them. Nothing was spent." : "No relay answered about that person just now, so a tip can't be sent. Nothing was spent.");
+        ({ name, address } = found);
+      } else {
+        address = (await lib.readWorld(request.site, { local })).tip;
+        if (!address) return stop("This site names no lightning address for tips. Nothing was spent.");
+      }
+      tipTo = { name, address, person: !!to };
+      request.invoice = (await lib.invoiceFromAddress(address, asked, { local })).invoice;
+    } catch (err) {
+      return stop(err?.message || "That tip couldn't be set up. Nothing was spent.");
+    }
+    await review(request.invoice);
+  };
+  /** What a site's request goes on with, whenever the wallet is ready for it. */
+  const goOn = () => (request.tip && !request.invoice ? startTip() : review(request.invoice));
 
   /** What it costs, before anything is spent: for a site's request, or an invoice pasted here. */
   let quoted = null;
@@ -113,18 +168,23 @@ export async function openEcash({ worker, resize, request, done }) {
       quoted = await wallet.quote(invoice);
     } catch (err) {
       if (request && err?.code === "no-wallet") return show("setup");
-      if (request) {
-        show("done");
-        $("ecash-done-text").textContent = err?.message || "That invoice can't be paid from here.";
-        $("ecash-nav").hidden = false;
-        $("ecash-back").textContent = "Close";
-        return;
-      }
+      if (request) return stop(err?.message || "That invoice can't be paid from here.");
       return fail(err);
     }
+    // A payment a site asked for leaves no receipt, so it is held to the person's own limit. A tip is also held to
+    // the amount the site named: the mint's reading of the invoice has to agree.
+    if (request && quoted.amount > limit()) return overLimit(quoted.amount);
+    if (request?.tip && quoted.amount !== request.tip.sats) return stop("That lightning address answered with an invoice for a different amount. Nothing was spent.");
     const need = quoted.amount + quoted.feeReserve;
     const have = wallet.balance(quoted.mint);
-    $("ecash-confirm-title").textContent = request ? "Pay this site?" : "Pay this invoice?";
+    $("ecash-confirm-title").textContent = request?.tip ? "Send this tip?" : request ? "Pay this site?" : "Pay this invoice?";
+    // Who it is for, in BitLogin's words. A name is anyone's to claim, so the address it goes to is shown beside it.
+    $("ecash-pay-what").hidden = !request;
+    $("ecash-pay-what").textContent = !request ? "" : !tipTo ? "A payment to this site." : tipTo.person ? `A tip to ${tipTo.name || "an account with no name"}, at this lightning address:` : "A tip to this site, at the lightning address it names:";
+    $("ecash-pay-to").hidden = !tipTo;
+    $("ecash-pay-to").textContent = tipTo?.address ?? "";
+    $("ecash-no-receipt").hidden = !request;
+    $("ecash-pay-no").textContent = request?.tip ? "Don't send" : "Don't pay";
     $("ecash-pay-amount").textContent = quoted.amount.toLocaleString();
     $("ecash-pay-fee").textContent = sats(quoted.feeReserve);
     $("ecash-pay-mint").textContent = host(quoted.mint);
@@ -134,7 +194,7 @@ export async function openEcash({ worker, resize, request, done }) {
     $("ecash-short").textContent = short ? `This needs up to ${sats(need)}, and you hold ${sats(have)} at that mint.` : "";
     $("ecash-pay-yes").hidden = short;
     $("ecash-pay-yes").disabled = false;
-    $("ecash-pay-yes").textContent = `Pay ${sats(quoted.amount)}`;
+    $("ecash-pay-yes").textContent = `${request?.tip ? "Send" : "Pay"} ${sats(quoted.amount)}`;
     $("ecash-pay-fund").hidden = !short;
     show("confirm");
     resize("menu");
@@ -152,7 +212,7 @@ export async function openEcash({ worker, resize, request, done }) {
       if (request) return setTimeout(() => finish({ invoice: quoted.invoice, ...(result.preimage ? { preimage: result.preimage } : {}) }), 1200);
       $("ecash-nav").hidden = false;
     } catch (err) {
-      $("ecash-pay-yes").textContent = `Pay ${sats(quoted.amount)}`;
+      $("ecash-pay-yes").textContent = `${request?.tip ? "Send" : "Pay"} ${sats(quoted.amount)}`;
       $("ecash-pay-yes").disabled = false;
       fail(err);
     }
@@ -167,7 +227,7 @@ export async function openEcash({ worker, resize, request, done }) {
     try {
       await wallet.addMint(address);
       $("ecash-mint").value = "";
-      request ? await review(request.invoice) : home();
+      request ? await goOn() : home();
     } catch (err) {
       fail(err);
     } finally {
@@ -236,7 +296,7 @@ export async function openEcash({ worker, resize, request, done }) {
           if (!(await wallet.claim(mine))) return;
           const added = mine.amount;
           stopPolling();
-          if (request) return void review(request.invoice);
+          if (request) return void goOn();
           home();
           $("ecash-note").textContent = `Added ${sats(added)}.`;
         } catch (err) {
@@ -301,8 +361,14 @@ export async function openEcash({ worker, resize, request, done }) {
   $("ecash-back").onclick = () => {
     if (current === "done" && request) return finish(null);
     if (current === "home" || (current === "setup" && wallet.state().mints.length === 0)) return finish(request ? null : undefined);
-    if (request) return void review(request.invoice);
+    if (request) return void goOn();
     home();
+  };
+  $("ecash-limit-form").onsubmit = (e) => {
+    e.preventDefault();
+    const kept = lib.writePayLimit(storage(), pubkey, Number($("ecash-limit").value));
+    $("ecash-limit").value = String(limit());
+    $("ecash-limit-note").textContent = kept ? `Saved. A site can ask you for at most ${sats(limit())} at once with no receipt.` : "That couldn't be kept in this browser, so the limit is as it was.";
   };
 
   try {
@@ -317,6 +383,6 @@ export async function openEcash({ worker, resize, request, done }) {
     $("ecash-back").onclick = () => finish(request ? null : undefined);
     return;
   }
-  if (request) await review(request.invoice);
+  if (request) await goOn();
   else home();
 }

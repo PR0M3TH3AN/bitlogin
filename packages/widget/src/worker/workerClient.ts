@@ -320,6 +320,12 @@ export class WorkerClient {
   signerForget(payload: SignerSitePayload) {
     return this.call("signerForget", payload);
   }
+  signerHold(payload: WorkerActionMap["signerHold"][0]) {
+    return this.call("signerHold", payload);
+  }
+  signerHeld(site: string) {
+    return this.call("signerHeld", { site });
+  }
   appEncrypt(payload: AppCryptPayload) {
     return this.call("appEncrypt", payload);
   }
@@ -355,6 +361,21 @@ export class WorkerClient {
   }
   profileContent() {
     return this.call("profileContent", {});
+  }
+  payProfile(pubkey: string) {
+    return this.call("payProfile", { pubkey });
+  }
+  payListing(payload: WorkerActionMap["payListing"][0]) {
+    return this.call("payListing", payload);
+  }
+  unlockAuth(payload: WorkerActionMap["unlockAuth"][0]) {
+    return this.call("unlockAuth", payload);
+  }
+  receiptsLoad() {
+    return this.call("receiptsLoad", {});
+  }
+  receiptsKeep(receipts: WorkerActionMap["receiptsKeep"][0]["receipts"]) {
+    return this.call("receiptsKeep", { receipts });
   }
   ecashMints() {
     return this.call("ecashMints", {});

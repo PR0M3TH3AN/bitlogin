@@ -8,6 +8,7 @@ import {
   NEVER_KINDS,
   prepareForSite,
   readHandoffMessage,
+  heldReceipts,
   readSignerRequest,
   SIGN_LIMITS,
   signClass,
@@ -150,5 +151,55 @@ describe("the embedded signer and the window, as written", () => {
 
   it("the signer takes a grant only from the window that said hello, with its word, for the site it is in", () => {
     expect(signer).toContain("asking.nonce !== msg.nonce || asking.from !== e.source || msg.world !== site");
+  });
+});
+
+describe("tips, purchases and receipts, as a site and the signer say them (docs/paying.md)", () => {
+  const ask = (message: Record<string, unknown>) => readSignerRequest({ nswp: "nswp-signer", v: 1, id: "q1", ...message });
+  const window_ = (message: Record<string, unknown>) => readHandoffMessage({ nswp: "nswp-handoff", v: 1, nonce: "n1", ...message });
+  const key = "ab".repeat(32);
+  const listing = `30078:${key}:season-pass`;
+
+  it("reads a tip: an amount, and a person or nobody. Never an invoice or an address", () => {
+    expect(ask({ t: "tip", sats: 21, to: key })).toEqual({ t: "tip", id: "q1", sats: 21, to: key });
+    expect(ask({ t: "tip", sats: 21 })).toEqual({ t: "tip", id: "q1", sats: 21 });
+    // What a site adds is dropped: it can't name where the money goes.
+    expect(ask({ t: "tip", sats: 21, invoice: "lnbc210n1x", address: "me@evil.example" })).toEqual({ t: "tip", id: "q1", sats: 21 });
+    for (const bad of [{ sats: 0 }, { sats: -5 }, { sats: 1.5 }, { sats: "21" }, { sats: 1_000_001 }, { sats: 21, to: "alice" }, { sats: 21, to: 5 }, {}]) expect(ask({ t: "tip", ...bad })).toBeNull();
+  });
+
+  it("reads buy and have: a listing's coordinate, and nothing else", () => {
+    expect(ask({ t: "buy", listing })).toEqual({ t: "buy", id: "q1", listing });
+    expect(ask({ t: "have", listing, buyer: key })).toEqual({ t: "have", id: "q1", listing });
+    for (const bad of ["season-pass", `1:${key}:x`, `30078:${key}:`, `30078:xyz:x`, 5, undefined]) {
+      expect(ask({ t: "buy", listing: bad })).toBeNull();
+      expect(ask({ t: "have", listing: bad })).toBeNull();
+    }
+  });
+
+  it("reads what BitLogin's page answered: one thing, and a tip or a receipt as such", () => {
+    const world = "https://world.example";
+    const receipt = { id: "r", kind: 30078 };
+    expect(window_({ t: "answer", world, tipped: { sats: 21, preimage: "cd".repeat(32) } })).toMatchObject({ tipped: { sats: 21, preimage: "cd".repeat(32) } });
+    expect(window_({ t: "answer", world, tipped: { sats: 21, preimage: "short" } })).toMatchObject({ tipped: { sats: 21 } });
+    expect(window_({ t: "answer", world, tipped: { sats: 0 } })).toBeNull();
+    expect(window_({ t: "answer", world, bought: { receipt, delivery: "a key" } })).toMatchObject({ bought: { receipt, delivery: "a key" } });
+    expect(window_({ t: "answer", world, bought: { receipt, delivery: "x".repeat(20_001) } })).toEqual({ t: "answer", nonce: "n1", world, bought: { receipt } });
+    expect(window_({ t: "answer", world, bought: {} })).toBeNull();
+    // Never two answers at once.
+    expect(window_({ t: "answer", world, bought: { receipt }, tipped: { sats: 21 } })).toBeNull();
+    expect(window_({ t: "held", world, receipts: [receipt] })).toEqual({ t: "held", nonce: "n1", world, receipts: [receipt] });
+    expect(window_({ t: "held", world, receipts: Array.from({ length: 61 }, () => receipt) })).toBeNull();
+    expect(window_({ t: "held", world, receipts: ["x"] })).toBeNull();
+    // A question put to the person travels to BitLogin's page as it was asked.
+    const frame = (ask_: unknown) => window_({ t: "frame", world, recipient: key, pubkey: key, ask: ask_ }) as { ask?: unknown } | null;
+    expect(frame({ what: "tip", sats: 21, to: key })?.ask).toEqual({ what: "tip", sats: 21, to: key });
+    expect(frame({ what: "buy", listing })?.ask).toEqual({ what: "buy", listing });
+    expect(frame({ what: "tip", sats: 0 })?.ask).toBeUndefined();
+    expect(frame({ what: "buy", listing: "x" })?.ask).toBeUndefined();
+  });
+
+  it("a signer holds only receipts a known service signed, for the account signed in", () => {
+    expect(heldReceipts([{ id: "r", kind: 30078, pubkey: key, tags: [], content: "{}", sig: "00", created_at: 1 }, "x", null], key, [{ endpoint: "https://s.example", pubkey: key }])).toEqual([]);
   });
 });

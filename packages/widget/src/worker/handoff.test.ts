@@ -142,10 +142,12 @@ describe("a session that arrived by a hand-off", () => {
   // site, by name.
   it("lets a handed-over session ask for nothing beyond signing, the grant, and what an application was approved for", () => {
     expect([...SIGNER_ONLY_ACTIONS].sort()).toEqual(
-      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "roomPass", "signEvent", "signerCheck", "signerForget", "signerKeep", "signerRestore", "signerTouch", "worldAchieve", "worldFind", "worldFollow", "worldOpen", "worldReach", "worldSave", "worldScore", "worldSeal", "worldUnwrap"]
+      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "roomPass", "signEvent", "signerCheck", "signerForget", "signerHeld", "signerHold", "signerKeep", "signerRestore", "signerTouch", "worldAchieve", "worldFind", "worldFollow", "worldOpen", "worldReach", "worldSave", "worldScore", "worldSeal", "worldUnwrap"]
     );
     // "roomPass" was added with the owner's say (2026-11-19, §SW16): a pass for the one site, built in the worker.
     // "signerCheck" likewise (docs/take-back.md): it asks the user's relays whether the site was taken back.
+    // "signerHold" and "signerHeld" likewise (2026-11-21, docs/paying.md): a site's signer keeps, and reads back, the
+    // receipts BitLogin's own page handed it for that site's own listings, beside the site's grant.
     // Never: exporting the key, raw decrypting, the vault, the account, asking relays anything, or handing the key on again.
     for (const never of ["exportIdentity", "nip44Decrypt", "nip04Decrypt", "nip44Encrypt", "handoffExport", "vaultRevealNwc", "changePassword", "buildRecoveryExport", "loadProfile", "takeBack"]) {
       expect(SIGNER_ONLY_ACTIONS.has(never), never).toBe(false);

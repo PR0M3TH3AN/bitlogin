@@ -69,7 +69,12 @@ export interface FoundSigner {
    * What the person answered: the event, signed by this origin's own session, or the wallet connection, or
    * nothing (they said no). Resolves true once the signer has passed it on, or heard the no.
    */
-  answer(result: { event: NostrEvent } | { wallet: string } | { paid: { invoice: string; preimage?: string } } | { saved: { name: string; size: number; private: boolean; url?: string } } | { file: { name: string; type: string; bytes: Uint8Array; url?: string } } | null): Promise<boolean>;
+  answer(result: { event: NostrEvent } | { wallet: string } | { paid: { invoice: string; preimage?: string } } | { saved: { name: string; size: number; private: boolean; url?: string } } | { file: { name: string; type: string; bytes: Uint8Array; url?: string } } | { tipped: { sats: number; preimage?: string } } | { bought: { receipt: NostrEvent; delivery?: string } } | null): Promise<boolean>;
+  /**
+   * Hand the site's signer the person's receipts for that site's own listings (docs/paying.md), so it can answer
+   * `have` with no question. Only once it is signed in. They replace what it held.
+   */
+  hold(receipts: NostrEvent[]): void;
   /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
   readonly known: boolean;
   /**
@@ -186,6 +191,10 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
           const ok = await answered;
           window.removeEventListener("message", onMessage);
           return ok;
+        },
+        hold(receipts) {
+          // To the signer and to nothing else: addressed to this origin.
+          frame!.postMessage(handoffMessage({ t: "held", nonce, world, receipts }), me);
         },
         async grant(session, name, remember, forFamily, withMore) {
           // What is sealed is exactly what this page was given to show: the set, for the site the browser named,

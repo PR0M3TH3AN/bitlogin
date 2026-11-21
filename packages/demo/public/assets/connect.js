@@ -275,6 +275,7 @@ const answered = async (result, done) => {
   $("confirm").hidden = true;
   $("wallet").hidden = true;
   $("files").hidden = true;
+  $("shop").hidden = true;
   const ok = await found.answer(result).catch(() => false);
   status(result === null ? "Nothing was signed or shared." : ok ? done : "That didn't work, and nothing reached the site. Ask again from the site.");
   setTimeout(() => leave(ok && result !== null), result === null ? 0 : 700);
@@ -325,17 +326,54 @@ const askSign = async () => {
  */
 const askPay = async () => {
   if (!sameAccount()) return;
-  status("A site is asking to be paid from your ecash wallet.");
+  // A tip (docs/paying.md): the site named who it is for and how much, and no invoice. The wallet's screens find
+  // the lightning address, show who it is for, and pay only an invoice for exactly that amount.
+  const tip = found.ask.what === "tip" ? { sats: found.ask.sats, ...(found.ask.to ? { to: found.ask.to } : {}) } : null;
+  status(tip ? "A site is asking you to send a tip from your ecash wallet." : "A site is asking to be paid from your ecash wallet.");
   const { openEcash } = await import("./ecash-ui.js");
   // The wallet is the signed-in account's: its session is taken up first.
   const session = await prepare().catch(() => null);
   if (!session) return void answered(null);
   await openEcash({
     worker: session,
+    pubkey: who.pubkey,
     resize: (size) => toClient({ t: "size", size }),
-    request: { site: found.site, invoice: found.ask.invoice },
-    done: (paid) => void answered(paid ? { paid } : null, "Paid.")
+    request: tip ? { site: found.site, tip } : { site: found.site, invoice: found.ask.invoice },
+    done: (paid) => void answered(!paid ? null : tip ? { tipped: { sats: tip.sats, ...(paid.preimage ? { preimage: paid.preimage } : {}) } } : { paid }, tip ? "Sent." : "Paid.")
   });
+};
+/**
+ * A site asked to buy something (docs/paying.md). BitLogin runs the whole purchase here, as the buyer: the site
+ * named a listing and nothing else, and learns the receipt.
+ */
+const askBuy = async () => {
+  if (!sameAccount()) return;
+  status("A site is asking you to buy something.");
+  const { openShop } = await import("./shop-ui.js");
+  const session = await prepare().catch(() => null);
+  if (!session) return void answered(null);
+  let wantsWallet = false;
+  await openShop({
+    worker: session,
+    pubkey: who.pubkey,
+    resize: (size) => toClient({ t: "size", size }),
+    request: { site: found.site, listing: found.ask.listing },
+    openWallet: () => (wantsWallet = true),
+    done: async (bought) => {
+      if (!wantsWallet) return void answered(bought ? { bought } : null, "Done. The site has your receipt.");
+      // They asked for their wallet, to add sats: the site is told no, and the wallet opens in place of leaving.
+      await found.answer(null).catch(() => false);
+      finished = true;
+      void showEcash();
+    }
+  });
+};
+/** What the person has bought, opened on its own, from the account page. */
+const showLibrary = async () => {
+  $("account").hidden = true;
+  status("");
+  const { openLibrary } = await import("./shop-ui.js");
+  await openLibrary({ worker: await theWorker(), pubkey: who.pubkey, resize: (size) => toClient({ t: "size", size }), done: () => showAccount() });
 };
 /**
  * A site offered a file to be saved, or asked for one (docs/files.md). The person's own file browser is shown. The
@@ -367,7 +405,7 @@ const showEcash = async () => {
   $("account").hidden = true;
   status("");
   const { openEcash } = await import("./ecash-ui.js");
-  await openEcash({ worker: await theWorker(), resize: (size) => toClient({ t: "size", size }), done: () => showAccount() });
+  await openEcash({ worker: await theWorker(), pubkey: who?.pubkey ?? "", resize: (size) => toClient({ t: "size", size }), done: () => showAccount() });
 };
 
 const askWallet = () => {
@@ -391,7 +429,7 @@ const askWallet = () => {
 const ask = () => {
   if (!found || !who || finished) return;
   $("signin").hidden = true;
-  if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" ? void askPay() : found.ask.what === "save" || found.ask.what === "pick" ? void askFile() : void askSign();
+  if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" || found.ask.what === "tip" ? void askPay() : found.ask.what === "buy" ? void askBuy() : found.ask.what === "save" || found.ask.what === "pick" ? void askFile() : void askSign();
   toClient({ t: "size", size: "menu" });
   void prepare().catch(() => {});
   if (found.wants) return askApp();
@@ -480,7 +518,7 @@ const makeWidget = () => {
  * needs a window of its own. Opened from "Account and more", or by a client that asked for it.
  */
 const showAccount = () => {
-  for (const id of ["ask", "ask-app", "choose", "signin", "unlock", "confirm", "wallet", "ecash", "files"]) $(id).hidden = true;
+  for (const id of ["ask", "ask-app", "choose", "signin", "unlock", "confirm", "wallet", "ecash", "files", "shop", "library"]) $(id).hidden = true;
   // One widget at a time.
   $("widget-slot").replaceChildren();
   if (!$("account-slot").firstChild) {
@@ -622,10 +660,18 @@ const allow = async (button, forFamily = false, withMore = false) => {
     session = await prepare();
     await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
     const remember = !lockOn && $(found.wants ? "remember-app" : "remember").checked;
+    // What they bought from this site (docs/paying.md) is looked up while the key is handed over, so the site's
+    // signer can say "they have this" with no question. Only this site's own listings, and only if they let it.
+    const receipts = import("./shop-ui.js")
+      .then(({ receiptsFor }) => receiptsFor(session, who.pubkey, found.site))
+      .catch(() => []);
     const ok = await found.grant(session, who.name, remember, asFamily, withMore);
     $("ask").hidden = true;
     $("ask-app").hidden = true;
     if (!ok) return status(`That didn't work, and nothing was handed over. Close this ${here} and try again from the site that opened it.`);
+    // Waited for a moment and no longer: signing in is not held up by a slow relay.
+    const held = await Promise.race([receipts, new Promise((done) => setTimeout(() => done([]), 2500))]);
+    if (held.length) found.hold(held);
     // Written down at the sign-in address, for the list of sites allowed. A record only: it lets nothing sign.
     const at = Math.floor(Date.now() / 1000);
     if (asFamily) {
@@ -672,6 +718,12 @@ $("open-ecash").addEventListener("click", async () => {
   if (!who) return status("Sign in first, below. Then your wallet opens here.");
   await (await theWorker()).restore().catch(() => null);
   void showEcash();
+});
+$("open-library").addEventListener("click", async () => {
+  who = await readCachedSession();
+  if (!who) return status("Sign in first, below. Then what you've bought opens here.");
+  await (await theWorker()).restore().catch(() => null);
+  void showLibrary();
 });
 $("account-back").addEventListener("click", () => void leaveAccount());
 $("close").addEventListener("click", () => leave(false));
@@ -727,15 +779,15 @@ if (inPanel) {
     $("panel-client").textContent = `shown by ${new URL(client).host}`;
     toClient({ t: "ready" });
     if (hello.mode === "account") showAccount();
-    else if (hello.mode === "files" || hello.mode === "wallet") {
+    else if (hello.mode === "files" || hello.mode === "wallet" || hello.mode === "library") {
       // Straight to the file browser or the wallet. Both are the signed-in person's: with nobody signed in, the
       // account page comes first, and says why.
       who = await readCachedSession();
       const restored = who ? await (await theWorker()).restore().catch(() => null) : null;
       if (!restored) {
         showAccount();
-        status(hello.mode === "files" ? "Sign in first, below. Then open Files." : "Sign in first, below. Then open your wallet.");
-      } else void (hello.mode === "files" ? showFiles() : showEcash());
+        status(hello.mode === "files" ? "Sign in first, below. Then open Files." : hello.mode === "library" ? "Sign in first, below. Then open Purchases." : "Sign in first, below. Then open your wallet.");
+      } else void (hello.mode === "files" ? showFiles() : hello.mode === "library" ? showLibrary() : showEcash());
     } else {
       status("Looking for the world that asked.");
       found = await findEmbeddedSigner({ inClient: true, world: hello.world });

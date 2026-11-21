@@ -55,6 +55,9 @@ export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "logout",
   "handoffBegin",
   "handoffAccept",
+  // The receipts BitLogin's page handed this site's signer, kept beside its grant (docs/paying.md; owner, 2026-11-21).
+  "signerHold",
+  "signerHeld",
   // What an approved application may ask beyond signing (§SW9.5). Each is refused unless the session carries a
   // permission set, and then held to it (cryptoWorker.ts).
   "appEncrypt",

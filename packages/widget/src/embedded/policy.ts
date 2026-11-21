@@ -14,6 +14,8 @@ import type { NostrEvent } from "@bitlogin/core/nostr";
 import { readPermissions, type AppPermissions } from "./permissions.js";
 import { cleanSlot, fitsInSave } from "./saves.js";
 import { cleanInvoice } from "../ecash/nip60.js";
+import { cleanSats } from "../pay/lightning.js";
+import { cleanCoordinate, readReceipt, type UnlockService } from "../pay/listing.js";
 import { cleanFileName } from "../drive/tree.js";
 import { cleanMore, type WorldMore } from "./follows.js";
 export { WORLD_MORE } from "./follows.js";
@@ -192,6 +194,15 @@ export type SignerRequest =
   | { t: "wallet"; id: string }
   /** A Lightning invoice, paid from the person's own ecash wallet if they say so (docs/ecash.md). The site never sees the wallet. */
   | { t: "pay"; id: string; invoice: string }
+  /**
+   * A tip of this many sats (docs/paying.md): to a person, by their key, or with no `to`, to the site itself. The
+   * site names no invoice and no address: BitLogin's page finds the lightning address and pays only what was asked.
+   */
+  | { t: "tip"; id: string; to?: string; sats: number }
+  /** Buy what a listing sells, by its coordinate. BitLogin's page runs the purchase; the site learns the receipt. */
+  | { t: "buy"; id: string; listing: string }
+  /** Does the person hold a receipt for this listing? Answered at once, with no question, and only for a listing that is this site's own. */
+  | { t: "have"; id: string; listing: string }
   // Files (docs/files.md). The person's own file browser is shown: the site sees none of it.
   /** Offer a file to be saved in the person's files: in this site's own folder, unless they choose another. */
   | { t: "file-save"; id: string; name: string; type: string; bytes: Uint8Array; private: boolean }
@@ -257,6 +268,12 @@ export type SignerReply =
   | { t: "wallet"; id: string; uri: string }
   /** Answers `pay`, once it was paid: the proof of payment, where the mint gave one. Nothing about the wallet. */
   | { t: "paid"; id: string; preimage?: string }
+  /** Answers `buy`, once bought (or already held): the receipt, whole, and what the purchase delivers, where it delivers something. */
+  | { t: "bought"; id: string; receipt: NostrEvent; delivery?: string }
+  /** Answers `have`: the receipt held for that listing. */
+  | { t: "receipt"; id: string; receipt: NostrEvent }
+  /** Answers `have`: none is held that this site may be told of. */
+  | { t: "none"; id: string }
   /** Answers `file-save`, once saved: the name it was given, and where anyone can fetch it if the person kept it public. Not where it is. */
   | { t: "file-saved"; id: string; name: string; size: number; private: boolean; url?: string }
   /** Answers `file-pick`: the one file the person chose. */
@@ -288,6 +305,8 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.t === "propose" && d.event && typeof d.event === "object") return { t: "propose", id: d.id, event: d.event };
   if (d.t === "wallet") return { t: "wallet", id: d.id };
   if (d.t === "pay" && cleanInvoice(d.invoice)) return { t: "pay", id: d.id, invoice: cleanInvoice(d.invoice) };
+  if (d.t === "tip" && cleanSats(d.sats) && (d.to === undefined || (typeof d.to === "string" && HEX64.test(d.to)))) return { t: "tip", id: d.id, sats: cleanSats(d.sats), ...(typeof d.to === "string" ? { to: d.to } : {}) };
+  if ((d.t === "buy" || d.t === "have") && cleanCoordinate(d.listing)) return { t: d.t, id: d.id, listing: cleanCoordinate(d.listing) };
   if (d.t === "file-pick") return { t: "file-pick", id: d.id };
   if (d.t === "file-save") {
     const offered = readOfferedFile(d);
@@ -333,14 +352,28 @@ export type HandoffMessage =
    *  what that site said it wants, if it is an application (§SW9). */
   | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean; /** A world asked to be let do more, by name. */ more?: WorldMore[]; /** What it was already let do, by name: kept when the user allows it again. */ has?: WorldMore[]; /** Something the site put to the person (§SW20), and who it is signed in as. */ ask?: Asked; pubkey?: string }
   /** Window to signer: what the person answered to `ask`. Neither field: they said no. */
-  | { t: "answer"; nonce: string; world: string; event?: NostrEvent; wallet?: string; /** It was paid: the invoice that was, and the proof where there is one. */ paid?: { invoice: string; preimage?: string }; /** A file was saved. */ saved?: { name: string; size: number; private: boolean; url?: string }; /** The file the person chose. */ file?: OfferedFile & { url?: string } }
+  | { t: "answer"; nonce: string; world: string; event?: NostrEvent; wallet?: string; /** It was paid: the invoice that was, and the proof where there is one. */ paid?: { invoice: string; preimage?: string }; /** A file was saved. */ saved?: { name: string; size: number; private: boolean; url?: string }; /** The file the person chose. */ file?: OfferedFile & { url?: string }; /** A tip was paid: how much, and the proof where there is one. */ tipped?: { sats: number; preimage?: string }; /** It was bought, or was held already: the receipt, and what it delivers. */ bought?: { receipt: NostrEvent; delivery?: string } }
+  /** Window to signer: the person's receipts for this site's own listings, so `have` can be answered with no question. They replace what it held. */
+  | { t: "held"; nonce: string; world: string; receipts: NostrEvent[] }
   /** Window to signer, after the user pressed Allow: the sealed hand-off, for that site. */
   | { t: "grant"; nonce: string; world: string; sealed: { senderPublicKey: string; payload: string }; name?: string }
   /** Signer to window: it is unlocked, or it could not be. */
   | { t: "done"; nonce: string; ok: boolean };
 
 /** What a site put to the person: a careful kind to sign, exactly as it would be signed, or the use of a wallet. */
-export type Asked = { what: "sign"; event: UnsignedForSite } | { what: "wallet" } | { what: "pay"; invoice: string } | ({ what: "save"; private: boolean } & OfferedFile) | { what: "pick" };
+export type Asked =
+  | { what: "sign"; event: UnsignedForSite }
+  | { what: "wallet" }
+  | { what: "pay"; invoice: string }
+  | { what: "tip"; to?: string; sats: number }
+  | { what: "buy"; listing: string }
+  | ({ what: "save"; private: boolean } & OfferedFile)
+  | { what: "pick" };
+
+/** The longest text a purchase may deliver to a site (a key for a sealed world, say). */
+export const DELIVERY_MOST = 20_000;
+/** The most receipts BitLogin's page hands a site's signer at once: the ones for that site's own listings. */
+export const HELD_MOST = 60;
 
 /** A file as it passes between pages: its name, what it is, and its bytes. */
 export interface OfferedFile {
@@ -380,6 +413,12 @@ function readAsked(input: unknown, world: string): Asked | null {
     const offered = readOfferedFile(a);
     return offered ? { what: "save", ...offered, private: (a as { private?: unknown }).private !== false } : null;
   }
+  if (a.what === "tip") {
+    const t = a as { to?: unknown; sats?: unknown };
+    if (!cleanSats(t.sats) || (t.to !== undefined && !(typeof t.to === "string" && HEX64.test(t.to)))) return null;
+    return { what: "tip", sats: cleanSats(t.sats), ...(typeof t.to === "string" ? { to: t.to } : {}) };
+  }
+  if (a.what === "buy") return cleanCoordinate((a as { listing?: unknown }).listing) ? { what: "buy", listing: cleanCoordinate((a as { listing?: unknown }).listing) } : null;
   if (a.what === "pay") return cleanInvoice((a as { invoice?: unknown }).invoice) ? { what: "pay", invoice: cleanInvoice((a as { invoice?: unknown }).invoice) } : null;
   if (a.what !== "sign") return null;
   const event = prepareAsked(a.event, world, (a.event as { created_at?: number } | null)?.created_at ?? 0);
@@ -414,8 +453,17 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
     const picked = d.file === undefined ? null : readOfferedFile(d.file);
     if (d.file !== undefined && !picked) return null;
     const file = picked ? { ...picked, ...(httpsUrl((d.file as { url?: unknown }).url) ? { url: httpsUrl((d.file as { url?: unknown }).url) } : {}) } : null;
-    if ([event, wallet, paid, saved, file].filter(Boolean).length > 1) return null;
-    return { t: "answer", nonce: d.nonce, world: cleanOrigin(d.world), ...(event ? { event } : {}), ...(wallet ? { wallet } : {}), ...(paid ? { paid } : {}), ...(saved ? { saved } : {}), ...(file ? { file } : {}) };
+    const tp = d.tipped && typeof d.tipped === "object" ? (d.tipped as Record<string, unknown>) : null;
+    const tipped = tp && cleanSats(tp.sats) ? { sats: cleanSats(tp.sats), ...(typeof tp.preimage === "string" && HEX64.test(tp.preimage) ? { preimage: tp.preimage } : {}) } : null;
+    if (d.tipped !== undefined && !tipped) return null;
+    const bt = d.bought && typeof d.bought === "object" ? (d.bought as Record<string, unknown>) : null;
+    const bought = bt && bt.receipt && typeof bt.receipt === "object" ? { receipt: bt.receipt as NostrEvent, ...(typeof bt.delivery === "string" && bt.delivery.length > 0 && bt.delivery.length <= DELIVERY_MOST ? { delivery: bt.delivery } : {}) } : null;
+    if (d.bought !== undefined && !bought) return null;
+    if ([event, wallet, paid, saved, file, tipped, bought].filter(Boolean).length > 1) return null;
+    return { t: "answer", nonce: d.nonce, world: cleanOrigin(d.world), ...(event ? { event } : {}), ...(wallet ? { wallet } : {}), ...(paid ? { paid } : {}), ...(saved ? { saved } : {}), ...(file ? { file } : {}), ...(tipped ? { tipped } : {}), ...(bought ? { bought } : {}) };
+  }
+  if (d.t === "held" && cleanOrigin(d.world) && Array.isArray(d.receipts) && d.receipts.length <= HELD_MOST && d.receipts.every((r) => r && typeof r === "object")) {
+    return { t: "held", nonce: d.nonce, world: cleanOrigin(d.world), receipts: d.receipts as NostrEvent[] };
   }
   if (d.t === "grant" && cleanOrigin(d.world) && d.sealed && typeof d.sealed === "object") {
     const s = d.sealed as Record<string, unknown>;
@@ -425,4 +473,18 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
   }
   if (d.t === "done" && typeof d.ok === "boolean") return { t: "done", nonce: d.nonce, ok: d.ok };
   return null;
+}
+
+/**
+ * The receipts a site's signer may hold, of those BitLogin's page handed it:
+ * each really signed by a service on `services`, and this account's. What is
+ * left is what `have` answers from.
+ */
+export function heldReceipts(input: readonly unknown[], pubkey: string, services: readonly UnlockService[]): NostrEvent[] {
+  const out: NostrEvent[] = [];
+  for (const item of input.slice(0, HELD_MOST)) {
+    const receipt = readReceipt(item, services);
+    if (receipt && receipt.buyer === pubkey) out.push(receipt.event);
+  }
+  return out;
 }
