@@ -178,10 +178,16 @@ export async function rollEcash(deps: { signer: NostrSigner; store: KeyValueStor
   const { signer, store, relays } = deps;
   const now = deps.now ?? Date.now() / 1000;
   const destroy = new Set(roll.destroy.filter((id) => typeof id === "string" && id.length <= 80));
-  const keep = roll.keep.map((token) => ({ mint: cleanMint(token.mint), proofs: cleanProofs(token.proofs) }));
+  // Everything held at a mint may be handed over at once: it is written as several records, below.
+  const keep = roll.keep.map((token) => ({ mint: cleanMint(token.mint), proofs: cleanProofs(token.proofs, 5000) }));
   if (keep.some((token) => !token.mint || !token.proofs)) throw new Error("That is not ecash this wallet can keep.");
   const local = await readLocal(store, signer);
-  const added: EcashToken[] = keep.filter((token) => token.proofs!.length > 0).map((token) => ({ event: localId(), mint: token.mint, proofs: token.proofs! }));
+  // Many proofs are written as several records, each small enough for any NIP-60 wallet, and any relay, to take.
+  const added: EcashToken[] = keep.flatMap((token) => {
+    const records: EcashToken[] = [];
+    for (let i = 0; i < token.proofs!.length; i += ECASH_LIMITS.proofsWritten) records.push({ event: localId(), mint: token.mint, proofs: token.proofs!.slice(i, i + ECASH_LIMITS.proofsWritten) });
+    return records;
+  });
   const next: LocalCopy = { wallet: local.wallet, tokens: [...local.tokens.filter((token) => !destroy.has(token.event)), ...added] };
   // First, here. From this line on, a crash or a dead relay loses nothing.
   await writeLocal(store, signer, next);

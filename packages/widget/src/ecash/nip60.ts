@@ -12,7 +12,16 @@ export const HISTORY_KIND = 7376;
 /** The only unit this wallet keeps. A token in another unit is left where it is, unread. */
 export const ECASH_UNIT = "sat";
 /** How many mints one wallet may name, and how many proofs one record may hold. */
-export const ECASH_LIMITS = { mints: 5, proofsPerToken: 500, tokens: 500 } as const;
+export const ECASH_LIMITS = {
+  mints: 5,
+  proofsPerToken: 500,
+  tokens: 500,
+  /**
+   * How many proofs this wallet writes into one token record. Kept small so that a record is well under the
+   * 64 KB an ordinary NIP-44 message may hold, and under what relays take: another NIP-60 wallet can read it.
+   */
+  proofsWritten: 100
+} as const;
 
 export interface EcashProof {
   /** The mint's keyset. */
@@ -63,8 +72,8 @@ export function cleanProof(input: unknown): EcashProof | null {
 }
 
 /** Every proof, or null: a record with one proof that does not read is not kept in part. */
-export function cleanProofs(input: unknown): EcashProof[] | null {
-  if (!Array.isArray(input) || input.length > ECASH_LIMITS.proofsPerToken) return null;
+export function cleanProofs(input: unknown, most: number = ECASH_LIMITS.proofsPerToken): EcashProof[] | null {
+  if (!Array.isArray(input) || input.length > most) return null;
   const out: EcashProof[] = [];
   const seen = new Set<string>();
   for (const item of input) {

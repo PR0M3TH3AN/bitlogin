@@ -110,6 +110,23 @@ describe("where an ecash wallet is kept (docs/ecash.md)", () => {
     expect(spent.unsaved).toBe(true);
   });
 
+  it("writes many proofs as several small records, each one any NIP-60 wallet can read", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    const many = Array.from({ length: 250 }, (_, i) => proof(`s${i}`, 1));
+    const after = await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: many }] });
+    expect(after.tokens.map((t) => t.proofs.length)).toEqual([100, 100, 50]);
+    const held = [...deps.relays.events.values()].filter((e) => e.kind === TOKEN_KIND);
+    expect(held.length).toBe(3);
+    // Each is under the 64 KB an ordinary NIP-44 message may hold.
+    for (const event of held) expect(deps.signer.nip44Decrypt(deps.signer.getPublicKey(), event.content).length).toBeLessThan(60_000);
+    expect(balances((await loadEcash({ ...deps, store: new InMemoryKeyValueStore() })).tokens)).toEqual({ [MINT]: 250 });
+    // Replaced whole: all three go when they are spent, and the first new record names them.
+    const next = await rollEcash(deps, { destroy: after.tokens.map((t) => t.event), keep: [{ mint: MINT, proofs: [proof("left", 7)] }] });
+    expect(balances(next.tokens)).toEqual({ [MINT]: 7 });
+    expect([...deps.relays.events.values()].filter((e) => e.kind === TOKEN_KIND).length).toBe(1);
+  });
+
   it("refuses what is not ecash, and a wallet with no mint", async () => {
     const deps = setup();
     await expect(setEcashMints(deps, [])).rejects.toThrow(/mints/u);
