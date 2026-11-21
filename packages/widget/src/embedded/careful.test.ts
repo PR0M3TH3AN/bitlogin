@@ -44,6 +44,11 @@ describe("what a site may put to the person (sign-in-window.md §SW20)", () => {
     expect(frame({ ask: { what: "sign", event }, pubkey: HEX })).toMatchObject({ ask: { what: "sign", event }, pubkey: HEX });
     expect(frame({ ask: { what: "wallet" }, pubkey: HEX })).toMatchObject({ ask: { what: "wallet" } });
     expect(frame({ ask: { what: "wallet" } })).not.toHaveProperty("ask");
+    // An approved application may put a careful kind or a payment to the person too, beside the set it holds. Not a wallet.
+    const wants = { name: "An app", sign: [1], read: [], appData: [], proofs: [], peers: [] };
+    expect(frame({ wants, ask: { what: "sign", event }, pubkey: HEX })).toMatchObject({ wants: { sign: [1] }, ask: { what: "sign", event } });
+    expect(frame({ wants, ask: { what: "pay", invoice: "lnbc10n1pjq" }, pubkey: HEX })).toMatchObject({ ask: { what: "pay", invoice: "lnbc10n1pjq" } });
+    expect(frame({ wants, ask: { what: "wallet" }, pubkey: HEX })).not.toHaveProperty("ask");
     expect(frame({ ask: { what: "sign", event: { ...event, kind: 1 } }, pubkey: HEX })).not.toHaveProperty("ask");
     expect(frame({ ask: { what: "sign", event: { ...event, tags: [] } }, pubkey: HEX })).not.toHaveProperty("ask");
     expect(frame({ ask: { what: "sign", event: { ...event, tags: [["nswp:world", "https://other.example"]] } }, pubkey: HEX })).not.toHaveProperty("ask");

@@ -251,8 +251,11 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (!headless || !pubkey) return refuse();
 
     if (ask.t === "propose" || ask.t === "wallet" || ask.t === "pay") {
-      // Put to the person on a page of BitLogin's own. Not for an application: it is held to the set the user read.
-      const asked: Asked | null = app ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
+      // Put to the person on a page of BitLogin's own. An application the user approved may ask too (BitPortal's own
+      // room is one, and should behave as a world does): asking widens nothing it may do on its own say, because
+      // every answer is a press on BitLogin's page, and what is signed there is signed by BitLogin's own session.
+      // Not a wallet: an application asks for one through the widget, at its own address.
+      const asked: Asked | null = app && ask.t === "wallet" ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
       if (!asked || !askGates[asked.what].take(Date.now())) return refuse();
       // One question at a time: a new one ends the one before it.
       dropPending();
@@ -381,7 +384,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       try {
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}), ...(!wanted && pubkey && !app && pending ? { ask: pending.ask, pubkey } : {}) });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}), ...(pubkey && pending ? { ask: pending.ask, pubkey } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }

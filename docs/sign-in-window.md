@@ -1276,8 +1276,11 @@ panel (`hello` with its `world`, §SW19.2), or opens `/connect/`. The page
 finds the signer as always, is told what is waiting and which account the
 site is signed in as, shows it, and brings back the answer.
 
-- **Only for a site already allowed,** and not for an application (it is
-  held to the set the user read). Anything else answers `refused`.
+- **Only for a site already allowed.** An application the user approved
+  may ask too (BitPortal's own room is one): asking widens nothing it may
+  do on its own say, because every answer is a press on BitLogin's page.
+  Not a wallet: an application asks for one through the widget, at its own
+  address. Anything else answers `refused`.
 - **One question at a time,** dropped after five minutes; a new one ends
   the one before. Two a minute and ten an hour for each kind of question.
 - **The embedded signer signs none of it.** Its session still signs a note
