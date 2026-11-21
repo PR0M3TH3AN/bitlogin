@@ -951,7 +951,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         // person. It is told "asking" at once, the client shows the panel, and the panel says what it is in words.
         expect((await ask({ t: "sign", event: { kind: 0, content: "{}", tags: [] } })).t).toBe("refused");
         const waitFor = (id: string) => worldFrame.waitForFunction((i) => (window as any).heard.map((m: any) => m.data).find((d: any) => d?.id === i && d.t !== "asking"), id, { timeout: 30_000 }).then((h) => h.jsonValue() as Promise<Record<string, any>>);
-        const propose = (message: Record<string, unknown>, id: string) => worldFrame.evaluate(({ m, i }) => (document.getElementById("signer") as HTMLIFrameElement).contentWindow!.postMessage({ nswp: "nswp-signer", v: 1, id: i, ...m }, "*"), { m: message, i: id });
+        const propose = (message: Record<string, unknown>, id: string) => worldFrame.evaluate(({ m, i, to }) => (document.getElementById("signer") as HTMLIFrameElement).contentWindow!.postMessage({ nswp: "nswp-signer", v: 1, id: i, ...m }, to), { m: message, i: id, to: origin });
         const asking = (id: string) => worldFrame.waitForFunction((i) => (window as any).heard.some((m: any) => m.data?.id === i && m.data.t === "asking"), id, { timeout: 30_000 });
         const profile = JSON.stringify({ name: "Ada", about: "Mathematician", lud16: "ada@wallet.example" });
         await propose({ t: "propose", event: { kind: 0, content: profile, tags: [["nswp:world", "https://evil.example"]] } }, "p1");
@@ -1134,7 +1134,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           // A world offers a file. The file browser opens in that world's own folder, made for it, with the name to
           // save it under; the person may go elsewhere first. Saved private, the world is told its name and no link.
           const offered = Array.from(Buffer.from(JSON.stringify({ scene: "a sculpture" })));
-          await worldFrame.evaluate((bytes) => (document.getElementById("signer") as HTMLIFrameElement).contentWindow!.postMessage({ nswp: "nswp-signer", v: 1, id: "f1", t: "file-save", name: "scene.json", type: "application/json", bytes: new Uint8Array(bytes) }, "*"), offered);
+          // Addressed to the sign-in address and nothing else, as a world's kit does.
+          await worldFrame.evaluate(({ bytes, to }) => (document.getElementById("signer") as HTMLIFrameElement).contentWindow!.postMessage({ nswp: "nswp-signer", v: 1, id: "f1", t: "file-save", name: "scene.json", type: "application/json", bytes: new Uint8Array(bytes) }, to), { bytes: offered, to: origin });
           await asking("f1");
           await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
           await panel.locator("#files-save-yes").waitFor({ state: "visible", timeout: 60_000 });
