@@ -1,0 +1,42 @@
+/* The file browser (docs/files.md), on BitLogin's own sign-in page and panel. A list, as a file browser is: one row
+   a thing, the name first and loudest, what it weighs at the far end. Folders are told from files by the brass tab. */
+.files-path { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem .1rem; margin: 0 0 .5rem; font-family: var(--font-display); font-size: 1.25rem; font-weight: 600; }
+.files-path button { background: none; border: 0; padding: .1rem .2rem; color: var(--muted); font: inherit; cursor: pointer; border-radius: 6px; }
+.files-path button:hover { color: var(--fg); }
+.files-path button[aria-current="page"] { color: var(--fg); cursor: default; }
+.files-path .sep { color: var(--brass-soft); font-family: var(--font-body); font-weight: 400; }
+
+.connect .files-list { list-style: none; margin: .6rem 0; padding: 0; display: block; border-top: 1px solid var(--line); }
+.files-list > li { border-bottom: 1px solid var(--line); }
+.files-row { display: flex; align-items: center; gap: .7rem; padding: .5rem .2rem; }
+.files-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: .7rem; background: none; border: 0; padding: .15rem 0; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.files-open:hover .files-name { text-decoration: underline; }
+.files-icon { flex: none; width: 1.5rem; height: 1.2rem; border-radius: 3px; border: 1.5px solid var(--muted); position: relative; }
+.files-icon.folder { border-color: var(--brass); background: color-mix(in srgb, var(--brass) 18%, transparent); border-radius: 2px 4px 4px 4px; }
+.files-icon.folder::before { content: ""; position: absolute; left: -1.5px; top: -.36rem; width: .7rem; height: .3rem; border: 1.5px solid var(--brass); border-bottom: 0; border-radius: 3px 3px 0 0; }
+.files-icon.file { width: 1.1rem; height: 1.35rem; margin: 0 .2rem; border-radius: 2px 6px 2px 2px; }
+.files-name { min-width: 0; overflow-wrap: anywhere; }
+.files-meta { flex: none; font-size: .84rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.files-seal { flex: none; font-size: .74rem; padding: .08rem .45rem; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
+.files-seal.private { border-color: var(--seal); color: var(--fg); }
+.files-more { flex: none; background: none; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--fg); font: inherit; font-size: .84rem; padding: .25rem .6rem; cursor: pointer; }
+.files-more:hover, .files-more[aria-expanded="true"] { border-color: var(--brass); }
+.files-acts { display: flex; flex-wrap: wrap; gap: .4rem; padding: 0 .2rem .6rem 2.4rem; }
+.files-acts button { background: var(--ink-softer); border: 1px solid var(--line-strong); border-radius: 8px; color: var(--fg); font: inherit; font-size: .86rem; padding: .3rem .7rem; cursor: pointer; }
+.files-acts button:hover { border-color: var(--fg); }
+.files-acts button.danger { border-color: #b45309; }
+
+.files-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .8rem; margin: .8rem 0 .2rem; }
+.files-private { display: flex; align-items: center; gap: .45rem; font-size: .9rem; color: var(--muted); }
+.files-private input { width: 1.05rem; height: 1.05rem; }
+.files-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .5rem 0; padding: .6rem .8rem; border: 1px solid var(--brass-soft); border-radius: 10px; background: var(--ink-softer); }
+.files-bar label, .files-bar > span { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+.files-bar input[type="text"], .files-saving input[type="text"] { flex: 2 1 12rem; min-width: 0; padding: .5rem .65rem; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--ink); color: var(--fg); font: inherit; }
+.files-saving { margin: .9rem 0 .2rem; padding: .8rem .9rem; border: 1px solid var(--brass-soft); border-radius: 12px; background: var(--ink-softer); display: grid; gap: .4rem; }
+.files-saving label { font-size: .9rem; color: var(--muted); }
+.files-saving input[type="text"] { width: 100%; }
+.files-usage { margin: 1rem 0 .2rem; font-size: .88rem; color: var(--muted); }
+.files :is(button, input):focus-visible { outline: 2px solid var(--seal); outline-offset: 2px; }
+.files-tag { margin-left: .5rem; font-size: .74rem; padding: .05rem .45rem; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); font-family: var(--font-body); }
+.files-tag.free { border-color: #16a34a; color: var(--fg); }
+.files-tag.paid { border-color: var(--brass); color: var(--fg); }

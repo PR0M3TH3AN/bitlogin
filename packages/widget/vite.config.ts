@@ -34,7 +34,9 @@ export default defineConfig({
         "bitlogin-client": resolve(__dirname, "src/embedded/client.ts"),
         // The ecash wallet (docs/ecash.md), for BitLogin's own pages only. Apart, because it brings the Cashu
         // protocol with it: loaded when a wallet is opened, and by nothing an application vendors.
-        "bitlogin-ecash": resolve(__dirname, "src/ecash/index.ts")
+        "bitlogin-ecash": resolve(__dirname, "src/ecash/index.ts"),
+        // The file browser's engine (docs/files.md), for BitLogin's own pages only.
+        "bitlogin-files": resolve(__dirname, "src/drive/index.ts")
       },
       formats: ["es"],
       fileName: (_format, entryName) => `${entryName}.js`

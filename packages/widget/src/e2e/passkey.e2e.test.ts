@@ -29,6 +29,7 @@ import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "../../../core
 import { NostrSigner } from "../../../core/src/account/signer.js";
 import { sealMessage } from "../embedded/messages.js";
 import { startMockMint } from "../ecash/mockMint.js";
+import { startMockBlossom } from "../drive/mockBlossom.js";
 import { RelayPool } from "../../../core/src/nostr/pool.js";
 
 const DIST = fileURLToPath(new URL("../../../demo/dist/", import.meta.url));
@@ -1073,6 +1074,99 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           expect((await ask({ t: "pay", invoice: "https://evil.example/pay" })).t).toBe("no answer");
         } finally {
           await mint.close();
+        }
+
+        // Files (docs/files.md): the person's own file browser, in the panel. A server is chosen, a folder made, a file
+        // added sealed, copied, and deleted; then a world saves a file into its own folder, and is handed one back.
+        const blossom = await startMockBlossom();
+        try {
+          await page.evaluate(() => (window as any).showPanel({ mode: "account" }));
+          await panel.locator("#account-slot bitlogin-auth .pubkey").waitFor({ timeout: 30_000 });
+          await panel.locator("#open-files").click();
+          // No server chosen yet: that comes first, and it says what a server is and is not.
+          await panel.locator('[data-files="servers"]').waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator('[data-files="servers"]').textContent()).toContain("sealed before it leaves here");
+          await panel.locator("#files-server").fill(blossom.url);
+          await panel.locator('#files-server-form button[type="submit"]').click();
+          await panel.locator(`#files-mine li[data-server="${blossom.url}"]`).waitFor({ timeout: 30_000 });
+          await panel.locator(`#files-mine li[data-server="${blossom.url}"] .files-tag.free`).waitFor({ timeout: 15_000 });
+          await panel.locator("#files-back").click();
+          await panel.locator('[data-files="browse"]').waitFor({ state: "visible", timeout: 30_000 });
+          expect(await panel.locator("#files-usage").textContent()).toBe("You keep nothing on any server yet.");
+
+          // A folder, and a file added to the top, private unless they say otherwise.
+          await panel.locator("#files-new-folder").click();
+          await panel.locator("#files-ask-input").fill("Notes");
+          await panel.locator("#files-ask-yes").click();
+          await panel.locator('#files-list li[data-folder="Notes"]').waitFor({ timeout: 30_000 });
+          await panel.locator("#files-input").setInputFiles({ name: "diary.txt", mimeType: "text/plain", buffer: Buffer.from("dear diary, a secret") });
+          const diary = panel.locator('#files-list li[data-file="diary.txt"]');
+          await diary.waitFor({ timeout: 30_000 });
+          expect(await diary.locator(".files-seal").textContent()).toBe("Private");
+          // What the server holds says nothing of it: not its words, and not what kind of file it is.
+          expect(blossom.blobs.size).toBe(1);
+          const stored = [...blossom.blobs.values()][0]!;
+          expect(stored.bytes.toString("utf8")).not.toContain("diary");
+          expect(stored.type).toBe("application/octet-stream");
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/files-browse.png` });
+
+          // Copied into the folder: a second name, nothing uploaded again. Then the first is deleted: the bytes stay.
+          await diary.locator(".files-more").click();
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/files-actions.png` });
+          await diary.locator(".files-acts button", { hasText: "Copy" }).first().click();
+          await panel.locator('#files-list li[data-folder="Notes"] .files-open').click();
+          await panel.locator("#files-carry-here").click();
+          await panel.locator('#files-list li[data-file="diary.txt"]').waitFor({ timeout: 30_000 });
+          expect(blossom.blobs.size).toBe(1);
+          await panel.locator("#files-path button", { hasText: "Files" }).click();
+          await diary.locator(".files-more").click();
+          await diary.locator(".files-acts button", { hasText: "Delete" }).click();
+          expect(await panel.locator("#files-ask-label").textContent()).toContain("can't be undone");
+          await panel.locator("#files-ask-yes").click();
+          await diary.waitFor({ state: "detached", timeout: 30_000 });
+          expect(blossom.blobs.size).toBe(1);
+
+          // A world offers a file. The file browser opens in that world's own folder, made for it, with the name to
+          // save it under; the person may go elsewhere first. Saved private, the world is told its name and no link.
+          const offered = Array.from(Buffer.from(JSON.stringify({ scene: "a sculpture" })));
+          await worldFrame.evaluate((bytes) => (document.getElementById("signer") as HTMLIFrameElement).contentWindow!.postMessage({ nswp: "nswp-signer", v: 1, id: "f1", t: "file-save", name: "scene.json", type: "application/json", bytes: new Uint8Array(bytes) }, "*"), offered);
+          await asking("f1");
+          await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await panel.locator("#files-save-yes").waitFor({ state: "visible", timeout: 60_000 });
+          expect(await panel.locator("#files-site").textContent()).toBe(world);
+          expect((await panel.locator("#files-path button").allTextContents()).join(" > ")).toBe(`Files > Worlds > ${new URL(world).host}`);
+          expect(await panel.locator("#files-save-name").inputValue()).toBe("scene.json");
+          expect(await panel.locator("#files-save-private").isChecked()).toBe(true);
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/files-save.png` });
+          await panel.locator("#files-save-yes").click();
+          const savedReply = await waitFor("f1");
+          expect(savedReply).toMatchObject({ t: "file-saved", name: "scene.json", size: offered.length, private: true });
+          expect(savedReply.url).toBeUndefined();
+          expect(blossom.blobs.size).toBe(2);
+          for (const held of blossom.blobs.values()) expect(held.bytes.toString("utf8")).not.toContain("sculpture");
+
+          // The world asks for a file. The person chooses one, and that one is handed over, opened: no other.
+          await propose({ t: "file-pick" }, "f2");
+          await asking("f2");
+          await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await panel.locator("#files-pick-no").waitFor({ state: "visible", timeout: 60_000 });
+          await panel.locator('#files-list li[data-folder="Worlds"] .files-open').click();
+          await panel.locator(`#files-list li[data-folder="${new URL(world).host}"] .files-open`).click();
+          await panel.locator('#files-list li[data-file="scene.json"] .files-more', { hasText: "Send this" }).click();
+          expect(await panel.locator("#files-ask-label").textContent()).toContain("the site will be able to read it");
+          await panel.locator("#files-ask-yes").click();
+          await waitFor("f2");
+          const handed = await worldFrame.evaluate(() => {
+            const d = (window as any).heard.map((m: any) => m.data).find((x: any) => x?.id === "f2" && x.t === "file");
+            return d ? { name: d.name, type: d.type, text: new TextDecoder().decode(d.bytes), keys: Object.keys(d).sort() } : null;
+          });
+          expect(handed).toEqual({ name: "scene.json", type: "application/json", text: JSON.stringify({ scene: "a sculpture" }), keys: ["bytes", "id", "name", "nswp", "t", "type", "v"] });
+          // Nothing the world heard names a server, a hash or a key.
+          const heardFiles = JSON.stringify(await worldFrame.evaluate(() => (window as any).heard.filter((m: any) => String(m.data?.id).startsWith("f")).map((m: any) => ({ ...m.data, bytes: undefined }))));
+          expect(heardFiles).not.toContain(blossom.url);
+          expect(heardFiles).not.toMatch(/sha256|"key"|servers/u);
+        } finally {
+          await blossom.close();
         }
 
         // Opened for the account alone, it shows the account.

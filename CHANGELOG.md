@@ -15,6 +15,15 @@ would plausibly want. Newest first.
   account chooser, the lock and every account page are in it. Only
   `https://portal.bitblocks.network` may frame it. Nothing changes for a
   site that opens the window.
+- **A person's files, on Blossom servers** (`docs/files.md`), on
+  BitLogin's own sign-in page and panel: a file browser with folders,
+  move, copy, rename and delete; public files, and private ones sealed
+  before upload; servers people use, marked free or paid; a server that
+  charges paid from the ecash wallet up to a limit the person sets.
+  Experimental: not tried against a real server.
+- **A site can offer a file to be saved, or ask for one** (`file-save`,
+  `file-pick`): the person's file browser is shown, and the site sees
+  nothing of what they keep.
 - **An ecash wallet kept with the account** (NIP-60; `docs/ecash.md`), on
   BitLogin's own sign-in page and panel. Add sats by Lightning, receive a
   Cashu token, pay an invoice. Kept in the browser first and then on the

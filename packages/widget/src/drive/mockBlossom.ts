@@ -19,12 +19,14 @@ export interface MockBlossom {
   lie: boolean;
   /** Refuse every upload from anyone, as a members-only server does. */
   closed: boolean;
+  /** Take pictures and video only, as many public servers do. */
+  mediaOnly: boolean;
   requests: string[];
   close(): Promise<void>;
 }
 
 export async function startMockBlossom(): Promise<MockBlossom> {
-  const self: MockBlossom = { url: "", blobs: new Map(), price: null, maxBytes: 10_000_000, lie: false, closed: false, requests: [], close: () => new Promise((resolve) => server.close(() => resolve())) };
+  const self: MockBlossom = { url: "", blobs: new Map(), price: null, maxBytes: 10_000_000, lie: false, closed: false, mediaOnly: false, requests: [], close: () => new Promise((resolve) => server.close(() => resolve())) };
 
   /** The note in the `Authorization` header, if it is one this server must accept for this request. Else why not. */
   const authorised = (req: IncomingMessage, verb: string, sha256: string): { pubkey: string } | { error: string } => {
@@ -66,6 +68,8 @@ export async function startMockBlossom(): Promise<MockBlossom> {
         const who = authorised(req, "upload", sha256);
         if ("error" in who) return say(401, { "x-reason": who.error });
         if (self.closed) return say(403, { "x-reason": "members only" });
+        const kind = String(head ? (req.headers["x-content-type"] ?? "") : (req.headers["content-type"] ?? ""));
+        if (self.mediaOnly && !/^(image|video)\//u.test(kind)) return say(415, { "x-reason": `unsupported content type: ${kind}` });
         if (size > self.maxBytes) return say(413, { "x-reason": `File too large. Max allowed size is ${self.maxBytes} bytes.` });
         if (self.price && req.headers["x-lightning"] !== self.price.proof) {
           // A HEAD is for finding out only: it is never answered with a paid upload (BUD-07).

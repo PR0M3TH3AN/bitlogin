@@ -46,7 +46,7 @@ describe("a person's files on Blossom servers (docs/files.md)", () => {
     await two.close();
   });
   beforeEach(() => {
-    for (const server of [one, two]) Object.assign(server, { price: null, maxBytes: 10_000_000, lie: false, closed: false });
+    for (const server of [one, two]) Object.assign(server, { price: null, maxBytes: 10_000_000, lie: false, closed: false, mediaOnly: false });
     one.blobs.clear();
     two.blobs.clear();
   });
@@ -147,8 +147,26 @@ describe("a person's files on Blossom servers (docs/files.md)", () => {
     expect(await files.check(one.url)).toMatchObject({ state: "closed", reason: "members only" });
     one.closed = false;
     expect(await files.check(one.url)).toMatchObject({ state: "free" });
-    expect(await files.check("http://127.0.0.1:9")).toMatchObject({ state: "unknown" });
+    expect(await files.check("http://127.0.0.1:9")).toMatchObject({ state: "unreachable" });
     await expect(createFiles(storeFor(new NostrSigner(generatePrivateKey()), [])).put("root", { name: "a", type: "", bytes: text("a") }, { private: false })).rejects.toThrow(/Choose a file server/u);
+  });
+
+  it("keeps a private file on a server that takes any file, where the first takes pictures and video only", async () => {
+    // As it is in the wild: several of the most used servers take media and refuse everything else.
+    const { files } = await open([one.url, two.url]);
+    one.mediaOnly = true;
+    expect(await files.check(one.url)).toMatchObject({ state: "media-only", reason: "unsupported content type: application/octet-stream" });
+    // A public picture goes to both.
+    const picture = await files.put(files.ROOT, { name: "cat.png", type: "image/png", bytes: text("png bytes") }, { private: false });
+    expect(picture.servers).toEqual([one.url, two.url]);
+    // A private file is sealed, so the first server can't tell it is a picture, and won't have it: the second keeps it.
+    const secret = await files.put(files.ROOT, { name: "cat.png", type: "image/png", bytes: text("png bytes") }, { private: true });
+    expect(secret.servers).toEqual([two.url]);
+    expect(read((await files.get(secret.id)).bytes)).toBe("png bytes");
+    // With only such a server, a private file can't be kept, and the person is told why.
+    const { files: only } = await open([one.url]);
+    await expect(only.put(only.ROOT, { name: "notes.txt", type: "text/plain", bytes: text("notes") }, { private: true })).rejects.toMatchObject({ code: "kind" });
+    expect(only.drive().folder(only.ROOT).files).toEqual([]);
   });
 
   it("pays a server that asks, without asking the person, only up to what they allowed", async () => {

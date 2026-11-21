@@ -68,7 +68,7 @@ export function createFiles(store: FilesStore, options: FilesOptions = {}) {
     /** Whether a server would take a file from this account, and whether it wants paying: asked with a small pretend file. */
     async check(server: string): Promise<UploadCheck> {
       const clean = cleanServer(server);
-      if (!clean) return { state: "unknown", reason: "" };
+      if (!clean) return { state: "unreachable", reason: "" };
       return checkUpload(clean, { sha256: await sha256Hex(new TextEncoder().encode(`bitlogin-check:${clean}`)), size: 1024, type: "application/octet-stream" }, store.auth);
     },
     /** Use these servers, most trusted first: published as the account's server list (BUD-03). */

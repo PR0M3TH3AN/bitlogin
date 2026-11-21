@@ -292,6 +292,15 @@ that moved.
     BitLogin holds the wallet and pays a world per press (`docs/ecash.md`).
     The wallet, the browser copy written first, recommended mints
     (NIP-87), `pay` for a world, and the wallet's screens. On `beta`.
+  - [x] **Files on Blossom servers** (`docs/files.md`), asked for by the
+    owner 2026-11-21: the file browser in the panel (folders, move, copy,
+    rename, delete, public and private), a folder for each world, servers
+    ranked and marked free or paid, usage shown, a paid server paid up to
+    a limit, and `file-save` / `file-pick` for a world. On `beta`.
+  - [ ] **Owner: try the file browser against a real Blossom server.** It
+    has only seen a mock one.
+  - [ ] Files still to do: a world saving to its own folder without a
+    press; mirroring; the client library's methods; Cashu payment.
   - [ ] **Owner: try the wallet with a few real sats,** at a mint you
     choose. It has only seen a mock mint and a test mint of pretend sats.
   - [ ] Ecash still to do: secrets derived from a seed (so nothing is lost

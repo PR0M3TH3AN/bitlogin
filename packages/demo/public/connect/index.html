@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="../assets/site.css" />
 <link rel="stylesheet" href="../assets/connect.css" />
 <link rel="stylesheet" href="../assets/ecash.css" />
+<link rel="stylesheet" href="../assets/files.css" />
 </head>
 <body class="connect">
 
@@ -247,6 +248,82 @@
     <div class="cta-row" id="ecash-nav"><button id="ecash-back" class="btn secondary" type="button">Back</button></div>
   </section>
 
+  <section id="files" class="connect-card files" hidden>
+    <!-- A site asked to save a file, or for one of yours. Shown only then. -->
+    <div id="files-for" hidden>
+      <p id="files-for-what" class="connect-small"></p>
+      <p id="files-site" class="connect-site"></p>
+    </div>
+
+    <div data-files="loading"><p class="ecash-quiet">Opening your files.</p></div>
+
+    <div data-files="browse" hidden>
+      <nav id="files-path" class="files-path" aria-label="Where you are"></nav>
+      <p id="files-note" class="ecash-quiet"></p>
+      <div id="files-carry" class="files-bar" hidden>
+        <span id="files-carry-what"></span>
+        <button id="files-carry-here" class="btn primary" type="button">Put it here</button>
+        <button id="files-carry-cancel" class="btn secondary" type="button">Cancel</button>
+      </div>
+      <form id="files-ask" class="files-bar" hidden>
+        <label id="files-ask-label" for="files-ask-input"></label>
+        <input id="files-ask-input" type="text" autocomplete="off" spellcheck="false" />
+        <button id="files-ask-yes" class="btn primary" type="submit">OK</button>
+        <button id="files-ask-no" class="btn secondary" type="button">Cancel</button>
+      </form>
+      <ul id="files-list" class="files-list"></ul>
+      <p id="files-empty" class="ecash-quiet" hidden>Nothing here yet.</p>
+      <div id="files-tools" class="files-tools">
+        <button id="files-upload" class="btn primary" type="button">Add a file</button>
+        <input id="files-input" type="file" hidden />
+        <button id="files-new-folder" class="btn secondary" type="button">New folder</button>
+        <label class="files-private"><input id="files-private" type="checkbox" checked /> Keep new files private</label>
+      </div>
+      <form id="files-save" class="files-saving" hidden>
+        <label for="files-save-name">Save as</label>
+        <input id="files-save-name" type="text" autocomplete="off" spellcheck="false" required />
+        <p id="files-save-size" class="ecash-quiet"></p>
+        <label class="files-private"><input id="files-save-private" type="checkbox" checked /> Keep it private: sealed so only you can open it</label>
+        <div class="cta-row">
+          <button id="files-save-yes" class="btn primary" type="submit">Save here</button>
+          <button id="files-save-no" class="btn secondary" type="button">Don't save</button>
+        </div>
+      </form>
+      <div id="files-pick" class="cta-row" hidden><button id="files-pick-no" class="btn secondary" type="button">Don't send a file</button></div>
+      <p id="files-usage" class="files-usage"></p>
+      <button id="files-go-servers" class="connect-link" type="button">Servers and storage</button>
+    </div>
+
+    <div data-files="servers" hidden>
+      <h1>Servers and storage</h1>
+      <p>Your files are kept on file servers you choose (Blossom servers). A private file is sealed before it leaves here, so its server can't read it. A public file can be fetched by anyone who has its link.</p>
+      <p class="ecash-plain">A server can remove files, or close. Keep a second server for anything that matters: new files are saved to your first two.</p>
+      <p class="ecash-quiet">Many public servers take pictures and video only. A private file is sealed, so a server can't see what kind it is: to keep private files, choose at least one server marked "any file".</p>
+      <h2 class="ecash-sub">Your servers, first choice first</h2>
+      <ul id="files-mine" class="ecash-mints"></ul>
+      <p id="files-mine-empty" class="ecash-quiet" hidden>You haven't chosen one yet.</p>
+      <p class="ecash-quiet">Servers don't say how much room you have. What is shown is what you keep on each; a server says so only when it is full.</p>
+      <h2 class="ecash-sub">Servers people use</h2>
+      <p id="files-picks-note" class="ecash-quiet">Looking on Nostr for the servers people use.</p>
+      <ul id="files-picks" class="ecash-picks"></ul>
+      <form id="files-server-form" class="ecash-form">
+        <label for="files-server">Or another server's address</label>
+        <input id="files-server" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" required />
+        <button class="btn primary" type="submit">Use this server</button>
+      </form>
+      <h2 class="ecash-sub">Servers that charge</h2>
+      <form id="files-pay-form" class="ecash-form">
+        <label for="files-autopay">Pay a server from your ecash wallet without asking, up to this many sats for one file. 0 means always ask.</label>
+        <input id="files-autopay" type="number" inputmode="numeric" min="0" max="100000" step="1" required />
+        <button class="btn secondary" type="submit">Save this limit</button>
+      </form>
+    </div>
+
+    <p id="files-error" class="connect-warning" role="alert" hidden></p>
+    <p id="files-busy" class="ecash-waiting" role="status" hidden></p>
+    <div class="cta-row" id="files-nav"><button id="files-back" class="btn secondary" type="button">Back</button></div>
+  </section>
+
   <section id="choose" class="connect-card" hidden>
     <h1>Which account?</h1>
     <p id="choose-site" class="connect-site"></p>
@@ -274,6 +351,7 @@
     <div class="connect-warning">
       <p>BitLogin shows your recovery phrase and private key only when you ask, here. Nothing else should ever ask you to type them in, and a world never needs them.</p>
     </div>
+    <button id="open-files" class="ecash-door" type="button"><span class="ecash-door-name">Files</span><span class="ecash-door-what">Your files and folders, public or private, kept on servers you choose</span></button>
     <button id="open-ecash" class="ecash-door" type="button"><span class="ecash-door-name">Ecash wallet</span><span class="ecash-door-what">Sats you can spend in a world with one press</span></button>
     <div id="account-slot"></div>
     <div class="cta-row"><button id="account-back" class="btn secondary" type="button">Back</button></div>

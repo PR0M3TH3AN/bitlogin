@@ -1270,6 +1270,8 @@ window otherwise. Nothing here is ever done without a press on that page.
 | `{ t: "propose", id, event }`: a profile (kind 0), a deletion (5) or a relay list (10002) | `{ t: "asking", id }` | `{ t: "signed", id, event }`, or `refused` |
 | `{ t: "wallet", id }` | `{ t: "asking", id }` | `{ t: "wallet", id, uri }`, or `refused` |
 | `{ t: "pay", id, invoice }`: a Lightning invoice, paid from the person's own ecash wallet (`docs/ecash.md`) | `{ t: "asking", id }` | `{ t: "paid", id, preimage? }`, or `refused` |
+| `{ t: "file-save", id, name, type, bytes, private? }`: a file to keep in the person's files (`docs/files.md`) | `{ t: "asking", id }` | `{ t: "file-saved", id, name, size, private, url? }`, or `refused` |
+| `{ t: "file-pick", id }`: one of the person's files, of their choosing | `{ t: "asking", id }` | `{ t: "file", id, name, type, bytes, url? }`, or `refused` |
 
 On `asking`, the site has BitLogin's page shown: it asks its client for the
 panel (`hello` with its `world`, §SW19.2), or opens `/connect/`. The page

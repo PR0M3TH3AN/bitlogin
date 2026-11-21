@@ -109,7 +109,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
    */
   let pending: { id: string; ask: Asked; timer: ReturnType<typeof setTimeout> } | null = null;
   /** Counted apart: asking for a wallet does not use up a question about a profile, nor the other way round. */
-  const askGates: Record<Asked["what"], SignGate> = { sign: createSignGate(ASK_LIMITS), wallet: createSignGate(ASK_LIMITS), pay: createSignGate(ASK_LIMITS) };
+  const askGates: Record<Asked["what"], SignGate> = { sign: createSignGate(ASK_LIMITS), wallet: createSignGate(ASK_LIMITS), pay: createSignGate(ASK_LIMITS), save: createSignGate(ASK_LIMITS), pick: createSignGate(ASK_LIMITS) };
   /** The question is over, unanswered: the site is told "refused", like every other no. */
   const dropPending = () => {
     if (!pending) return;
@@ -250,12 +250,12 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (pubkey && Date.now() / 1000 >= until) lock();
     if (!headless || !pubkey) return refuse();
 
-    if (ask.t === "propose" || ask.t === "wallet" || ask.t === "pay") {
+    if (ask.t === "propose" || ask.t === "wallet" || ask.t === "pay" || ask.t === "file-save" || ask.t === "file-pick") {
       // Put to the person on a page of BitLogin's own. An application the user approved may ask too (BitPortal's own
       // room is one, and should behave as a world does): asking widens nothing it may do on its own say, because
       // every answer is a press on BitLogin's page, and what is signed there is signed by BitLogin's own session.
       // Not a wallet: an application asks for one through the widget, at its own address.
-      const asked: Asked | null = app && ask.t === "wallet" ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
+      const asked: Asked | null = app && ask.t === "wallet" ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ask.t === "file-pick" ? { what: "pick" } : ask.t === "file-save" ? { what: "save", name: ask.name, type: ask.type, bytes: ask.bytes, private: ask.private } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
       if (!asked || !askGates[asked.what].take(Date.now())) return refuse();
       // One question at a time: a new one ends the one before it.
       dropPending();
@@ -401,6 +401,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       if (was.ask.what === "wallet" && cleanWalletUri(msg.wallet)) reply = { t: "wallet", id: was.id, uri: cleanWalletUri(msg.wallet) };
       // Paid: only where it is the invoice this site asked to have paid. The site learns that, and nothing of the wallet.
       if (was.ask.what === "pay" && msg.paid?.invoice === was.ask.invoice) reply = { t: "paid", id: was.id, ...(msg.paid.preimage ? { preimage: msg.paid.preimage } : {}) };
+      // A file saved, or the one file the person chose: passed on as BitLogin's own page gave it.
+      if (was.ask.what === "save" && msg.saved) reply = { t: "file-saved", id: was.id, ...msg.saved };
+      if (was.ask.what === "pick" && msg.file) reply = { t: "file", id: was.id, ...msg.file };
       if (was.ask.what === "sign" && msg.event) {
         // BitLogin's own page signed it, with the person's say. It is passed on only if it is exactly what was
         // put to them: signed by the account this site is signed in as, the same kind, words and tags, and now.
@@ -410,7 +413,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
         if (sameAsAsked) reply = { t: "signed", id: was.id, event: signed };
       }
       say(reply);
-      return back({ t: "done", nonce: msg.nonce, ok: reply.t !== "refused" || (!msg.event && !msg.wallet && !msg.paid) });
+      return back({ t: "done", nonce: msg.nonce, ok: reply.t !== "refused" || (!msg.event && !msg.wallet && !msg.paid && !msg.saved && !msg.file) });
     }
     if (msg.t !== "grant") return;
     // Only from the window that said hello, with the word it gave, and for the site this is really in.

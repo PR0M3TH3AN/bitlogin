@@ -16,7 +16,7 @@ export type BlossomSigner = (verb: BlossomVerb, server: string, sha256: string) 
 
 export class BlossomError extends Error {
   constructor(
-    readonly code: "refused" | "too-large" | "payment" | "not-found" | "network" | "mismatch" | "quota",
+    readonly code: "refused" | "too-large" | "payment" | "not-found" | "network" | "mismatch" | "quota" | "kind",
     message: string,
     /** What the server said, where it said anything. For a person to read: never acted on. */
     readonly reason = ""
@@ -67,8 +67,13 @@ const authHeader = (token: string) => ({ Authorization: `Nostr ${token}` });
 
 /** What a server says about taking a file, before any byte is sent (BUD-06). */
 export interface UploadCheck {
-  /** "free": it would take it. "paid": it wants paying first. "closed": not from this account. "unknown": it didn't say. */
-  state: "free" | "paid" | "closed" | "too-large" | "unknown";
+  /**
+   * "free": it would take it. "paid": it wants paying first. "closed": not from this account. "media-only": it
+   * takes only some kinds of file (many public servers take pictures and video and nothing else), so it can't keep
+   * a private file, which is sealed and has no kind a server can see. "unknown": it answered, but didn't say (the
+   * question is optional for a server). "unreachable": nothing answered at that address.
+   */
+  state: "free" | "paid" | "closed" | "too-large" | "media-only" | "unknown" | "unreachable";
   /** A Lightning invoice, where it asked for one and the browser could read it. */
   invoice?: string;
   reason: string;
@@ -90,12 +95,13 @@ export async function checkUpload(server: string, blob: { sha256: string; size: 
       headers: { "X-SHA-256": blob.sha256, "X-Content-Length": String(blob.size), "X-Content-Type": blob.type, ...authHeader(await sign("upload", server, blob.sha256)) }
     });
   } catch {
-    return { state: "unknown", reason: "" };
+    return { state: "unreachable", reason: "" };
   }
   const reason = reasonOf(response);
   if (response.ok) return { state: "free", reason };
   if (response.status === 402) return { state: "paid", reason, ...(invoiceIn(response) ? { invoice: invoiceIn(response) } : {}) };
   if (response.status === 413) return { state: "too-large", reason };
+  if (response.status === 415) return { state: "media-only", reason };
   if (response.status === 401 || response.status === 403) return { state: "closed", reason };
   return { state: "unknown", reason };
 }
@@ -127,6 +133,7 @@ export async function uploadBlob(server: string, bytes: Uint8Array, type: string
     response = await send(proof);
   }
   if (response.status === 413) throw new BlossomError("too-large", "That file is larger than the server takes.", reasonOf(response));
+  if (response.status === 415) throw new BlossomError("kind", "That server takes only some kinds of file, often pictures and video. A private file is sealed, so a server can't see what kind it is: it needs a server that takes any file.", reasonOf(response));
   if (response.status === 429) throw new BlossomError("quota", "That server won't take more from you just now: a limit was reached.", reasonOf(response));
   if (response.status === 402) throw new BlossomError("payment", "The server did not accept the payment.", reasonOf(response));
   if (!response.ok) throw new BlossomError("refused", "The server would not take the file.", reasonOf(response));

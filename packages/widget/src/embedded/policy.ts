@@ -14,6 +14,7 @@ import type { NostrEvent } from "@bitlogin/core/nostr";
 import { readPermissions, type AppPermissions } from "./permissions.js";
 import { cleanSlot, fitsInSave } from "./saves.js";
 import { cleanInvoice } from "../ecash/nip60.js";
+import { cleanFileName } from "../drive/tree.js";
 import { cleanMore, type WorldMore } from "./follows.js";
 export { WORLD_MORE } from "./follows.js";
 import { cleanMessage, type ReadMessage, type WrittenMessage } from "./messages.js";
@@ -191,6 +192,11 @@ export type SignerRequest =
   | { t: "wallet"; id: string }
   /** A Lightning invoice, paid from the person's own ecash wallet if they say so (docs/ecash.md). The site never sees the wallet. */
   | { t: "pay"; id: string; invoice: string }
+  // Files (docs/files.md). The person's own file browser is shown: the site sees none of it.
+  /** Offer a file to be saved in the person's files: in this site's own folder, unless they choose another. */
+  | { t: "file-save"; id: string; name: string; type: string; bytes: Uint8Array; private: boolean }
+  /** Ask the person for one of their files. They choose it, or say no. */
+  | { t: "file-pick"; id: string }
   /** A room pass for this site, naming the given session key (§SW16). Everything else in it is the signer's. */
   | { t: "pass"; id: string; session: string }
   // What a world keeps for its visitor (NSWP-12; saves.ts). Not for an application.
@@ -251,6 +257,10 @@ export type SignerReply =
   | { t: "wallet"; id: string; uri: string }
   /** Answers `pay`, once it was paid: the proof of payment, where the mint gave one. Nothing about the wallet. */
   | { t: "paid"; id: string; preimage?: string }
+  /** Answers `file-save`, once saved: the name it was given, and where anyone can fetch it if the person kept it public. Not where it is. */
+  | { t: "file-saved"; id: string; name: string; size: number; private: boolean; url?: string }
+  /** Answers `file-pick`: the one file the person chose. */
+  | { t: "file"; id: string; name: string; type: string; bytes: Uint8Array; url?: string }
   | { t: "text"; id: string; text: string }
   /** Answers `seal`: the message as written (never signed), and its two seals: for the reader, then for the writer. */
   | { t: "sealed"; id: string; message: WrittenMessage; seals: [NostrEvent, NostrEvent] }
@@ -278,6 +288,11 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.t === "propose" && d.event && typeof d.event === "object") return { t: "propose", id: d.id, event: d.event };
   if (d.t === "wallet") return { t: "wallet", id: d.id };
   if (d.t === "pay" && cleanInvoice(d.invoice)) return { t: "pay", id: d.id, invoice: cleanInvoice(d.invoice) };
+  if (d.t === "file-pick") return { t: "file-pick", id: d.id };
+  if (d.t === "file-save") {
+    const offered = readOfferedFile(d);
+    return offered ? { t: "file-save", id: d.id, ...offered, private: d.private !== false } : null;
+  }
   if (d.t === "pass" && typeof d.session === "string" && HEX64.test(d.session)) return { t: "pass", id: d.id, session: d.session };
   if (d.t === "save" && cleanSlot(d.slot) && fitsInSave(d.data)) return { t: "save", id: d.id, slot: cleanSlot(d.slot), data: d.data };
   if (d.t === "find" && cleanSlot(d.slot)) return { t: "find", id: d.id, slot: cleanSlot(d.slot) };
@@ -318,14 +333,40 @@ export type HandoffMessage =
    *  what that site said it wants, if it is an application (§SW9). */
   | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean; /** A world asked to be let do more, by name. */ more?: WorldMore[]; /** What it was already let do, by name: kept when the user allows it again. */ has?: WorldMore[]; /** Something the site put to the person (§SW20), and who it is signed in as. */ ask?: Asked; pubkey?: string }
   /** Window to signer: what the person answered to `ask`. Neither field: they said no. */
-  | { t: "answer"; nonce: string; world: string; event?: NostrEvent; wallet?: string; /** It was paid: the invoice that was, and the proof where there is one. */ paid?: { invoice: string; preimage?: string } }
+  | { t: "answer"; nonce: string; world: string; event?: NostrEvent; wallet?: string; /** It was paid: the invoice that was, and the proof where there is one. */ paid?: { invoice: string; preimage?: string }; /** A file was saved. */ saved?: { name: string; size: number; private: boolean; url?: string }; /** The file the person chose. */ file?: OfferedFile & { url?: string } }
   /** Window to signer, after the user pressed Allow: the sealed hand-off, for that site. */
   | { t: "grant"; nonce: string; world: string; sealed: { senderPublicKey: string; payload: string }; name?: string }
   /** Signer to window: it is unlocked, or it could not be. */
   | { t: "done"; nonce: string; ok: boolean };
 
 /** What a site put to the person: a careful kind to sign, exactly as it would be signed, or the use of a wallet. */
-export type Asked = { what: "sign"; event: UnsignedForSite } | { what: "wallet" } | { what: "pay"; invoice: string };
+export type Asked = { what: "sign"; event: UnsignedForSite } | { what: "wallet" } | { what: "pay"; invoice: string } | ({ what: "save"; private: boolean } & OfferedFile) | { what: "pick" };
+
+/** A file as it passes between pages: its name, what it is, and its bytes. */
+export interface OfferedFile {
+  name: string;
+  type: string;
+  bytes: Uint8Array;
+}
+/** The most a site may offer, or be handed, in one file. */
+export const FILE_LIMIT_BYTES = 25 * 1024 * 1024;
+
+function readOfferedFile(input: unknown): OfferedFile | null {
+  if (!input || typeof input !== "object") return null;
+  const f = input as { name?: unknown; type?: unknown; bytes?: unknown };
+  const name = cleanFileName(f.name);
+  const bytes = f.bytes instanceof Uint8Array ? f.bytes : f.bytes instanceof ArrayBuffer ? new Uint8Array(f.bytes) : null;
+  if (!name || !bytes || bytes.length === 0 || bytes.length > FILE_LIMIT_BYTES) return null;
+  return { name, type: typeof f.type === "string" && /^[\x21-\x7e]{3,120}$/u.test(f.type) && f.type.includes("/") ? f.type.toLowerCase() : "application/octet-stream", bytes };
+}
+const httpsUrl = (input: unknown): string => {
+  try {
+    const u = new URL(String(input));
+    return typeof input === "string" && input.length <= 400 && (u.protocol === "https:" || u.protocol === "http:") ? u.href : "";
+  } catch {
+    return "";
+  }
+};
 
 /** A wallet connection as it may be passed on: the NWC form, and no longer than one could be. */
 export const cleanWalletUri = (input: unknown): string => (typeof input === "string" && input.length <= 2000 && /^nostr\+walletconnect:\/\/[0-9a-f]{64}\?[\x21-\x7e]+$/u.test(input) ? input : "");
@@ -334,6 +375,11 @@ function readAsked(input: unknown, world: string): Asked | null {
   if (!input || typeof input !== "object") return null;
   const a = input as { what?: unknown; event?: unknown };
   if (a.what === "wallet") return { what: "wallet" };
+  if (a.what === "pick") return { what: "pick" };
+  if (a.what === "save") {
+    const offered = readOfferedFile(a);
+    return offered ? { what: "save", ...offered, private: (a as { private?: unknown }).private !== false } : null;
+  }
   if (a.what === "pay") return cleanInvoice((a as { invoice?: unknown }).invoice) ? { what: "pay", invoice: cleanInvoice((a as { invoice?: unknown }).invoice) } : null;
   if (a.what !== "sign") return null;
   const event = prepareAsked(a.event, world, (a.event as { created_at?: number } | null)?.created_at ?? 0);
@@ -362,8 +408,14 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
     const p = d.paid && typeof d.paid === "object" ? (d.paid as Record<string, unknown>) : null;
     const paid = p && cleanInvoice(p.invoice) ? { invoice: cleanInvoice(p.invoice), ...(typeof p.preimage === "string" && HEX64.test(p.preimage) ? { preimage: p.preimage } : {}) } : null;
     if (d.paid !== undefined && !paid) return null;
-    if ([event, wallet, paid].filter(Boolean).length > 1) return null;
-    return { t: "answer", nonce: d.nonce, world: cleanOrigin(d.world), ...(event ? { event } : {}), ...(wallet ? { wallet } : {}), ...(paid ? { paid } : {}) };
+    const sv = d.saved && typeof d.saved === "object" ? (d.saved as Record<string, unknown>) : null;
+    const saved = sv && cleanFileName(sv.name) && typeof sv.size === "number" && Number.isSafeInteger(sv.size) && sv.size >= 0 ? { name: cleanFileName(sv.name), size: sv.size, private: sv.private !== false, ...(sv.private === false && httpsUrl(sv.url) ? { url: httpsUrl(sv.url) } : {}) } : null;
+    if (d.saved !== undefined && !saved) return null;
+    const picked = d.file === undefined ? null : readOfferedFile(d.file);
+    if (d.file !== undefined && !picked) return null;
+    const file = picked ? { ...picked, ...(httpsUrl((d.file as { url?: unknown }).url) ? { url: httpsUrl((d.file as { url?: unknown }).url) } : {}) } : null;
+    if ([event, wallet, paid, saved, file].filter(Boolean).length > 1) return null;
+    return { t: "answer", nonce: d.nonce, world: cleanOrigin(d.world), ...(event ? { event } : {}), ...(wallet ? { wallet } : {}), ...(paid ? { paid } : {}), ...(saved ? { saved } : {}), ...(file ? { file } : {}) };
   }
   if (d.t === "grant" && cleanOrigin(d.world) && d.sealed && typeof d.sealed === "object") {
     const s = d.sealed as Record<string, unknown>;

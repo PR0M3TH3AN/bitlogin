@@ -69,7 +69,7 @@ export interface FoundSigner {
    * What the person answered: the event, signed by this origin's own session, or the wallet connection, or
    * nothing (they said no). Resolves true once the signer has passed it on, or heard the no.
    */
-  answer(result: { event: NostrEvent } | { wallet: string } | { paid: { invoice: string; preimage?: string } } | null): Promise<boolean>;
+  answer(result: { event: NostrEvent } | { wallet: string } | { paid: { invoice: string; preimage?: string } } | { saved: { name: string; size: number; private: boolean; url?: string } } | { file: { name: string; type: string; bytes: Uint8Array; url?: string } } | null): Promise<boolean>;
   /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
   readonly known: boolean;
   /**

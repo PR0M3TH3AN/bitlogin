@@ -274,6 +274,7 @@ const sameAccount = () => {
 const answered = async (result, done) => {
   $("confirm").hidden = true;
   $("wallet").hidden = true;
+  $("files").hidden = true;
   const ok = await found.answer(result).catch(() => false);
   status(result === null ? "Nothing was signed or shared." : ok ? done : "That didn't work, and nothing reached the site. Ask again from the site.");
   setTimeout(() => leave(ok && result !== null), result === null ? 0 : 700);
@@ -336,6 +337,31 @@ const askPay = async () => {
     done: (paid) => void answered(paid ? { paid } : null, "Paid.")
   });
 };
+/**
+ * A site offered a file to be saved, or asked for one (docs/files.md). The person's own file browser is shown. The
+ * site learns the name a saved file was given, or is handed the one file they chose, and nothing else of what they keep.
+ */
+const askFile = async () => {
+  if (!sameAccount()) return;
+  const saving = found.ask.what === "save";
+  status(saving ? "A site wants to save a file to your files." : "A site is asking you for a file.");
+  const { openFiles } = await import("./files-ui.js");
+  const session = await prepare().catch(() => null);
+  if (!session) return void answered(null);
+  await openFiles({
+    worker: session,
+    resize: (size) => toClient({ t: "size", size }),
+    request: saving ? { site: found.site, save: { name: found.ask.name, type: found.ask.type, bytes: found.ask.bytes, private: found.ask.private } } : { site: found.site, pick: true },
+    done: (result) => void answered(result ?? null, saving ? "Saved." : "Sent.")
+  });
+};
+/** The file browser opened on its own, from the account page. */
+const showFiles = async () => {
+  $("account").hidden = true;
+  status("");
+  const { openFiles } = await import("./files-ui.js");
+  await openFiles({ worker: await theWorker(), resize: (size) => toClient({ t: "size", size }), done: () => showAccount() });
+};
 /** The wallet opened on its own, from the account page. */
 const showEcash = async () => {
   $("account").hidden = true;
@@ -365,7 +391,7 @@ const askWallet = () => {
 const ask = () => {
   if (!found || !who || finished) return;
   $("signin").hidden = true;
-  if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" ? void askPay() : void askSign();
+  if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" ? void askPay() : found.ask.what === "save" || found.ask.what === "pick" ? void askFile() : void askSign();
   toClient({ t: "size", size: "menu" });
   void prepare().catch(() => {});
   if (found.wants) return askApp();
@@ -454,7 +480,7 @@ const makeWidget = () => {
  * needs a window of its own. Opened from "Account and more", or by a client that asked for it.
  */
 const showAccount = () => {
-  for (const id of ["ask", "ask-app", "choose", "signin", "unlock", "confirm", "wallet", "ecash"]) $(id).hidden = true;
+  for (const id of ["ask", "ask-app", "choose", "signin", "unlock", "confirm", "wallet", "ecash", "files"]) $(id).hidden = true;
   // One widget at a time.
   $("widget-slot").replaceChildren();
   if (!$("account-slot").firstChild) {
@@ -634,6 +660,12 @@ $("deny-3").addEventListener("click", () => leave(false));
 $("deny").addEventListener("click", () => leave(false));
 $("deny-2").addEventListener("click", () => leave(false));
 $("advanced").addEventListener("click", showAccount);
+$("open-files").addEventListener("click", async () => {
+  who = await readCachedSession();
+  if (!who) return status("Sign in first, below. Then your files open here.");
+  await (await theWorker()).restore().catch(() => null);
+  void showFiles();
+});
 $("open-ecash").addEventListener("click", async () => {
   // The wallet needs someone signed in: the widget below is where that is done.
   who = await readCachedSession();
