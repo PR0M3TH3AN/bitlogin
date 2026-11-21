@@ -221,9 +221,11 @@ it, which a `buy` or opening Purchases does.
 - **Not tried against BitUnlock.** Its sandbox pays with a control call
   and not with Lightning, so a wallet can't pay it. See PY10.
 - **No real money**, and no real lightning address.
-- **Shares** between several parties, and the client's share: they wait on
-  the owner's lawyer. A plan part that is neither the seller's nor the
-  service's is shown as "To another party".
+- **Shares** between several parties, and the client's share: not built.
+  The rule is written (NSWP `protocol/10-identity.md`, "Shares") and is to
+  be built switched off. Until then a listing carrying `nswp:share` is not
+  shown for sale at all: selling it with the shares ignored would pay the
+  seller what they wrote was someone else's.
 - **A token locked to a recipient's key**, paying from a wallet
   connection, a visitor's own issuers, refunds in the interface.
 - **The floor's screen** is not in a browser test: the rule is tested, the

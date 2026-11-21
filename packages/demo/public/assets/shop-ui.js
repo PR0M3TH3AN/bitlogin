@@ -215,6 +215,8 @@ export async function openShop({ worker, pubkey, resize, request, done, openWall
     const found = await foundSoon;
     listing = lib.readListing(found.event, request.listing, services);
     if (!listing) return stop(found.event ? "This site asked to sell something BitLogin can't check: its listing isn't signed by its seller, or names a service BitLogin doesn't buy from. Nothing was spent." : found.answered ? "This site asked to sell something no relay knows of. Nothing was spent." : "No relay answered just now, so what is for sale couldn't be looked up. Nothing was spent.");
+    // Its price is divided between several people, which BitLogin can't yet do: it is not sold with that ignored.
+    if (listing.shared) return stop("This is sold with its price shared between several people, which isn't switched on yet. Nothing was spent.");
     // Nothing in a world is sold under the floor (owner, 2026-11-21): the service's fee would be too large a part of it.
     if (lib.underFloor(listing)) return stop(`This is listed at ${sats(listing.priceSats)}, under the ${sats(lib.LEAST_PRICE_SATS)} that is the least anything in a world is sold for. Nothing was spent.`);
     const at = clients.findIndex(({ service }) => service.pubkey === listing.service.pubkey);

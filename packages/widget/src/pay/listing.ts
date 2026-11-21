@@ -70,6 +70,12 @@ export interface Listing {
   termSeconds: number;
   /** Whether it is a listing for something in a world: it carries a tag that begins `nswp:`. */
   nswp: boolean;
+  /**
+   * Whether its seller wrote that the price is divided between several people (`nswp:share`). Dividing a price is
+   * not built yet, so such a listing is not shown for sale at all: selling it with the shares ignored would pay the
+   * seller what they wrote was someone else's.
+   */
+  shared: boolean;
 }
 
 /**
@@ -128,7 +134,8 @@ export function readListing(event: unknown, coordinate: string, services: readon
     service: { ...service },
     for: /^3730[0-9]:[0-9a-f]{64}:[^\s]{1,200}$/u.test(tag(e, "nswp:for")) ? tag(e, "nswp:for") : "",
     termSeconds: /^[1-9][0-9]{0,9}$/u.test(term) ? Number(term) : 0,
-    nswp: e.tags.some((t) => typeof t[0] === "string" && t[0].startsWith("nswp:"))
+    nswp: e.tags.some((t) => typeof t[0] === "string" && t[0].startsWith("nswp:")),
+    shared: e.tags.some((t) => t[0] === "nswp:share")
   };
 }
 

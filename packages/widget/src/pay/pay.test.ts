@@ -136,7 +136,10 @@ describe("a listing, and a receipt (docs/paying.md)", () => {
     const services = [localService(service.named)!];
     const made = service.listing({ d: "season-pass", priceSats: 500, title: `Season pass${String.fromCodePoint(0x202e)}`, tags: [["nswp:for", `37300:${"cd".repeat(32)}:foundry`], ["nswp:term", "86400"]] });
     expect(cleanCoordinate(made.coordinate)).toBe(made.coordinate);
-    expect(readListing(made.event, made.coordinate, services)).toEqual({ coordinate: made.coordinate, seller: made.seller.getPublicKey(), title: "Season pass", priceSats: 500, service: services[0], for: `37300:${"cd".repeat(32)}:foundry`, termSeconds: 86400, nswp: true });
+    expect(readListing(made.event, made.coordinate, services)).toEqual({ coordinate: made.coordinate, seller: made.seller.getPublicKey(), title: "Season pass", priceSats: 500, service: services[0], for: `37300:${"cd".repeat(32)}:foundry`, termSeconds: 86400, nswp: true, shared: false });
+    // A listing whose price is divided between several people says so, and is not sold while that isn't built.
+    const split = service.listing({ d: "shared-thing", priceSats: 1000, tags: [["nswp:share", made.seller.getPublicKey(), "9000"], ["nswp:share", "client", "1000"]] });
+    expect(readListing(split.event, split.coordinate, services)).toMatchObject({ shared: true, nswp: true });
     // Not for the real service's list, not under another coordinate, and not once a word is changed.
     expect(readListing(made.event, made.coordinate)).toBeNull();
     expect(readListing(made.event, `30078:${"ef".repeat(32)}:season-pass`, services)).toBeNull();
