@@ -53,9 +53,12 @@ A keeper can't put themselves on or take themselves off their own lists.
 
 BitGate's shape (`docs/governance-lists.md` in PR0M3TH3AN/bitgate): kind
 30078, `d` = `nswp:governance:<scope>:v1:<world coordinate>`, one `v` =
-`1`, one `scope`, one `subject` equal to the coordinate, `client` =
-`bitlogin`, empty content, one `p` a person, at most 500 written (2,000
-read). `embedded/guests.ts` reads it by BitGate's own vectors
+`1`, one `scope`, one `subject` equal to the coordinate, no `client`
+tag (readers ignore one), empty content, one `p` a person in order of their
+keys, at most 500 written (2,000 read), dated a second after the list it
+replaces where that is later than now. The writer matches NSWP's
+`vectors/owner-list-writing.json` (copied as
+`embedded/owner-list-writing.vectors.json`). `embedded/guests.ts` reads it by BitGate's own vectors
 (`embedded/governance-lists.vectors.json`, copied unchanged).
 
 Kind 30078 stays on the never list for every site's `sign` and `propose`.
