@@ -22,6 +22,10 @@ import {
   familyDomain,
   familyOffer,
   findEmbeddedSigner,
+  applyChange,
+  keepersOf,
+  readOwnerList,
+  scopeOf,
   knownAppName,
   loadAllowed,
   recordAllowed,
@@ -276,6 +280,7 @@ const answered = async (result, done) => {
   $("wallet").hidden = true;
   $("files").hidden = true;
   $("shop").hidden = true;
+  $("guests").hidden = true;
   const ok = await found.answer(result).catch(() => false);
   status(result === null ? "Nothing was signed or shared." : ok ? done : "That didn't work, and nothing reached the site. Ask again from the site.");
   setTimeout(() => leave(ok && result !== null), result === null ? 0 : 700);
@@ -373,6 +378,84 @@ const askBuy = async () => {
     }
   });
 };
+/**
+ * A world's owner asked to change one person on its guest list or block list (embedded/guests.ts). It is put to them
+ * in words, every time. BitLogin checks the world is the site asking and that this account keeps its lists, by the
+ * world's own /.well-known/nswp.json, and that the list it was handed is the newest one relays hold, so an old one
+ * can't be handed over to undo a change. Then the new list is built and signed here, never by the world.
+ */
+const askGuests = async () => {
+  if (!sameAccount()) return;
+  const { world, list, change, key } = found.ask;
+  const scope = scopeOf(change);
+  const error = (text) => {
+    $("guests-error").textContent = text;
+    $("guests-error").hidden = false;
+    $("guests-yes").hidden = true;
+    $("guests-no").textContent = "Close";
+  };
+  $("guests-site").textContent = found.site;
+  $("guests-error").hidden = true;
+  $("guests-yes").hidden = false;
+  $("guests-yes").disabled = true;
+  $("guests-no").textContent = "No";
+  $("guests-no").onclick = () => void answered(null);
+  $("guests-new-row").hidden = true;
+  $("guests-title").textContent = "Reading the list.";
+  $("guests-who").textContent = "";
+  $("guests-who-key").textContent = key;
+  $("guests-what").textContent = "";
+  status("A world you keep is asking to change who may come in.");
+  toClient({ t: "size", size: "menu" });
+  $("guests").hidden = false;
+  const session = await prepare().catch(() => null);
+  if (!session) return error("Your account couldn't be opened just now. Nothing was changed.");
+  // Who keeps this world's lists, by its own word, from its own address.
+  let manifest = null;
+  try {
+    const response = await fetch(`${found.site}/.well-known/nswp.json`, { credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store" });
+    manifest = response.ok ? await response.json() : null;
+  } catch {
+    manifest = null;
+  }
+  const keeps = keepersOf(manifest, found.site, world);
+  if (!keeps) return error("This site's own file doesn't say it is that world, so its list can't be changed from here. Nothing was changed.");
+  if (!keeps.keepers.includes(who.pubkey)) return error("This account doesn't keep that world's lists, by the world's own file. Nothing was changed.");
+  if (key === who.pubkey) return error("You keep this world: you can't be put on or taken off its lists. Nothing was changed.");
+  const handed = list ? readOwnerList(list, { root: [who.pubkey] }) : null;
+  if (list && (!handed.ok || handed.subject !== world || handed.scope !== scope)) return error("The list this world handed over isn't your list for it. Nothing was changed.");
+  // The newest one relays hold. One newer than what the world handed over means the world's is out of date.
+  const [newest, person] = await Promise.all([session.guests.find(world, scope).catch(() => ({ event: null, answered: false })), session.pay.profile(key).catch(() => ({ name: "" }))]);
+  if (newest.event && (!list || newest.event.id !== list.id) && (!list || newest.event.created_at >= list.created_at)) return error("There is a newer list for this world than the one it handed over. Ask again from the world. Nothing was changed.");
+  const before = handed?.ok ? handed.entries : [];
+  const after = applyChange(before, change, key);
+  if (!after) return error("That changes nothing: they are already as asked. Nothing was changed.");
+  const name = person.name || "an account with no name";
+  const place = keeps.d;
+  $("guests-who").textContent = name;
+  $("guests-title").textContent = { allow: `Let ${name} into ${place}?`, unallow: `Take ${name} off the list for ${place}?`, block: `Block ${name} from ${place}?`, unblock: `Unblock ${name} in ${place}?` }[change];
+  $("guests-what").textContent = scope === "user-allow" ? `Your guest list for ${place} will name ${after.length} ${after.length === 1 ? "person" : "people"}.` : `Your block list for ${place} will name ${after.length} ${after.length === 1 ? "person" : "people"}.`;
+  // No list was handed over: starting one is said, and ticked for, so a relay that was down can't wipe a list.
+  const starting = !list;
+  $("guests-new-row").hidden = !starting;
+  $("guests-new").checked = false;
+  $("guests-new-words").textContent = `No ${scope === "user-allow" ? "guest" : "block"} list for ${place} was found${newest.answered ? "" : ", and no relay answered"}. Start a new one, naming only ${name}.`;
+  const ready = () => ($("guests-yes").disabled = starting && !$("guests-new").checked);
+  $("guests-new").onchange = ready;
+  ready();
+  const askedNow = performance.now();
+  $("guests-yes").onclick = async () => {
+    if (performance.now() - askedNow < TOO_SOON_MS || (starting && !$("guests-new").checked)) return;
+    $("guests-yes").disabled = true;
+    try {
+      const signed = await session.guests.sign(world, scope, after, list ? list.created_at : undefined);
+      await answered({ listed: signed }, "Done. The world has the new list, and sends it to relays.");
+    } catch {
+      await answered(null);
+    }
+  };
+};
+
 /** What the person has bought, opened on its own, from the account page. */
 const showLibrary = async () => {
   $("account").hidden = true;
@@ -450,7 +533,7 @@ const ask = () => {
   $("signin").hidden = true;
   // Not for a purchase: the buy screen reads the receipts itself, and hands the site the one it asked about.
   if (found.ask && found.ask.what !== "buy") handOverReceipts();
-  if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" || found.ask.what === "tip" ? void askPay() : found.ask.what === "buy" ? void askBuy() : found.ask.what === "save" || found.ask.what === "pick" ? void askFile() : void askSign();
+  if (found.ask) return found.ask.what === "wallet" ? askWallet() : found.ask.what === "pay" || found.ask.what === "tip" ? void askPay() : found.ask.what === "buy" ? void askBuy() : found.ask.what === "guests" ? void askGuests() : found.ask.what === "save" || found.ask.what === "pick" ? void askFile() : void askSign();
   toClient({ t: "size", size: "menu" });
   void prepare().catch(() => {});
   if (found.wants) return askApp();
@@ -539,7 +622,7 @@ const makeWidget = () => {
  * needs a window of its own. Opened from "Account and more", or by a client that asked for it.
  */
 const showAccount = () => {
-  for (const id of ["ask", "ask-app", "choose", "signin", "unlock", "confirm", "wallet", "ecash", "files", "shop", "library"]) $(id).hidden = true;
+  for (const id of ["ask", "ask-app", "choose", "signin", "unlock", "confirm", "wallet", "ecash", "files", "shop", "library", "guests"]) $(id).hidden = true;
   // One widget at a time.
   $("widget-slot").replaceChildren();
   if (!$("account-slot").firstChild) {

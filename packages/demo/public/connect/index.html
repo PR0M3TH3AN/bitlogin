@@ -135,6 +135,25 @@
     <ul id="confirm-lines"></ul>
   </section>
 
+  <!-- A world's owner changes who may come in (embedded/guests.ts). Asked in words, every time. -->
+  <section id="guests" class="connect-card" hidden>
+    <h1 id="guests-title">Change who may come in?</h1>
+    <p id="guests-site" class="connect-site"></p>
+    <div class="connect-account">
+      <p class="connect-small" id="guests-who-label">The person</p>
+      <p class="connect-who"><strong id="guests-who"></strong></p>
+      <p id="guests-who-key" class="connect-key"></p>
+    </div>
+    <p id="guests-what" class="connect-small"></p>
+    <p class="connect-warning">Anyone can read this list. It is signed by your account and kept on public relays.</p>
+    <label class="shop-check" id="guests-new-row" hidden><input id="guests-new" type="checkbox" /> <span id="guests-new-words"></span></label>
+    <div class="cta-row">
+      <button id="guests-yes" class="btn primary" type="button">Yes</button>
+      <button id="guests-no" class="btn secondary" type="button">No</button>
+    </div>
+    <p id="guests-error" class="connect-warning" role="alert" hidden></p>
+  </section>
+
   <section id="wallet" class="connect-card" hidden>
     <h1>Let this site use a wallet?</h1>
     <p id="wallet-site" class="connect-site"></p>

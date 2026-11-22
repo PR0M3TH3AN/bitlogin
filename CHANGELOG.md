@@ -6,7 +6,14 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
-## 2026-11-21, later still (on `beta` only)
+## 2026-11-22
+
+- **A world's owner can change its guest list and block list** from inside
+  the world (`docs/guest-lists.md`): a world sends `guests` with one
+  change; BitLogin asks the owner in words every time, checks they keep the
+  world by its own manifest, and builds and signs the new list itself.
+
+## 2026-11-21, later still (released on `main` 2026-11-21)
 
 - The paying screens don't wait on the slowest relay; a listing lasting an
   hour says "an hour".

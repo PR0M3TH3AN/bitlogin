@@ -24,6 +24,7 @@ export { declineFamily, describeAllowed, familyDeclined, familyOffer, loadAllowe
 export { familyDomain, familyOf, inFamily, knownFamily };
 export { SIGN_LIMITS, type Asked } from "./policy.js";
 export { describeAsked, type AskedWords } from "./careful.js";
+export { applyChange, keepersOf, readOwnerList, resolveOwnerList, scopeOf, type GuestChange } from "./guests.js";
 export { askLockDevice } from "../lockDevice.js";
 export { PANEL_CLIENTS, panelClientAllowed, panelMessage, readPanelHello, type PanelHello, type PanelMode, type PanelToClient } from "./panel.js";
 
@@ -69,7 +70,7 @@ export interface FoundSigner {
    * What the person answered: the event, signed by this origin's own session, or the wallet connection, or
    * nothing (they said no). Resolves true once the signer has passed it on, or heard the no.
    */
-  answer(result: { event: NostrEvent } | { wallet: string } | { paid: { invoice: string; preimage?: string } } | { saved: { name: string; size: number; private: boolean; url?: string } } | { file: { name: string; type: string; bytes: Uint8Array; url?: string } } | { tipped: { sats: number; preimage?: string } } | { bought: { receipt: NostrEvent; delivery?: string } } | null): Promise<boolean>;
+  answer(result: { event: NostrEvent } | { wallet: string } | { paid: { invoice: string; preimage?: string } } | { saved: { name: string; size: number; private: boolean; url?: string } } | { file: { name: string; type: string; bytes: Uint8Array; url?: string } } | { tipped: { sats: number; preimage?: string } } | { bought: { receipt: NostrEvent; delivery?: string } } | { listed: NostrEvent } | null): Promise<boolean>;
   /**
    * Hand the site's signer the person's receipts for that site's own listings (docs/paying.md), so it can answer
    * `have` with no question. Only once it is signed in. They replace what it held.

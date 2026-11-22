@@ -126,6 +126,14 @@ export interface HeadlessSigner {
    * whom a tip is for, a listing as relays hold it, a buyer's permission note for one request to a selling
    * service BitLogin knows, and the receipts kept with the account.
    */
+  /**
+   * A world owner's lists (embedded/guests.ts), for BitLogin's own sign-in page and panel, and refused anywhere else:
+   * the newest of this account's lists for a world on relays, and a new one signed, built in the worker.
+   */
+  guests: {
+    find(subject: string, scope: "user-allow" | "user-deny"): Promise<{ event: NostrEvent | null; answered: boolean }>;
+    sign(subject: string, scope: "user-allow" | "user-deny", people: string[], replaces?: number): Promise<NostrEvent>;
+  };
   pay: {
     profile(pubkey: string): Promise<{ name: string; address: string; answered: boolean }>;
     listing(coordinate: string, relays: string[]): Promise<{ event: NostrEvent | null; answered: boolean }>;
@@ -326,6 +334,16 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async profileContent() {
       await requirePubkey();
       return client.profileContent();
+    },
+    guests: {
+      async find(subject, scope) {
+        await requirePubkey();
+        return client.guestListFind({ subject, scope });
+      },
+      async sign(subject, scope, people, replaces) {
+        await requirePubkey();
+        return (await client.guestListSign({ subject, scope, people, ...(replaces !== undefined ? { replaces } : {}) })).event;
+      }
     },
     pay: {
       async profile(who) {
