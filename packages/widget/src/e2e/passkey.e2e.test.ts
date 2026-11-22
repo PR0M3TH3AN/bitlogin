@@ -517,6 +517,19 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const sessionKey = getPublicKeyHex(generatePrivateKey());
         expect((await ask({ t: "pass", session: sessionKey })).t).toBe("refused");
 
+        // A press that lands the moment the question is shown, as a key the visitor meant for the site would. It is
+        // made by the page itself, as soon as the question appears, so it lands at once however slow this machine is.
+        await context.addInitScript(() => {
+          if (!location.pathname.startsWith("/connect/")) return;
+          const watch = new MutationObserver(() => {
+            const ask = document.getElementById("ask");
+            if (!ask || ask.hidden) return;
+            watch.disconnect();
+            (document.getElementById("allow") as HTMLButtonElement).click();
+            (window as unknown as { pressedAtOnce: boolean }).pressedAtOnce = true;
+          });
+          document.addEventListener("DOMContentLoaded", () => watch.observe(document.body, { attributes: true, subtree: true, attributeFilter: ["hidden"] }));
+        });
         // The window: BitLogin's own page, naming the site as the browser reports it.
         const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
         await popup.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
@@ -543,9 +556,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           expect(contrast, colorScheme).toBeGreaterThan(7);
         }
         expect(await page.evaluate(() => (window as any).tryToRead())).toEqual({ frame: "refused: SecurityError", popup: "refused: SecurityError" });
-        // A press that lands at once was meant for the site, and is ignored.
-        await popup.locator("#allow").click();
-        await page.waitForTimeout(400);
+        // The press that landed at once, as the question appeared, was meant for the site, and was ignored.
+        expect(await popup.evaluate(() => (window as unknown as { pressedAtOnce?: boolean }).pressedAtOnce)).toBe(true);
         expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
         // Who they are signing in as, before anything can be pressed: the name from their own signed profile, the
         // whole key, the line about them, and a picture (here one that can't be fetched, so a letter stands in).
