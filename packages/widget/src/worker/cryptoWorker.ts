@@ -67,6 +67,7 @@ import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/m
 import { keepReceipts, loadReceipts } from "./receiptStore.js";
 import { loadPaySettings, savePaySettings } from "./paySettings.js";
 import { quickRelays } from "./quickRelays.js";
+import { isListSubject, listD, ownerListTemplate, resolveOwnerList, type ListScope } from "../embedded/guests.js";
 import { lightningAddressOfProfile } from "../pay/lightning.js";
 import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
 import { blossomAuth, loadDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
@@ -1943,6 +1944,42 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       return { token: `Nostr ${btoa(binary)}` };
     }
 
+    // ---- A world owner's lists (embedded/guests.ts). A full session at one of BitLogin's own sign-in addresses
+    // only: the page asks the owner every time, and these build nothing a world wrote but the people. Kind 30078 stays
+    // on the never list for every site's `sign` and `propose`.
+
+    // The newest of this account's own lists for a world, as relays hold it: so a world can't hand over an old one.
+    case "guestListFind": {
+      const { signer } = requireUnlocked();
+      requireSignInAddress();
+      const p = payload as { subject?: unknown; scope?: unknown };
+      if (!isListSubject(p.subject) || (p.scope !== "user-allow" && p.scope !== "user-deny")) throw new Error("That is not a world's list.");
+      const me = signer.getPublicKey();
+      const pool = quick([...new Set([...session.relays, ...vaultRelayUrls, ...discoveryRelayUrls])].slice(0, 12));
+      try {
+        const found = await pool.queryQuorum({ kinds: [30078], authors: [me], "#d": [listD(p.scope, p.subject)], limit: 4 }, 5000);
+        const events = found.outcomes.flatMap((o) => o.events);
+        // The one that stands, by the readers' own rule. One that doesn't read is no list to change.
+        const d = listD(p.scope as ListScope, p.subject as string);
+        const standing = resolveOwnerList(events, { scope: p.scope as ListScope, subject: p.subject as string, root: [me] });
+        const mine = events.filter((e) => e.pubkey === me && e.kind === 30078 && e.tags.some((t) => t[0] === "d" && t[1] === d) && e.created_at <= Date.now() / 1000 + 600).sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : 1));
+        return { event: standing.ok ? (mine[0] ?? null) : null, answered: found.respondedCount > 0 };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    // Sign this account's list for a world: built here from the world, which list, and who is on it. Nothing else.
+    case "guestListSign": {
+      const { signer } = requireUnlocked();
+      requireSignInAddress();
+      const p = payload as { subject?: unknown; scope?: unknown; people?: unknown; replaces?: unknown };
+      const notBefore = typeof p.replaces === "number" && Number.isSafeInteger(p.replaces) && p.replaces <= Date.now() / 1000 + 600 ? p.replaces : undefined;
+      const template = p.scope === "user-allow" || p.scope === "user-deny" ? ownerListTemplate({ scope: p.scope, subject: String(p.subject), people: Array.isArray(p.people) ? (p.people as string[]) : [], createdAt: Math.floor(Date.now() / 1000), ...(notBefore !== undefined ? { notBefore } : {}) }) : null;
+      if (!template || !isListSubject(p.subject)) throw new Error("That is not a list this account can keep.");
+      return { event: signer.signEvent(template) };
+    }
+
     // The receipts kept with the account: in this browser first, then on its relays, each sealed to its own key.
     case "paySettingsLoad":
     case "paySettingsSave":
@@ -2208,7 +2245,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent",
-  "payProfile", "payListing", "unlockAuth", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
+  "payProfile", "payListing", "unlockAuth", "guestListFind", "guestListSign", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
   "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",

@@ -797,7 +797,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     async () => {
       // Two pages of one site, as BitPortal's shell and a world under it are: the client, and the world it shows.
       // What the world says of itself, in its own /.well-known/nswp.json: where it takes tips, and the keys it publishes with.
-      const worldWord: { tip?: string; share?: string; publishers: Record<string, unknown> } = { publishers: {} };
+      const worldWord: { tip?: string; share?: string; publishers: Record<string, unknown>; worlds?: Record<string, unknown> } = { publishers: {} };
       // The seller's wallet is the mint the test starts later. The service is started first: BitLogin's pages are
       // told of it as they load.
       let payMint: Awaited<ReturnType<typeof startMockMint>> | null = null;
@@ -1312,6 +1312,72 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await worldFrame.waitForFunction(async () => (await (window as any).ask({ t: "state" })).unlocked === true, null, { timeout: 30_000 });
           expect(await ask({ t: "have", listing: made.coordinate })).toMatchObject({ t: "receipt", receipt: { id: bought.receipt.id } });
           expect((await ask({ t: "have", listing: `30078:${"ab".repeat(32)}:other` })).t).toBe("none");
+
+          // ---- A world's owner changes who may come in (embedded/guests.ts). This world's own file names it, and the
+          // account signed in here as its keeper. Each change is put to the person in words, every time.
+          const keeperKey = (await ask({ t: "state" })).pubkey as string;
+          const publisher = "5a".repeat(32);
+          const home = `37300:${publisher}:home`;
+          worldWord.publishers = { [publisher]: { worlds: ["home"] } };
+          worldWord.worlds = { home: { entry: { url: `${world}/` }, keepers: [keeperKey] } };
+          const bo = "0b".repeat(32);
+          const listOf = (event: NostrEvent) => event.tags.filter((t) => t[0] === "p").map((t) => t[1]).sort();
+          // No list yet: starting one is said, and must be ticked.
+          await propose({ t: "guests", world: home, list: null, change: "allow", key: alice.getPublicKey(), none: true }, "g1");
+          await asking("g1");
+          await showFor();
+          await panel.locator("#guests-title").filter({ hasText: "Let Alice into home?" }).waitFor({ timeout: 60_000 });
+          expect(await panel.locator("#guests-site").textContent()).toBe(world);
+          expect(await panel.locator("#guests-who-key").textContent()).toBe(alice.getPublicKey());
+          expect(await panel.locator("#guests").textContent()).toContain("Anyone can read this list.");
+          expect(await panel.locator("#guests-yes").isDisabled()).toBe(true);
+          if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/guests.png` });
+          await panel.locator("#guests-new").check();
+          await page.waitForTimeout(1000);
+          await panel.locator("#guests-yes").click();
+          const firstList = (await waitFor("g1")).event as NostrEvent;
+          expect(firstList.pubkey).toBe(keeperKey);
+          expect(firstList.kind).toBe(30078);
+          expect(firstList.tags).toContainEqual(["d", `nswp:governance:user-allow:v1:${home}`]);
+          expect(firstList.tags).toContainEqual(["subject", home]);
+          expect(listOf(firstList)).toEqual([alice.getPublicKey()]);
+          // The next change is made to that list.
+          await propose({ t: "guests", world: home, list: firstList, change: "allow", key: bo }, "g2");
+          await asking("g2");
+          await showFor();
+          await panel.locator("#guests-title").filter({ hasText: "into home?" }).waitFor({ timeout: 60_000 });
+          expect(await panel.locator("#guests-new-row").isVisible()).toBe(false);
+          await page.waitForTimeout(1000);
+          await panel.locator("#guests-yes").click();
+          const secondList = (await waitFor("g2")).event as NostrEvent;
+          expect(listOf(secondList)).toEqual([alice.getPublicKey(), bo].sort());
+          // Relays now hold the newer list. A world handing over the older one is told so, and nothing changes.
+          await publish([secondList]);
+          await propose({ t: "guests", world: home, list: firstList, change: "block", key: bo }, "g3");
+          await asking("g3");
+          await showFor();
+          await panel.locator("#guests-error").filter({ hasText: "isn't your list" }).or(panel.locator("#guests-error").filter({ hasText: "newer list" })).waitFor({ timeout: 60_000 }).catch(() => undefined);
+          // A block is a different list: the guest list handed over is not it.
+          expect(await panel.locator("#guests-error").textContent()).toContain("isn't your list");
+          await panel.locator("#guests-no").click();
+          expect((await waitFor("g3")).t).toBe("refused");
+          await propose({ t: "guests", world: home, list: firstList, change: "unallow", key: bo }, "g4");
+          await asking("g4");
+          await showFor();
+          await panel.locator("#guests-error").filter({ hasText: "newer list" }).waitFor({ timeout: 60_000 });
+          await panel.locator("#guests-no").click();
+          expect((await waitFor("g4")).t).toBe("refused");
+          // A world whose own file names another keeper: not this account's to change.
+          worldWord.worlds = { home: { entry: { url: `${world}/` }, keepers: ["7c".repeat(32)] } };
+          await propose({ t: "guests", world: home, list: secondList, change: "unallow", key: bo }, "g5");
+          await asking("g5");
+          await showFor();
+          await panel.locator("#guests-error").filter({ hasText: "doesn't keep that world's lists" }).waitFor({ timeout: 60_000 });
+          await panel.locator("#guests-no").click();
+          expect((await waitFor("g5")).t).toBe("refused");
+          worldWord.worlds = undefined;
+          // Never by `sign`, whatever the world calls it.
+          expect((await ask({ t: "sign", event: { kind: 30078, content: "", tags: secondList.tags } })).t).toBe("refused");
         } finally {
           await mint.close();
         }
@@ -1434,7 +1500,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await unlock.close();
       }
     },
-    300_000
+    // The longest test here: sign-in, the wallet, tips, a purchase, files and a world's lists, one after another.
+    480_000
   );
 
   it(

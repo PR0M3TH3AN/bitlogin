@@ -617,6 +617,10 @@ export type WorkerActionMap = {
   /** The person's own limit on a payment with no receipt, kept with the account. */
   paySettingsLoad: [Record<string, never>, PaySettings];
   paySettingsSave: [{ limitSats: number } | { addOrder: Omit<OpenOrder, "at"> } | { removeOrder: string }, PaySettings];
+  /** The newest of this account's own lists for a world on relays, and whether any relay answered. */
+  guestListFind: [{ subject: string; scope: "user-allow" | "user-deny" }, { event: NostrEvent | null; answered: boolean }];
+  /** Sign this account's list for a world, built in the worker from the world, the list's scope and the people. */
+  guestListSign: [{ subject: string; scope: "user-allow" | "user-deny"; people: string[]; /** When the list it replaces was signed, so the new one is dated after it. */ replaces?: number }, { event: NostrEvent }];
   receiptsLoad: [Record<string, never>, ReceiptsState];
   receiptsKeep: [{ receipts: KeptReceipt[] }, ReceiptsState];
   ecashLoad: [Record<string, never>, EcashState];

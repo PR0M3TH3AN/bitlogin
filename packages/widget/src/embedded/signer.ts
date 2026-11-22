@@ -28,6 +28,7 @@
  * Suffix List: never by the site, and never by the window.
  */
 import { verifyNostrEvent, type NostrEvent } from "@bitlogin/core/nostr";
+import { isListAsked } from "./guests.js";
 import { bestReceipt, localService, readReceipt, receiptGood, UNLOCK_SERVICES, type Receipt, type UnlockService } from "../pay/listing.js";
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
 import { knownFamily } from "./family.js";
@@ -66,6 +67,9 @@ export interface EmbeddedSignerOptions {
   vaultRelays?: string[];
   discoveryRelays?: string[];
 }
+
+/** A world owner changing who may come in: ten changes a minute and sixty an hour for one world, each asked on BitLogin's page. */
+const GUEST_LIMITS = { burst: 10, perMs: 60_000, hourly: 60 } as const;
 
 export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): EmbeddedSignerHandle {
   if (typeof window === "undefined" || window.parent === window) return { embedded: false, stop() {} };
@@ -111,7 +115,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
    */
   let pending: { id: string; ask: Asked; timer: ReturnType<typeof setTimeout> } | null = null;
   /** Counted apart: asking for a wallet does not use up a question about a profile, nor the other way round. */
-  const askGates: Record<Asked["what"], SignGate> = { sign: createSignGate(ASK_LIMITS), wallet: createSignGate(ASK_LIMITS), pay: createSignGate(ASK_LIMITS), tip: createSignGate(ASK_LIMITS), buy: createSignGate(ASK_LIMITS), save: createSignGate(ASK_LIMITS), pick: createSignGate(ASK_LIMITS) };
+  const askGates: Record<Asked["what"], SignGate> = { sign: createSignGate(ASK_LIMITS), wallet: createSignGate(ASK_LIMITS), pay: createSignGate(ASK_LIMITS), tip: createSignGate(ASK_LIMITS), buy: createSignGate(ASK_LIMITS), guests: createSignGate(GUEST_LIMITS), save: createSignGate(ASK_LIMITS), pick: createSignGate(ASK_LIMITS) };
   /** The question is over, unanswered: the site is told "refused", like every other no. */
   const dropPending = () => {
     if (!pending) return;
@@ -292,12 +296,12 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       return say(receipt ? { t: "receipt", id: ask.id, receipt: receipt.event } : { t: "none", id: ask.id });
     }
 
-    if (ask.t === "propose" || ask.t === "wallet" || ask.t === "pay" || ask.t === "tip" || ask.t === "buy" || ask.t === "file-save" || ask.t === "file-pick") {
+    if (ask.t === "propose" || ask.t === "wallet" || ask.t === "pay" || ask.t === "tip" || ask.t === "buy" || ask.t === "guests" || ask.t === "file-save" || ask.t === "file-pick") {
       // Put to the person on a page of BitLogin's own. An application the user approved may ask too (BitPortal's own
       // room is one, and should behave as a world does): asking widens nothing it may do on its own say, because
       // every answer is a press on BitLogin's page, and what is signed there is signed by BitLogin's own session.
       // Not a wallet: an application asks for one through the widget, at its own address.
-      const asked: Asked | null = app && ask.t === "wallet" ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ask.t === "tip" ? { what: "tip", sats: ask.sats, ...(ask.to ? { to: ask.to } : {}) } : ask.t === "buy" ? { what: "buy", listing: ask.listing } : ask.t === "file-pick" ? { what: "pick" } : ask.t === "file-save" ? { what: "save", name: ask.name, type: ask.type, bytes: ask.bytes, private: ask.private } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
+      const asked: Asked | null = app && ask.t === "wallet" ? null : ask.t === "wallet" ? { what: "wallet" } : ask.t === "pay" ? { what: "pay", invoice: ask.invoice } : ask.t === "tip" ? { what: "tip", sats: ask.sats, ...(ask.to ? { to: ask.to } : {}) } : ask.t === "buy" ? { what: "buy", listing: ask.listing } : ask.t === "guests" ? (app ? null : { what: "guests", world: ask.world, list: (ask.list as never) ?? null, change: ask.change, key: ask.key, none: ask.none }) : ask.t === "file-pick" ? { what: "pick" } : ask.t === "file-save" ? { what: "save", name: ask.name, type: ask.type, bytes: ask.bytes, private: ask.private } : ((event) => (event ? { what: "sign", event } : null))(prepareAsked(ask.event, site, Date.now() / 1000));
       if (!asked || !askGates[asked.what].take(Date.now())) return refuse();
       // One question at a time: a new one ends the one before it.
       dropPending();
@@ -455,6 +459,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
           keepHeld();
         }
       }
+      // A world's list: passed on only if it is exactly the list the world handed over, with the one change, signed by
+      // this account, for that world. What the page built is checked here again, as a proposed profile is.
+      if (was.ask.what === "guests" && msg.listed && isListAsked(msg.listed, { pubkey, world: was.ask.world, change: was.ask.change, key: was.ask.key, list: was.ask.list, now: Date.now() / 1000 })) reply = { t: "signed", id: was.id, event: msg.listed };
       // A file saved, or the one file the person chose: passed on as BitLogin's own page gave it.
       if (was.ask.what === "save" && msg.saved) reply = { t: "file-saved", id: was.id, ...msg.saved };
       if (was.ask.what === "pick" && msg.file) reply = { t: "file", id: was.id, ...msg.file };
@@ -467,7 +474,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
         if (sameAsAsked) reply = { t: "signed", id: was.id, event: signed };
       }
       say(reply);
-      return back({ t: "done", nonce: msg.nonce, ok: reply.t !== "refused" || (!msg.event && !msg.wallet && !msg.paid && !msg.saved && !msg.file && !msg.tipped && !msg.bought) });
+      return back({ t: "done", nonce: msg.nonce, ok: reply.t !== "refused" || (!msg.event && !msg.wallet && !msg.paid && !msg.saved && !msg.file && !msg.tipped && !msg.bought && !msg.listed) });
     }
     if (msg.t === "held") {
       // From the window or panel that last said hello, for the site this is really in, and only once signed in.

@@ -15,6 +15,7 @@ import { readPermissions, type AppPermissions } from "./permissions.js";
 import { cleanSlot, fitsInSave } from "./saves.js";
 import { cleanInvoice } from "../ecash/nip60.js";
 import { cleanSats } from "../pay/lightning.js";
+import { GUEST_CHANGES, isListSubject, type GuestChange } from "./guests.js";
 import { cleanCoordinate, readReceipt, type UnlockService } from "../pay/listing.js";
 import { cleanFileName } from "../drive/tree.js";
 import { cleanMore, type WorldMore } from "./follows.js";
@@ -201,6 +202,12 @@ export type SignerRequest =
   | { t: "tip"; id: string; to?: string; sats: number }
   /** Buy what a listing sells, by its coordinate. BitLogin's page runs the purchase; the site learns the receipt. */
   | { t: "buy"; id: string; listing: string }
+  /**
+   * Change one person on this world's guest list or block list (embedded/guests.ts): the newest list the world found
+   * (or null, with `none` where it found none and says so), and the one change. BitLogin's page shows it in words,
+   * every time, and builds the new list itself.
+   */
+  | { t: "guests"; id: string; world: string; list: unknown | null; change: GuestChange; key: string; none: boolean }
   /** Does the person hold a receipt for this listing? Answered at once, with no question, and only for a listing that is this site's own. */
   | { t: "have"; id: string; listing: string }
   // Files (docs/files.md). The person's own file browser is shown: the site sees none of it.
@@ -306,6 +313,9 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.t === "wallet") return { t: "wallet", id: d.id };
   if (d.t === "pay" && cleanInvoice(d.invoice)) return { t: "pay", id: d.id, invoice: cleanInvoice(d.invoice) };
   if (d.t === "tip" && cleanSats(d.sats) && (d.to === undefined || (typeof d.to === "string" && HEX64.test(d.to)))) return { t: "tip", id: d.id, sats: cleanSats(d.sats), ...(typeof d.to === "string" ? { to: d.to } : {}) };
+  if (d.t === "guests" && typeof d.world === "string" && d.world.startsWith("37300:") && isListSubject(d.world) && GUEST_CHANGES.includes(d.change as GuestChange) && typeof d.key === "string" && HEX64.test(d.key) && (d.list === null || (!!d.list && typeof d.list === "object"))) {
+    return { t: "guests", id: d.id, world: d.world, list: d.list, change: d.change as GuestChange, key: d.key, none: d.none === true };
+  }
   if ((d.t === "buy" || d.t === "have") && cleanCoordinate(d.listing)) return { t: d.t, id: d.id, listing: cleanCoordinate(d.listing) };
   if (d.t === "file-pick") return { t: "file-pick", id: d.id };
   if (d.t === "file-save") {
@@ -352,7 +362,7 @@ export type HandoffMessage =
    *  what that site said it wants, if it is an application (§SW9). */
   | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean; /** A world asked to be let do more, by name. */ more?: WorldMore[]; /** What it was already let do, by name: kept when the user allows it again. */ has?: WorldMore[]; /** Something the site put to the person (§SW20), and who it is signed in as. */ ask?: Asked; pubkey?: string }
   /** Window to signer: what the person answered to `ask`. Neither field: they said no. */
-  | { t: "answer"; nonce: string; world: string; event?: NostrEvent; wallet?: string; /** It was paid: the invoice that was, and the proof where there is one. */ paid?: { invoice: string; preimage?: string }; /** A file was saved. */ saved?: { name: string; size: number; private: boolean; url?: string }; /** The file the person chose. */ file?: OfferedFile & { url?: string }; /** A tip was paid: how much, and the proof where there is one. */ tipped?: { sats: number; preimage?: string }; /** It was bought, or was held already: the receipt, and what it delivers. */ bought?: { receipt: NostrEvent; delivery?: string } }
+  | { t: "answer"; nonce: string; world: string; event?: NostrEvent; wallet?: string; /** It was paid: the invoice that was, and the proof where there is one. */ paid?: { invoice: string; preimage?: string }; /** A file was saved. */ saved?: { name: string; size: number; private: boolean; url?: string }; /** The file the person chose. */ file?: OfferedFile & { url?: string }; /** A tip was paid: how much, and the proof where there is one. */ tipped?: { sats: number; preimage?: string }; /** It was bought, or was held already: the receipt, and what it delivers. */ bought?: { receipt: NostrEvent; delivery?: string }; /** A world's list, signed on BitLogin's page with the one change made. */ listed?: NostrEvent }
   /** Window to signer: the person's receipts for this site's own listings, so `have` can be answered with no question. They replace what it held. */
   | { t: "held"; nonce: string; world: string; receipts: NostrEvent[] }
   /** Window to signer, after the user pressed Allow: the sealed hand-off, for that site. */
@@ -367,6 +377,7 @@ export type Asked =
   | { what: "pay"; invoice: string }
   | { what: "tip"; to?: string; sats: number }
   | { what: "buy"; listing: string }
+  | { what: "guests"; world: string; list: NostrEvent | null; change: GuestChange; key: string; none: boolean }
   | ({ what: "save"; private: boolean } & OfferedFile)
   | { what: "pick" };
 
@@ -418,6 +429,12 @@ function readAsked(input: unknown, world: string): Asked | null {
     if (!cleanSats(t.sats) || (t.to !== undefined && !(typeof t.to === "string" && HEX64.test(t.to)))) return null;
     return { what: "tip", sats: cleanSats(t.sats), ...(typeof t.to === "string" ? { to: t.to } : {}) };
   }
+  if (a.what === "guests") {
+    const g = a as { world?: unknown; list?: unknown; change?: unknown; key?: unknown; none?: unknown };
+    if (typeof g.world !== "string" || !g.world.startsWith("37300:") || !isListSubject(g.world) || !GUEST_CHANGES.includes(g.change as GuestChange) || typeof g.key !== "string" || !HEX64.test(g.key)) return null;
+    if (g.list !== null && !(g.list && typeof g.list === "object")) return null;
+    return { what: "guests", world: g.world, list: (g.list as NostrEvent | null) ?? null, change: g.change as GuestChange, key: g.key, none: g.none === true };
+  }
   if (a.what === "buy") return cleanCoordinate((a as { listing?: unknown }).listing) ? { what: "buy", listing: cleanCoordinate((a as { listing?: unknown }).listing) } : null;
   if (a.what === "pay") return cleanInvoice((a as { invoice?: unknown }).invoice) ? { what: "pay", invoice: cleanInvoice((a as { invoice?: unknown }).invoice) } : null;
   if (a.what !== "sign") return null;
@@ -459,8 +476,10 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
     const bt = d.bought && typeof d.bought === "object" ? (d.bought as Record<string, unknown>) : null;
     const bought = bt && bt.receipt && typeof bt.receipt === "object" ? { receipt: bt.receipt as NostrEvent, ...(typeof bt.delivery === "string" && bt.delivery.length > 0 && bt.delivery.length <= DELIVERY_MOST ? { delivery: bt.delivery } : {}) } : null;
     if (d.bought !== undefined && !bought) return null;
-    if ([event, wallet, paid, saved, file, tipped, bought].filter(Boolean).length > 1) return null;
-    return { t: "answer", nonce: d.nonce, world: cleanOrigin(d.world), ...(event ? { event } : {}), ...(wallet ? { wallet } : {}), ...(paid ? { paid } : {}), ...(saved ? { saved } : {}), ...(file ? { file } : {}), ...(tipped ? { tipped } : {}), ...(bought ? { bought } : {}) };
+    const listed = d.listed && typeof d.listed === "object" ? (d.listed as NostrEvent) : undefined;
+    if (d.listed !== undefined && !listed) return null;
+    if ([event, wallet, paid, saved, file, tipped, bought, listed].filter(Boolean).length > 1) return null;
+    return { t: "answer", nonce: d.nonce, world: cleanOrigin(d.world), ...(event ? { event } : {}), ...(listed ? { listed } : {}), ...(wallet ? { wallet } : {}), ...(paid ? { paid } : {}), ...(saved ? { saved } : {}), ...(file ? { file } : {}), ...(tipped ? { tipped } : {}), ...(bought ? { bought } : {}) };
   }
   if (d.t === "held" && cleanOrigin(d.world) && Array.isArray(d.receipts) && d.receipts.length <= HELD_MOST && d.receipts.every((r) => r && typeof r === "object")) {
     return { t: "held", nonce: d.nonce, world: cleanOrigin(d.world), receipts: d.receipts as NostrEvent[] };

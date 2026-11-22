@@ -377,6 +377,12 @@ export class WorkerClient {
   paySettingsSave(change: WorkerActionMap["paySettingsSave"][0]) {
     return this.call("paySettingsSave", change);
   }
+  guestListFind(payload: WorkerActionMap["guestListFind"][0]) {
+    return this.call("guestListFind", payload);
+  }
+  guestListSign(payload: WorkerActionMap["guestListSign"][0]) {
+    return this.call("guestListSign", payload);
+  }
   receiptsLoad() {
     return this.call("receiptsLoad", {});
   }
