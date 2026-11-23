@@ -11,7 +11,9 @@ export interface FilesStore {
   load(): Promise<DriveState>;
   save(changes: DriveSave): Promise<DriveState>;
   auth: BlossomSigner;
-  servers(): Promise<{ mine: string[]; ranked: RankedServer[] }>;
+  servers(ranked?: boolean): Promise<{ mine: string[]; ranked: RankedServer[] }>;
+  /** The browser's own copy, asking no relay. Optional. */
+  peek?(): Promise<DriveState>;
   setServers(servers: string[]): Promise<string[]>;
 }
 
@@ -31,6 +33,8 @@ export function createFiles(store: FilesStore, options: FilesOptions = {}) {
   let state: DriveState = { folders: [], settings: { autoPaySats: 0 }, offline: false, unsaved: false };
   let drive: Drive = createDrive([]);
   let servers: string[] = [];
+  /** Whether the account's own server list was read from a relay that answered. Until it is, it is never replaced. */
+  let serversRead = false;
   let ranked: RankedServer[] = [];
 
   const persist = async (): Promise<void> => {
@@ -52,13 +56,40 @@ export function createFiles(store: FilesStore, options: FilesOptions = {}) {
   };
 
   return {
-    async open(): Promise<DriveState> {
+    /**
+     * Read the folders. The account's own server list is read by `loadServers`, which a page may ask for behind them;
+     * the servers people use by `rank`, where one is chosen.
+     */
+    async open(o: { servers?: boolean } = {}): Promise<DriveState> {
       state = await store.load();
       drive = createDrive(state.folders);
-      const found = await store.servers().catch(() => ({ mine: [] as string[], ranked: [] as RankedServer[] }));
-      servers = found.mine;
-      ranked = found.ranked;
+      if (o.servers !== false) await this.loadServers();
       return state;
+    },
+    /** The account's own server list. Until it is read, nothing is uploaded. */
+    async loadServers(): Promise<string[]> {
+      try {
+        servers = (await store.servers()).mine;
+        serversRead = true;
+      } catch {
+        // No relay answered: what is known stays, and nothing is written over a list that couldn't be read.
+      }
+      return servers;
+    },
+    /** The account's own server list was read, so it may be changed. */
+    serversRead: (): boolean => serversRead,
+    /** What the browser holds, shown at once while `open` reads relays. Nothing is written from it. */
+    async peek(): Promise<DriveState | null> {
+      if (!store.peek) return null;
+      state = await store.peek();
+      drive = createDrive(state.folders);
+      return state;
+    },
+    /** The servers people use, for the screen where a server is chosen. */
+    async rank(): Promise<RankedServer[]> {
+      const found = await store.servers(true).catch(() => ({ mine: servers, ranked: [] as RankedServer[] }));
+      ranked = found.ranked;
+      return ranked.filter((pick) => !servers.includes(pick.server));
     },
     state: (): DriveState => state,
     drive: (): Drive => drive,
@@ -75,6 +106,8 @@ export function createFiles(store: FilesStore, options: FilesOptions = {}) {
     async setServers(next: string[]): Promise<string[]> {
       const clean = [...new Set(next.map(cleanServer).filter(Boolean))].slice(0, DRIVE_LIMITS.servers);
       if (clean.length === 0) throw new DriveError("Choose at least one file server.");
+      // A new list replaces the old one on relays: it is built only on the one read from them.
+      if (!serversRead) throw new DriveError("Your server list couldn't be read from your relays, so it can't be changed now. Try again when they answer.");
       servers = await store.setServers(clean);
       return servers;
     },

@@ -13,6 +13,7 @@ import {
   PANEL_CLIENTS,
   panelClientAllowed,
   panelMessage,
+  readPanelControl,
   readPanelHello,
   askLockDevice,
   declineFamily,
@@ -632,6 +633,8 @@ const showAccount = () => {
     widget.addEventListener("bitlogin-logout", () => {
       who = null;
       startOver();
+      // Signed out: the worker that held the session is let go at once.
+      if (inPanel) letWorkerGo();
     });
     widget.addEventListener("bitlogin-login", async () => {
       who = await readCachedSession();
@@ -853,6 +856,77 @@ const begin = async (wantsSwitch) => {
  * listened to only if BitLogin lists it. Until then nothing is said to anyone. A client sends it again until it
  * hears "ready", so a hello sent before this page was listening is not lost.
  */
+/** Open the panel for what it is shown for: the account, a file browser, a wallet, purchases, or a world's question. */
+const route = async (mode, world) => {
+  if (mode === "account") return showAccount();
+  if (mode === "files" || mode === "wallet" || mode === "library") {
+    // Straight to the file browser or the wallet. Both are the signed-in person's: with nobody signed in, the
+    // account page comes first, and says why.
+    who = await readCachedSession();
+    // A panel shown again, for the account its worker already took up, needn't take it up again: that would wait
+    // behind whatever the worker is still reading (§SW19.8).
+    const restored = !who ? null : worker && restoredFor === who.pubkey ? true : await (await theWorker()).restore().catch(() => null);
+    if (restored && who) restoredFor = who.pubkey;
+    if (!restored) {
+      showAccount();
+      status(mode === "files" ? "Sign in first, below. Then open Files." : mode === "library" ? "Sign in first, below. Then open Purchases." : "Sign in first, below. Then open your wallet.");
+    } else void (mode === "files" ? showFiles() : mode === "library" ? showLibrary() : showEcash());
+    return;
+  }
+  status("Looking for the world that asked.");
+  found = await findEmbeddedSigner({ inClient: true, world });
+  if (!found) status("BitLogin's signer wasn't found in that world, so there is nothing to allow. The world may not support it yet.");
+  else await begin(mode === "switch");
+};
+
+/**
+ * The panel kept by its client between openings (docs/sign-in-window.md §SW19.8). While hidden it listens only for
+ * `show`: a question a world put is answered "no", every screen is put away, the wallet checks nothing, and after a
+ * few minutes the worker that holds the session is let go, to start again at the next showing. Each time it is shown,
+ * a press in the first moments is ignored, as Allow ignores one, so a press meant for the world can't land here.
+ */
+const HIDDEN_RELEASE_MS = 5 * 60_000;
+let shownAt = 0;
+let release = null;
+const shown = () => {
+  shownAt = performance.now();
+  delete document.documentElement.dataset.panelHidden;
+  clearTimeout(release);
+  finished = false;
+  found = null;
+};
+/** The account this panel's worker has taken up, so a showing again needn't take it up anew. */
+let restoredFor = "";
+const letWorkerGo = () => {
+  restoredFor = "";
+  const held = worker;
+  worker = null;
+  preparing = null;
+  held?.destroy();
+};
+const hide = () => {
+  document.documentElement.dataset.panelHidden = "1";
+  if (found?.ask && !finished) void found.answer(null).catch(() => false);
+  finished = true;
+  found = null;
+  for (const id of ["ask", "ask-app", "choose", "signin", "unlock", "confirm", "wallet", "ecash", "files", "shop", "library", "guests", "account"]) $(id).hidden = true;
+  status("");
+  clearTimeout(release);
+  release = setTimeout(letWorkerGo, HIDDEN_RELEASE_MS);
+};
+if (inPanel) {
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (performance.now() - shownAt < TOO_SOON_MS) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    },
+    true
+  );
+}
+
 const helloFromClient = () =>
   new Promise((resolve) => {
     const on = (e) => {
@@ -882,22 +956,18 @@ if (inPanel) {
     client = hello.client;
     $("panel-client").textContent = `shown by ${new URL(client).host}`;
     toClient({ t: "ready" });
-    if (hello.mode === "account") showAccount();
-    else if (hello.mode === "files" || hello.mode === "wallet" || hello.mode === "library") {
-      // Straight to the file browser or the wallet. Both are the signed-in person's: with nobody signed in, the
-      // account page comes first, and says why.
-      who = await readCachedSession();
-      const restored = who ? await (await theWorker()).restore().catch(() => null) : null;
-      if (!restored) {
-        showAccount();
-        status(hello.mode === "files" ? "Sign in first, below. Then open Files." : hello.mode === "library" ? "Sign in first, below. Then open Purchases." : "Sign in first, below. Then open your wallet.");
-      } else void (hello.mode === "files" ? showFiles() : hello.mode === "library" ? showLibrary() : showEcash());
-    } else {
-      status("Looking for the world that asked.");
-      found = await findEmbeddedSigner({ inClient: true, world: hello.world });
-      if (!found) status("BitLogin's signer wasn't found in that world, so there is nothing to allow. The world may not support it yet.");
-      else await begin(hello.mode === "switch");
-    }
+    shown();
+    // A client that keeps this panel between openings shows it again, in a mode, and hides it (§SW19.8). Only the
+    // page that said hello, at its exact origin, is listened to.
+    addEventListener("message", (e) => {
+      if (e.source !== window.parent || e.origin !== client) return;
+      const control = readPanelControl(e.data);
+      if (!control) return;
+      if (control.t === "hide") return void hide();
+      shown();
+      void route(control.mode, control.world);
+    });
+    await route(hello.mode, hello.world);
   }
 } else if (!window.opener) {
   status("This window is opened by a site, when you ask it to sign in with BitLogin. There is nothing to do here on its own.");

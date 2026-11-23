@@ -127,6 +127,11 @@ async function flush(deps: Deps, entries: Map<string, Entry>): Promise<void> {
   if (changed.length) await writeLocal(store, signer, entries, changed);
 }
 
+/** The browser's own copy, and nothing asked of relays: to show at once, marked as being checked. It writes nothing. */
+export async function peekReceipts(deps: { signer: NostrSigner; store: KeyValueStore }): Promise<ReceiptsState> {
+  return state(await readLocal(deps.store, deps.signer), true);
+}
+
 /** Open the list: what relays hold, joined with what this browser holds. Never "none" because relays were silent. */
 export async function loadReceipts(deps: Deps): Promise<ReceiptsState> {
   const { signer, store, relays } = deps;

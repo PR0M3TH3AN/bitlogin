@@ -339,12 +339,16 @@ describe("Nip46Client against a fake bunker", () => {
 
   it("close() rejects in-flight requests immediately -- nothing resolves after logout begins (audit BL-26)", async () => {
     bunker = new FakeBunker(relay.url);
-    bunker.handle = () => []; // a signer that never answers
+    // A signer that never answers, and says when the request has reached it: closing is then truly mid-request,
+    // however slow the machine (a fixed wait sometimes closed before the request was even sent).
+    let reached: () => void = () => {};
+    const arrived = new Promise<void>((resolve) => (reached = resolve));
+    bunker.handle = () => (reached(), []);
     await bunker.start();
     const c = makeClient(undefined, 60_000);
     const pending = c.getUserPublicKey();
     pending.catch(() => {}); // observed below; avoid unhandled-rejection noise
-    await new Promise((resolve) => setTimeout(resolve, 100)); // let the request go out
+    await arrived;
     const farewell = c.buildLogoutEvent();
     const start = Date.now();
     c.close();

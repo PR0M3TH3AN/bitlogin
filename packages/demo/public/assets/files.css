@@ -40,3 +40,8 @@
 .files-tag { margin-left: .5rem; font-size: .74rem; padding: .05rem .45rem; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); font-family: var(--font-body); }
 .files-tag.free { border-color: #16a34a; color: var(--fg); }
 .files-tag.paid { border-color: var(--brass); color: var(--fg); }
+
+/* While the browser's own copy is shown and relays are being asked: it can be read, and nothing in it can be changed. */
+.files-checking [data-files="browse"] .files-row button,
+.files-checking #files-tools button,
+.files-checking #files-tools input { pointer-events: none; opacity: .5; }

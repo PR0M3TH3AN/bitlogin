@@ -66,6 +66,10 @@ export async function openFiles({ worker, resize, request, done }) {
     $("files").hidden = true;
     done(result);
   };
+  /** The browser's copy is on screen while relays are asked: read-only until they answer. */
+  let checking = false;
+  /** The servers people use, asked for once in an opening, where a server is chosen. */
+  let rankedOnce = null;
   const show = (name) => {
     view = name;
     for (const section of views) section.hidden = section.dataset.files !== name;
@@ -174,7 +178,9 @@ export async function openFiles({ worker, resize, request, done }) {
       ])
     );
     const state = files.state();
-    $("files-note").textContent = state.offline
+    $("files-note").textContent = checking
+      ? "Checking with your relays. This is what this browser held last time: nothing can be changed until they answer."
+      : state.offline
       ? "No relay answered, so this is the list kept in this browser."
       : state.unsaved
         ? "Kept in this browser. Your relays didn't take the latest change yet: it is sent again next time."
@@ -303,7 +309,9 @@ export async function openFiles({ worker, resize, request, done }) {
         return row;
       })
     );
-    const picks = files.ranked();
+    // The servers people use are asked for here, where one is chosen, and once for this opening.
+    rankedOnce ??= files.rank().catch(() => files.ranked());
+    const picks = (await rankedOnce).filter((pick) => !files.servers().includes(pick.server));
     $("files-picks-note").textContent = picks.length
       ? "Counted from the server lists people publish on Nostr, people you follow first. A count is a hint, not a promise that a server will keep your files."
       : "No server lists were found just now. Enter a server's address below.";
@@ -373,7 +381,37 @@ export async function openFiles({ worker, resize, request, done }) {
       }
     };
     files = lib.createFiles(worker.drive, { payer, confirmPay: (sats, server) => ask(`${host(server)} charges up to ${sats} sats to keep this file. Pay it from your ecash wallet?`).then((yes) => !!yes) });
-    await files.open();
+    // Opened by the person, with folders kept in this browser: those are on screen at once, marked as being checked,
+    // and nothing can be changed until the relays have answered (docs/panel-speed-2026-11-23.md).
+    if (!request) {
+      const peeked = await files.peek().catch(() => null);
+      if (peeked && peeked.folders.length > 0) {
+        checking = true;
+        $("files").classList.add("files-checking");
+        show("browse");
+        draw();
+      }
+    }
+    if (request) await files.open();
+    else {
+      // The folders, then the account's own server list behind them: the folders are shown as soon as they are read,
+      // and nothing is changed or uploaded until the server list is in too.
+      await files.open({ servers: false });
+      // Shown once the folders are read, even with none yet; the server list decides only whether nothing can be
+      // kept yet, in which case the screen for choosing a server follows.
+      {
+        checking = true;
+        $("files").classList.add("files-checking");
+        show("browse");
+        draw();
+      }
+      await files.loadServers();
+    }
+    if (files.serversRead()) {
+      checking = false;
+      $("files").classList.remove("files-checking");
+    }
+    // Otherwise the folders are read, but not the server list: they stay on screen, read-only (said below).
   } catch {
     show("browse");
     $("files-tools").hidden = true;
@@ -388,6 +426,7 @@ export async function openFiles({ worker, resize, request, done }) {
     $("files-save-size").textContent = `${sizeOf(request.save.bytes.length)}. It is saved in the folder shown above: go to another to save it there.`;
     $("files-save-private").checked = request.save.private !== false;
   }
+  if (!files.serversRead()) return void (show("browse"), draw(), ($("files-note").textContent = "Your relays didn't answer for your server list, so nothing can be uploaded or changed now. Open Files again to try again."));
   if (files.servers().length === 0) return void drawServers();
   show("browse");
   draw();

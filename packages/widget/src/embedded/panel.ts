@@ -57,6 +57,25 @@ export interface PanelHello {
   mode: PanelMode;
 }
 
+/**
+ * What a client says to a panel it keeps (docs/sign-in-window.md §SW19.8): show it again, in a mode, or it has been
+ * hidden. Only from the client that said hello, at its exact origin.
+ */
+export type PanelControl = ({ t: "show" } & Omit<PanelHello, "t">) | { t: "hide" };
+
+/** Read a client's `show` or `hide`. A `show` names a mode and a world exactly as a hello does. */
+export function readPanelControl(data: unknown): PanelControl | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (d.bitlogin !== PANEL_PROTOCOL || d.v !== PANEL_VERSION) return null;
+  if (d.t === "hide") return { t: "hide" };
+  if (d.t !== "show") return null;
+  const asHello = readPanelHello({ ...d, t: "hello" });
+  if (!asHello) return null;
+  const { t: _hello, ...rest } = asHello;
+  return { t: "show", ...rest };
+}
+
 /** What the panel says to the client. */
 export type PanelToClient =
   /** It has loaded and heard the client. */

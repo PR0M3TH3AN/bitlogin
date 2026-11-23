@@ -606,7 +606,8 @@ export type WorkerActionMap = {
   /** A permission note for one file at one Blossom server (BUD-11), as the `Authorization` header carries it. */
   blossomAuth: [{ verb: "upload" | "delete" | "get"; server: string; sha256: string }, { token: string }];
   /** The account's own server list (BUD-03), and the servers people use, the user's follows first. */
-  blossomServers: [Record<string, never>, { mine: string[]; ranked: RankedServer[] }];
+  /** `ranked`: also the servers people use, for the screen where one is chosen. Without it, the account's own list alone. */
+  blossomServers: [{ ranked?: boolean }, { mine: string[]; ranked: RankedServer[] }];
   blossomSetServers: [{ servers: string[] }, { mine: string[] }];
   /** Whom a tip is for: the name and lightning address in that account's own signed profile. */
   payProfile: [{ pubkey: string }, { name: string; address: string; answered: boolean }];
@@ -624,6 +625,10 @@ export type WorkerActionMap = {
   receiptsLoad: [Record<string, never>, ReceiptsState];
   receiptsKeep: [{ receipts: KeptReceipt[] }, ReceiptsState];
   ecashLoad: [Record<string, never>, EcashState];
+  /** The browser's own copies, asking no relay and writing nothing: to show at once while the careful read runs. */
+  ecashPeek: [Record<string, never>, EcashState];
+  drivePeek: [Record<string, never>, DriveState];
+  receiptsPeek: [Record<string, never>, ReceiptsState];
   ecashSetMints: [{ mints: string[] }, EcashState];
   ecashRoll: [EcashRoll, EcashState];
   /** The mints people recommend (NIP-87), the user's own follows first. */

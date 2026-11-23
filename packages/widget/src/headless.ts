@@ -116,7 +116,10 @@ export interface HeadlessSigner {
     load(): Promise<DriveState>;
     save(changes: DriveSave): Promise<DriveState>;
     auth(verb: "upload" | "delete" | "get", server: string, sha256: string): Promise<string>;
-    servers(): Promise<{ mine: string[]; ranked: RankedServer[] }>;
+    /** The account's own server list; with `ranked`, also the servers people use (asked only where one is chosen). */
+    servers(ranked?: boolean): Promise<{ mine: string[]; ranked: RankedServer[] }>;
+    /** The browser's own copy of the folders, asking no relay: to show at once, marked as being checked. */
+    peek(): Promise<DriveState>;
     setServers(servers: string[]): Promise<string[]>;
   };
   /** The words of the account's newest profile note on relays, or null; and whether any relay answered. */
@@ -139,6 +142,8 @@ export interface HeadlessSigner {
     listing(coordinate: string, relays: string[]): Promise<{ event: NostrEvent | null; answered: boolean }>;
     auth(request: { url: string; method: "GET" | "POST"; payload?: string }): Promise<string>;
     receipts(): Promise<ReceiptsState>;
+    /** The browser's own copy of the receipts, asking no relay: to show at once, marked as being checked. */
+    receiptsPeek(): Promise<ReceiptsState>;
     keep(receipts: KeptReceipt[]): Promise<ReceiptsState>;
     /** The most a site may ask for at once with no receipt, in sats (0: no limit), kept with the account. */
     settings(): Promise<PaySettings>;
@@ -158,6 +163,8 @@ export interface HeadlessSigner {
     roll(roll: EcashRoll): Promise<EcashState>;
     /** The mints people recommend (NIP-87), the user's own follows first. */
     recommended(): Promise<RankedMint[]>;
+    /** The browser's own copy of the wallet, asking no relay: to show at once, marked as being checked. */
+    peek(): Promise<EcashState>;
   };
   /**
    * In the embedded signer: ask the user's relays whether this site was
@@ -362,6 +369,10 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         await requirePubkey();
         return client.receiptsLoad();
       },
+      async receiptsPeek() {
+        await requirePubkey();
+        return client.receiptsPeek();
+      },
       async keep(receipts) {
         await requirePubkey();
         return client.receiptsKeep(receipts);
@@ -396,9 +407,13 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         await requirePubkey();
         return (await client.blossomAuth({ verb, server, sha256 })).token;
       },
-      async servers() {
+      async servers(ranked) {
         await requirePubkey();
-        return client.blossomServers();
+        return client.blossomServers(ranked === true);
+      },
+      async peek() {
+        await requirePubkey();
+        return client.drivePeek();
       },
       async setServers(servers) {
         await requirePubkey();
@@ -421,6 +436,10 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       async recommended() {
         await requirePubkey();
         return (await client.ecashMints()).mints;
+      },
+      async peek() {
+        await requirePubkey();
+        return client.ecashPeek();
       }
     },
     async takeBack(what) {

@@ -1,6 +1,6 @@
 /**
  * A world built on the NSWP kit, against BitLogin's real signer: saves, scores and achievements
- * (NSWP-12, 15, 16). Opt-in, since it needs NSWP's built Arcade:
+ * (NSWP-12, 15, 16), and the owner's screen changing a world's guest list (NSWP-10, "The owner's screen"). Opt-in, since it needs NSWP's built Arcade:
  *
  *   BITLOGIN_KIT_WORLD=~/Documents/GitHub/Nostr-Spatial-Web-Protocol--NSWP-/sites/arcade/dist npx vitest run packages/widget/src/e2e/kitworld.e2e.test.ts
  *
@@ -57,6 +57,8 @@ describe.skipIf(!playwright || !WORLD_DIST || !existsSync(join(WORLD_DIST, "app.
   let signIn: { server: Server; origin: string };
   let world: { server: Server; origin: string };
   let certDir = "";
+  /** Who the world's own manifest names as the keeper of its lists, when the test says so (the rest of it is the world's). */
+  let keeperNamed = "";
 
   beforeAll(async () => {
     relays = await Promise.all([MockRelay.start(), MockRelay.start(), MockRelay.start()]);
@@ -68,7 +70,17 @@ describe.skipIf(!playwright || !WORLD_DIST || !existsSync(join(WORLD_DIST, "app.
       ["/connect/index.html", "/connect/panel/index.html", "/signer/index.html"].includes(path) ? text.replace('<html lang="en">', `<html lang="en" data-vault-relays="${list}" data-discovery-relays="${list}">`) : text
     );
     // The world names bitlogin.network as its sign-in address: here, the local copy.
-    world = await serve(WORLD_DIST, tls, (_path, text) => text.replaceAll("https://bitlogin.network/", `${signIn.origin}/`).replaceAll("https://bitlogin.network", signIn.origin));
+    world = await serve(WORLD_DIST, tls, (path, text) => {
+      const pointed = text.replaceAll("https://bitlogin.network/", `${signIn.origin}/`).replaceAll("https://bitlogin.network", signIn.origin);
+      if (!path.endsWith("/.well-known/nswp.json")) return pointed;
+      // Its manifest, served from here: its entry is at this address, and a keeper is named where the test says so.
+      const manifest = JSON.parse(pointed) as { worlds: Record<string, { entry: { url: string }; keepers?: string[] }> };
+      for (const entry of Object.values(manifest.worlds)) {
+        entry.entry.url = `${world.origin}/`;
+        if (keeperNamed) entry.keepers = [keeperNamed];
+      }
+      return JSON.stringify(manifest);
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -202,6 +214,66 @@ describe.skipIf(!playwright || !WORLD_DIST || !existsSync(join(WORLD_DIST, "app.
         console.log("THE ACCOUNT'S NOTES FOR THIS WORLD, BY KIND:", JSON.stringify(mine.map((e) => e.kind)));
         const back = mine.filter((e) => e.kind === score.kind || e.kind === achieved.kind);
         expect(back.map((e) => e.id).sort()).toEqual([score.id, achieved.id].sort());
+
+        // ---- The owner's screen ("Who comes in", NSWP-10): the world asks its signer for one change to its guest list,
+        // through the kit's own `guests`. BitLogin's window asks the keeper in words, and builds and signs the list.
+        keeperNamed = pubkey;
+        const ben = "0b".repeat(32);
+        const cy = "0c".repeat(32);
+        const askGuests = async (o: Record<string, unknown>) => {
+          await a.page.mouse.click(5, 5);
+          const opened = a.context.waitForEvent("page", { timeout: 60_000 });
+          await a.page.evaluate((req) => void ((window as any).guestsAnswer = "waiting", (window as any).__nswpTest.signer().guests(req).then((got: unknown) => ((window as any).guestsAnswer = got))), o);
+          return opened;
+        };
+        let win: Awaited<ReturnType<typeof askGuests>>;
+        const answerOf = async () => {
+          await a.page.waitForFunction(() => (window as any).guestsAnswer !== "waiting", null, { timeout: 60_000 });
+          // BitLogin's window closes itself once it has answered; the next question opens a new one.
+          if (!win.isClosed()) await win.waitForEvent("close", { timeout: 30_000 });
+          return a.page.evaluate(() => (window as any).guestsAnswer) as Promise<NostrEvent | null>;
+        };
+        const tagsOf = (scope: string, people: string[]) => [["d", `nswp:governance:${scope}:v1:${coordinate}`], ["v", "1"], ["scope", scope], ["subject", coordinate], ...people.sort().map((p) => ["p", p])];
+        // No list yet: starting one has to be ticked.
+        win = await askGuests({ world: coordinate, list: null, change: "allow", key: ben, none: true });
+        await win.locator("#guests-title").filter({ hasText: "into arcade?" }).waitFor({ timeout: 60_000 });
+        expect(await win.locator("#guests-who-key").textContent()).toBe(ben);
+        expect(await win.locator("#guests").textContent()).toContain("Anyone can read this list.");
+        expect(await win.locator("#guests-yes").isDisabled()).toBe(true);
+        await win.locator("#guests-new").check();
+        await win.waitForTimeout(1000);
+        await win.locator("#guests-yes").click();
+        const allowed = (await answerOf())!;
+        // Exactly that list with that one change, by the keeper, and no `client` tag: the kit checked it too, or it
+        // would have answered null.
+        expect(allowed.pubkey).toBe(pubkey);
+        expect(verifyNostrEvent(allowed)).toBe(true);
+        expect(allowed.kind).toBe(30078);
+        expect(allowed.content).toBe("");
+        expect(allowed.tags).toEqual(tagsOf("user-allow", [ben]));
+        // The next change is made to that list.
+        win = await askGuests({ world: coordinate, list: allowed, change: "allow", key: cy });
+        await win.locator("#guests-title").filter({ hasText: "into arcade?" }).waitFor({ timeout: 60_000 });
+        expect(await win.locator("#guests-new-row").isVisible()).toBe(false);
+        await win.waitForTimeout(1000);
+        await win.locator("#guests-yes").click();
+        const both = (await answerOf())!;
+        expect(both.tags).toEqual(tagsOf("user-allow", [ben, cy]));
+        expect(both.created_at).toBeGreaterThan(allowed.created_at - 1);
+        // A block is the other list.
+        win = await askGuests({ world: coordinate, list: null, change: "block", key: cy, none: true });
+        await win.locator("#guests-title").filter({ hasText: "Block" }).waitFor({ timeout: 60_000 });
+        await win.locator("#guests-new").check();
+        await win.waitForTimeout(1000);
+        await win.locator("#guests-yes").click();
+        expect((await answerOf())!.tags).toEqual(tagsOf("user-deny", [cy]));
+        // An account the world's own manifest doesn't name as keeper: refused, and the world hears nothing signed.
+        keeperNamed = "7c".repeat(32);
+        win = await askGuests({ world: coordinate, list: both, change: "unallow", key: cy });
+        await win.locator("#guests-error").filter({ hasText: "doesn't keep that world's lists" }).waitFor({ timeout: 60_000 });
+        await win.locator("#guests-no").click();
+        expect(await answerOf()).toBeNull();
+        keeperNamed = "";
 
         // The second device: a fresh profile, signed in to the same account with its name and password.
         const b = await profile();

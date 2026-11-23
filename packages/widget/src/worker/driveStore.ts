@@ -140,6 +140,11 @@ async function flush(deps: { signer: NostrSigner; store: KeyValueStore; relays: 
  * For each folder the newer record wins. With no relay answering, the
  * browser's copy alone, and it says so. Never "empty" because relays were silent.
  */
+/** The browser's own copy, and nothing asked of relays: to show at once, marked as being checked. It writes nothing. */
+export async function peekDrive(deps: { signer: NostrSigner; store: KeyValueStore }): Promise<DriveState> {
+  return state(await readLocal(deps.store, deps.signer), true);
+}
+
 export async function loadDrive(deps: { signer: NostrSigner; store: KeyValueStore; relays: DriveRelays; now?: number }): Promise<DriveState> {
   const { signer, store, relays } = deps;
   const me = signer.getPublicKey();

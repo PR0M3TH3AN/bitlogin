@@ -68,6 +68,15 @@ const CALL_TIMEOUT_MS = 60_000;
 const NIP46_CALL_TIMEOUT_MS = 260_000;
 const NIP46_AWAIT_TIMEOUT_MS = 320_000;
 
+/**
+ * Reads that open a screen. The same one asked again while it is still running gets the same answer: each is a whole
+ * read of the account's copy (and the putting right of anything not yet on a relay), so a second in line would only
+ * repeat it, after the first.
+ */
+const SHARED_LOADS = new Set<WorkerAction>(["ecashLoad", "driveLoad", "receiptsLoad", "paySettingsLoad", "blossomServers", "ecashMints"]);
+/** Actions that change nothing at all, so a load already on its way is still the right answer after them. */
+const LOOKS_ONLY = new Set<WorkerAction>(["ecashPeek", "drivePeek", "receiptsPeek", "lockStatus"]);
+
 export class WorkerClient {
   private readonly worker: Worker;
   private readonly pending = new Map<
@@ -141,10 +150,34 @@ export class WorkerClient {
     }
   }
 
+  /** Loads asked again while the same one is still on its way: the panel shown twice shares one answer, not two in line. */
+  private readonly inFlight = new Map<string, Promise<unknown>>();
+
   private call<A extends WorkerAction>(
     action: A,
     payload: WorkerActionMap[A][0],
     timeoutMs = CALL_TIMEOUT_MS
+  ): Promise<WorkerActionMap[A][1]> {
+    if (!SHARED_LOADS.has(action)) {
+      if (LOOKS_ONLY.has(action)) return this.send(action, payload, timeoutMs);
+      // Anything else may change what a load would find: a load asked after it is asked anew, never handed the older one.
+      this.inFlight.clear();
+      return this.send(action, payload, timeoutMs);
+    }
+    const key = `${action}:${JSON.stringify(payload ?? null)}`;
+    const already = this.inFlight.get(key);
+    if (already) return already as Promise<WorkerActionMap[A][1]>;
+    const sent = this.send(action, payload, timeoutMs);
+    this.inFlight.set(key, sent);
+    const done = () => this.inFlight.delete(key);
+    sent.then(done, done);
+    return sent;
+  }
+
+  private send<A extends WorkerAction>(
+    action: A,
+    payload: WorkerActionMap[A][0],
+    timeoutMs: number
   ): Promise<WorkerActionMap[A][1]> {
     if (this.dead) {
       return Promise.reject(new Error(this.deadReason));
@@ -353,8 +386,17 @@ export class WorkerClient {
   blossomAuth(payload: WorkerActionMap["blossomAuth"][0]) {
     return this.call("blossomAuth", payload);
   }
-  blossomServers() {
-    return this.call("blossomServers", {});
+  blossomServers(ranked = false) {
+    return this.call("blossomServers", ranked ? { ranked: true } : {});
+  }
+  ecashPeek() {
+    return this.call("ecashPeek", {});
+  }
+  drivePeek() {
+    return this.call("drivePeek", {});
+  }
+  receiptsPeek() {
+    return this.call("receiptsPeek", {});
   }
   blossomSetServers(servers: string[]) {
     return this.call("blossomSetServers", { servers });

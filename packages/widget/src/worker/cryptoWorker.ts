@@ -64,15 +64,15 @@ import { buildMessageRelays, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS,
 import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/mints.js";
-import { keepReceipts, loadReceipts } from "./receiptStore.js";
+import { keepReceipts, loadReceipts, peekReceipts } from "./receiptStore.js";
 import { loadPaySettings, savePaySettings } from "./paySettings.js";
 import { quickRelays } from "./quickRelays.js";
 import { isListSubject, listD, ownerListTemplate, resolveOwnerList, type ListScope } from "../embedded/guests.js";
 import { lightningAddressOfProfile } from "../pay/lightning.js";
 import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
-import { blossomAuth, loadDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
+import { blossomAuth, loadDrive, peekDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
-import { loadEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
+import { loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
 import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
   checkDue,
@@ -535,8 +535,29 @@ function selfOrigin(): string {
 /** Where a site's signer keeps the receipts it was handed, by site. */
 const HELD_RECEIPTS = "bitlogin:held:v1:";
 
+/**
+ * How long a relay may take to accept a connection before it counts as not answering (docs/panel-speed-2026-11-23.md).
+ * Without it a relay that accepts and then says nothing (relay.nostr.band, measured 2026-11-23) held every question
+ * for eight seconds before that question's own timer even started. Three covers the slowest relay seen to answer
+ * (2.7 s). A question still waits for every relay that connects, so what is written after a read is built on all
+ * that answered.
+ */
+const READ_CONNECT_MS = 3000;
+/**
+ * And how long a relay that did connect may take to answer one question, on its own limit: a relay that connects and
+ * then says nothing is cut off here, not left to each question's longer timer. Relays that answer were measured to
+ * answer within a third of a second of connecting.
+ */
+const READ_ANSWER_MS = 2500;
+const readPool = (urls: string[]): RelayPool => {
+  const pool = new RelayPool(urls, { connectTimeoutMs: READ_CONNECT_MS });
+  const ask = pool.queryQuorum.bind(pool);
+  pool.queryQuorum = (filter, timeoutMs = READ_ANSWER_MS) => ask(filter, Math.min(timeoutMs, READ_ANSWER_MS));
+  return pool;
+};
+
 /** Relays for the paying screens: asked together, and not waited on to the last one (quickRelays.ts). */
-const quick = (urls: readonly string[]) => quickRelays(urls, (url) => new RelayPool([url]));
+const quick = (urls: readonly string[]) => quickRelays(urls, (url) => readPool([url]));
 
 /** Paying and buying are done on BitLogin's own pages, and nowhere a copy of the widget is hosted. */
 function requireSignInAddress(): void {
@@ -991,7 +1012,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const wantProfile = (payload as LoadProfilePayload).profile !== false;
       const relayUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
       if (relayUrls.length === 0) return {};
-      const pool = new RelayPool(relayUrls);
+      const pool = readPool(relayUrls);
       try {
         // Their profile (only for a site that is to be told who they are), and their relay list (NIP-65), which
         // every hand-off carries: it is where a signer later looks for their take-back record.
@@ -1022,7 +1043,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const me = signer.getPublicKey();
       const now = Date.now() / 1000;
       const what = p.all === true ? ({ all: true } as const) : { site: String(p.site ?? "") };
-      const finder = new RelayPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
+      const finder = readPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
       let mine: string[];
       try {
         mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
@@ -1031,7 +1052,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       }
       // Their own write relays, and BitLogin's, which every signer knows without being told.
       const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
-      const pool = new RelayPool(relayUrls);
+      const pool = readPool(relayUrls);
       try {
         const found = await pool.queryQuorum({ kinds: [TAKE_BACK_KIND], authors: [me], "#d": [TAKE_BACK_D], limit: 2 }, 5000);
         // With no relay answering, an earlier record made on another device could not be carried forward.
@@ -1073,7 +1094,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const due = checkDue(now, at, grant.checkedAt ?? 0);
       if (due === "fresh") return { state: "ok" };
       const relayUrls = [...new Set([...cleanRelays(grant.relays), ...vaultRelayUrls])].slice(0, 12);
-      const pool = new RelayPool(relayUrls);
+      const pool = readPool(relayUrls);
       let records: Awaited<ReturnType<RelayPool["queryQuorum"]>>;
       let lists: Awaited<ReturnType<RelayPool["queryQuorum"]>>;
       try {
@@ -1205,7 +1226,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       let answered = 0;
       let newestAt = 0;
       if (relayUrls.length) {
-        const pool = new RelayPool(relayUrls);
+        const pool = readPool(relayUrls);
         try {
           const lists = await pool.queryQuorum({ kinds: [FOLLOWS_KIND], authors: [me], limit: 2 }, 3500);
           answered = lists.respondedCount;
@@ -1835,22 +1856,26 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const finderUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
       let mine: string[] = session.relays;
       if (mine.length === 0 && finderUrls.length) {
-        const finder = new RelayPool(finderUrls);
+        const finder = readPool(finderUrls);
         try {
           mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+          // Kept for this session, as loadProfile keeps it: the next read needn't look it up again.
+          if (mine.length) session.relays = mine;
         } catch {
           mine = [];
         } finally {
           finder.closeAll();
         }
       }
-      const pool = new RelayPool([...new Set([...mine, ...vaultRelayUrls, ...(action.startsWith("blossom") ? discoveryRelayUrls : [])])].slice(0, 16));
+      const pool = readPool([...new Set([...mine, ...vaultRelayUrls, ...(action.startsWith("blossom") ? discoveryRelayUrls : [])])].slice(0, 16));
       try {
         const deps = { signer, store, relays: pool };
         if (action === "driveLoad") return await loadDrive(deps);
         if (action === "driveSave") return await saveDrive(deps, payload as DriveSave);
         const ownList = async (): Promise<string[]> => {
           const found = await pool.queryQuorum({ kinds: [SERVER_LIST_KIND], authors: [me], limit: 2 }, 4000);
+          // Silence is not "no servers": a list written from it would replace the real one.
+          if (found.respondedCount === 0) throw new Error("No relay answered for your server list.");
           const newest = found.outcomes.flatMap((o) => o.events).filter((event) => event.kind === SERVER_LIST_KIND && event.pubkey === me && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
           return newest ? serversIn(newest) : [];
         };
@@ -1862,11 +1887,15 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
           if (countAcknowledgements(await pool.publishAll(event, 6000)) < Math.min(2, pool.relayUrls.length)) throw new Error("No relay took your server list. Try again when you are online.");
           return { mine: servers };
         }
+        // The servers people use are for the screen where a server is chosen, and only asked for there. They are only
+        // shown, never written from, so they are asked quickly: not waiting on the slowest relay.
+        if ((payload as { ranked?: unknown }).ranked !== true) return { mine: await ownList(), ranked: [] };
+        const shown = quick(pool.relayUrls);
         const [own, lists, follows] = await Promise.all([
           ownList(),
-          pool.queryQuorum({ kinds: [SERVER_LIST_KIND], limit: 500 }, 5000),
-          pool.queryQuorum({ kinds: [FOLLOWS_KIND], authors: [me], limit: 2 }, 4000)
-        ]);
+          shown.queryQuorum({ kinds: [SERVER_LIST_KIND], limit: 500 }, 5000),
+          shown.queryQuorum({ kinds: [FOLLOWS_KIND], authors: [me], limit: 2 }, 4000)
+        ]).finally(() => shown.closeAll());
         const followList = follows.outcomes.flatMap((o) => o.events).filter((event) => event.pubkey === me && event.kind === FOLLOWS_KIND && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
         const followed = new Set((followList?.tags ?? []).filter((tag) => tag[0] === "p" && typeof tag[1] === "string").map((tag) => tag[1]!));
         const byId = new Map(lists.outcomes.flatMap((o) => o.events).filter((event) => event.pubkey !== me && verifyNostrEvent(event)).map((event) => [event.id, event]));
@@ -1955,7 +1984,9 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const p = payload as { subject?: unknown; scope?: unknown };
       if (!isListSubject(p.subject) || (p.scope !== "user-allow" && p.scope !== "user-deny")) throw new Error("That is not a world's list.");
       const me = signer.getPublicKey();
-      const pool = quick([...new Set([...session.relays, ...vaultRelayUrls, ...discoveryRelayUrls])].slice(0, 12));
+      // A careful read, not a quick one: the list found here decides whether the world's is the newest, and a new one is
+      // written on it. Every relay that connects within the limit is waited for.
+      const pool = readPool([...new Set([...session.relays, ...vaultRelayUrls, ...discoveryRelayUrls])].slice(0, 12));
       try {
         const found = await pool.queryQuorum({ kinds: [30078], authors: [me], "#d": [listD(p.scope, p.subject)], limit: 4 }, 5000);
         const events = found.outcomes.flatMap((o) => o.events);
@@ -1994,13 +2025,19 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         const finder = quick(finderUrls);
         try {
           mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+          // Kept for this session, as loadProfile keeps it: the next read needn't look it up again.
+          if (mine.length) session.relays = mine;
         } catch {
           mine = [];
         } finally {
           finder.closeAll();
         }
       }
-      const pool = quick([...new Set([...mine, ...vaultRelayUrls])].slice(0, 16));
+      // The settings are written whole from what is read here, so they are read carefully: every relay that connects
+      // within the limit is waited for. A receipt record is never changed once written (one record a receipt, the same
+      // words each time), so sending it again can't overwrite anything newer: those may be read quickly.
+      const relayUrlsHere = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
+      const pool = action === "receiptsLoad" || action === "receiptsKeep" ? quick(relayUrlsHere) : readPool(relayUrlsHere);
       try {
         const deps = { signer, store, relays: pool };
         if (action === "paySettingsLoad") return await loadPaySettings(deps);
@@ -2017,7 +2054,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const me = signer.getPublicKey();
       const relayUrls = [...new Set([...session.relays, ...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 10);
       if (relayUrls.length === 0) return { content: null, answered: false };
-      const pool = new RelayPool(relayUrls);
+      const pool = readPool(relayUrls);
       try {
         const found = await pool.queryQuorum({ kinds: [0], authors: [me], limit: 2 }, 3500);
         const newest = found.outcomes.flatMap((o) => o.events).filter((event) => event.kind === 0 && event.pubkey === me && verifyNostrEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
@@ -2034,7 +2071,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       const me = signer.getPublicKey();
       const relayUrls = [...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8);
       if (relayUrls.length === 0) return { mints: [] };
-      const pool = new RelayPool(relayUrls);
+      // Only shown, never written from: asked quickly, not waiting on the slowest relay.
+      const pool = quick(relayUrls);
       try {
         const [recommended, lists] = await Promise.all([
           pool.queryQuorum({ kinds: [MINT_RECOMMENDATION_KIND], "#k": [CASHU_MINT_KIND], limit: 500 }, 5000),
@@ -2049,17 +2087,30 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       }
     }
 
+    // The browser's own copies, asked of no relay and writing nothing: shown at once, marked as being checked, while
+    // the careful read above runs behind them (docs/panel-speed-2026-11-23.md). A full session only, as the loads are.
+    case "ecashPeek":
+    case "drivePeek":
+    case "receiptsPeek": {
+      const { signer } = requireUnlocked();
+      if (action === "receiptsPeek") requireSignInAddress();
+      const deps = { signer, store };
+      return action === "ecashPeek" ? await peekEcash(deps) : action === "drivePeek" ? await peekDrive(deps) : await peekReceipts(deps);
+    }
+
     case "ecashLoad":
     case "ecashSetMints":
     case "ecashRoll": {
       const { signer } = requireUnlocked();
       const me = signer.getPublicKey();
       // Their own write relays, and BitLogin's: the same place a take-back is kept.
-      const finder = new RelayPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
+      const finder = readPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
       let mine: string[] = session.relays;
       if (mine.length === 0) {
         try {
           mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+          // Kept for this session, as loadProfile keeps it: the next read needn't look it up again.
+          if (mine.length) session.relays = mine;
         } catch {
           mine = [];
         } finally {
@@ -2067,7 +2118,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         }
       } else finder.closeAll();
       const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
-      const pool = new RelayPool(relayUrls);
+      const pool = readPool(relayUrls);
       try {
         const deps = { signer, store, relays: pool };
         if (action === "ecashLoad") return await loadEcash(deps);
@@ -2245,7 +2296,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
   "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent",
-  "payProfile", "payListing", "unlockAuth", "guestListFind", "guestListSign", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
+  "ecashPeek", "drivePeek", "receiptsPeek", "payProfile", "payListing", "unlockAuth", "guestListFind", "guestListSign", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
   "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",
   "vaultSetBinding", "vaultDelete", "vaultOfferCheck",
@@ -2277,7 +2328,9 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
   // minutes for a human's approval must not block every other worker call
   // behind it (getSessionStatus, vault requests, even logout).
   const run =
-    action.startsWith("nip46")
+    // The peeks too: they read the browser's own sealed copy and change nothing, and they are what is on screen while
+    // the queue is busy asking relays (docs/panel-speed-2026-11-23.md).
+    action.startsWith("nip46") || action === "ecashPeek" || action === "drivePeek" || action === "receiptsPeek"
       ? (operation: () => Promise<unknown>) => operation()
       : (operation: () => Promise<unknown>) => requestQueue.run(operation);
   run(() => handle(action, payload)).then(

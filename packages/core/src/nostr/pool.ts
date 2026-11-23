@@ -25,7 +25,7 @@ export interface RelayPublishOutcome {
 export class RelayPool {
   private readonly connections: Map<string, RelayConnection> = new Map();
 
-  constructor(relayUrls: string[], options: { authPrivateKey?: Uint8Array } = {}) {
+  constructor(relayUrls: string[], options: { authPrivateKey?: Uint8Array; connectTimeoutMs?: number } = {}) {
     for (const url of new Set(relayUrls)) {
       this.connections.set(url, new RelayConnection(url, options));
     }

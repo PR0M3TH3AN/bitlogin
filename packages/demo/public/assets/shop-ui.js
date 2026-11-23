@@ -99,9 +99,9 @@ const sandboxSession = async (service) => {
 };
 
 /** The account's receipts, each read and checked: only those a known service signed, for this account. */
-const kept = async (worker, pubkey) => {
+const keptFrom = async (worker, pubkey, read) => {
   const services = servicesKnown();
-  const state = await worker.pay.receipts();
+  const state = await read;
   const receipts = [];
   for (const item of state.receipts) {
     const receipt = lib.readReceipt(item.event, services);
@@ -114,6 +114,7 @@ const kept = async (worker, pubkey) => {
   }
   return { receipts, offline: state.offline, unsaved: state.unsaved };
 };
+const kept = (worker, pubkey) => keptFrom(worker, pubkey, worker.pay.receipts());
 
 /**
  * The receipts a site's signer is handed, so that it can answer "do they have this?" with no question: those for
@@ -389,9 +390,49 @@ export async function openLibrary({ worker, pubkey, resize, done }) {
     done();
   };
   resize("tall");
+  /** The list of what was bought, drawn from `mine`, with what each service says of each (`status`). */
+  const drawList = (mine, status, asked, checking) => {
+      const now = Date.now() / 1000;
+      $("library-note").textContent = checking
+        ? "Checking with your relays. These are the receipts this browser held last time."
+        : mine.offline
+        ? "No relay answered, so this is the copy kept in this browser."
+        : mine.unsaved
+          ? "Kept in this browser. Your relays didn't take the latest receipt yet: it is sent again next time."
+          : asked
+            ? "Kept with your account, sealed so only you can read them."
+            : "Kept with your account. The selling service didn't answer just now, so whether any was taken back isn't known.";
+      $("library-empty").hidden = mine.receipts.length > 0;
+      $("library-list").replaceChildren(
+        ...mine.receipts.map(({ receipt, title, via }) => {
+          const row = document.createElement("li");
+          const what = document.createElement("span");
+          what.className = "library-what";
+          const name = document.createElement("strong");
+          name.textContent = title || receipt.listing.slice(71);
+          const where = document.createElement("small");
+          where.textContent = `${via ? `Bought at ${host(via)}, ` : "Bought "}${day(receipt.issuedAt)}`;
+          what.append(name, where);
+          const state = document.createElement("span");
+          const gone = status.get(receipt.event.id) === "revoked" ? "Taken back" : receipt.expiresAt && receipt.expiresAt <= now ? "Ran out" : "";
+          state.className = `library-state${gone ? " gone" : ""}`;
+          state.textContent = gone || (receipt.expiresAt ? `Until ${until(receipt.expiresAt)}` : "Yours to keep");
+          row.append(what, state);
+          return row;
+        })
+      );
+  };
   try {
     await load();
-    let mine = await kept(worker, pubkey);
+    // What this browser held is on screen at once, marked as being checked (docs/panel-speed-2026-11-23.md).
+    const peeked = await keptFrom(worker, pubkey, worker.pay.receiptsPeek()).catch(() => null);
+    if (peeked && peeked.receipts.length > 0) drawList(peeked, new Map(), true, true);
+    const mineRead = kept(worker, pubkey);
+    // Then the purchases not finished, behind the receipts.
+    const settingsRead = worker.pay.settings().catch(() => ({ orders: [] }));
+    let mine = await mineRead;
+    // Drawn as soon as relays have answered; what each selling service says of them is added when it answers.
+    drawList(mine, new Map(), true, false);
     // What each service says of them now: a receipt bought on another device is kept here, and one taken back is said to be.
     const status = new Map();
     const keys = { pubkey, auth: (req) => worker.pay.auth(req), open: (from, sealed) => worker.nip44Decrypt(from, sealed) };
@@ -412,7 +453,7 @@ export async function openLibrary({ worker, pubkey, resize, done }) {
       for (const row of rows) status.set(row.receipt.event.id, row.status);
     }
     // Purchases begun and not finished: shown as that, each with one press to finish it. Never as bought.
-    const settings = await worker.pay.settings().catch(() => ({ orders: [] }));
+    const settings = await settingsRead;
     $("library-open-row").hidden = settings.orders.length === 0;
     $("library-open").replaceChildren(
       ...settings.orders.map((order) => {
@@ -436,34 +477,9 @@ export async function openLibrary({ worker, pubkey, resize, done }) {
         return row;
       })
     );
-    const now = Date.now() / 1000;
-    $("library-note").textContent = mine.offline
-      ? "No relay answered, so this is the copy kept in this browser."
-      : mine.unsaved
-        ? "Kept in this browser. Your relays didn't take the latest receipt yet: it is sent again next time."
-        : asked
-          ? "Kept with your account, sealed so only you can read them."
-          : "Kept with your account. The selling service didn't answer just now, so whether any was taken back isn't known.";
-    $("library-empty").hidden = mine.receipts.length > 0;
-    $("library-list").replaceChildren(
-      ...mine.receipts.map(({ receipt, title, via }) => {
-        const row = document.createElement("li");
-        const what = document.createElement("span");
-        what.className = "library-what";
-        const name = document.createElement("strong");
-        name.textContent = title || receipt.listing.slice(71);
-        const where = document.createElement("small");
-        where.textContent = `${via ? `Bought at ${host(via)}, ` : "Bought "}${day(receipt.issuedAt)}`;
-        what.append(name, where);
-        const state = document.createElement("span");
-        const gone = status.get(receipt.event.id) === "revoked" ? "Taken back" : receipt.expiresAt && receipt.expiresAt <= now ? "Ran out" : "";
-        state.className = `library-state${gone ? " gone" : ""}`;
-        state.textContent = gone || (receipt.expiresAt ? `Until ${until(receipt.expiresAt)}` : "Yours to keep");
-        row.append(what, state);
-        return row;
-      })
-    );
-  } catch {
+    drawList(mine, status, asked, false);
+  } catch (err) {
+    console.error("bitlogin: purchases couldn't be opened:", err);
     $("library-note").textContent = "Your receipts couldn't be opened just now. Nothing was changed.";
   }
 }
