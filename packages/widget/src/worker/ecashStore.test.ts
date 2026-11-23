@@ -133,4 +133,33 @@ describe("where an ecash wallet is kept (docs/ecash.md)", () => {
     await expect(rollEcash(deps, { destroy: [], keep: [{ mint: "ftp://x", proofs: [proof("a", 1)] }] })).rejects.toThrow();
     await expect(rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [{ ...proof("a", 1), amount: -5 }] }] })).rejects.toThrow();
   });
+
+  it("says the sats are sealed in this browser before any relay is asked, and sends their history beside them", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    const asked: number[] = [];
+    const publish = deps.relays.publishAll.bind(deps.relays);
+    deps.relays.publishAll = async (event) => (asked.push(event.kind), publish(event));
+    let sealedWhenAsked = -1;
+    const after = await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof("a", 64)] }], history: { direction: "in", amount: 64 } }, (sealed) => {
+      sealedWhenAsked = asked.length;
+      expect(balances(sealed.tokens)).toEqual({ [MINT]: 64 });
+      expect(sealed.unsaved).toBe(true);
+    });
+    expect(sealedWhenAsked).toBe(0);
+    expect(after.unsaved).toBe(false);
+    expect(asked.sort()).toEqual([TOKEN_KIND, 7376].sort());
+  });
+
+  it("takes the line of history back when the record it names wasn't taken", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    const publish = deps.relays.publishAll.bind(deps.relays);
+    // The relays take the history and the withdrawal, but not the ecash record.
+    deps.relays.publishAll = async (event) =>
+      event.kind === TOKEN_KIND ? deps.relays.relayUrls.map((relayUrl) => ({ relayUrl, result: { ok: false, message: "no" } })) : publish(event);
+    const after = await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof("a", 64)] }], history: { direction: "in", amount: 64 } });
+    expect(after.unsaved).toBe(true);
+    expect([...deps.relays.events.values()].filter((e) => e.kind === 7376)).toEqual([]);
+  });
 });

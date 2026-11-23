@@ -520,10 +520,13 @@ export interface Nip46NostrconnectAwaitResult {
  * carry the information -- the signer's interactive-approval URL arrives in
  * the middle of a still-pending connect call.
  */
-export interface WorkerNotification {
-  notify: "nip46-auth-url";
-  url: string;
-}
+export type WorkerNotification =
+  | { notify: "nip46-auth-url"; url: string }
+  /**
+   * The ecash of the call `id` is sealed in this browser, before any relay is asked: from here it can't be lost
+   * (docs/panel-speed-2026-11-23.md). Says nothing else.
+   */
+  | { notify: "ecash-sealed"; id: string };
 
 // ---- An ecash wallet kept with the account (docs/ecash.md; worker/ecashStore.ts) ----
 export type { EcashState, EcashRoll } from "./ecashStore.js";

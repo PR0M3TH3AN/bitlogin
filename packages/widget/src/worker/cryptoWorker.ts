@@ -93,7 +93,8 @@ import {
 } from "../embedded/takeBack.js";
 import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { LaneQueue } from "./serialQueue.js";
-import type { VaultConnectionSummary } from "./protocol.js";
+import { RelayKeeper } from "./relayKeeper.js";
+import type { VaultConnectionSummary, WorkerNotification } from "./protocol.js";
 import type {
   WorkerRequest,
   WorldSavePayload,
@@ -351,6 +352,8 @@ function requireApp(): HandoffApp {
 }
 
 function clearSession(): void {
+  // The kept relay connections go with the session (relayKeeper.ts): at sign-out, the lock, or another account.
+  relayKeeper.closeAll();
   session.signer?.destroy();
   if (session.everydayPrivateKey) session.everydayPrivateKey.fill(0);
   session.signer = null;
@@ -565,8 +568,15 @@ const READ_CONNECT_MS = 3000;
  * answer within a third of a second of connecting.
  */
 const READ_ANSWER_MS = 2500;
+/** The worker's relay connections, kept between actions, and the relays that failed a moment ago (relayKeeper.ts). */
+const relayKeeper = new RelayKeeper(READ_CONNECT_MS);
 const readPool = (urls: string[]): RelayPool => {
-  const pool = new RelayPool(urls, { connectTimeoutMs: READ_CONNECT_MS });
+  const pool = new RelayPool(urls, {
+    connectTimeoutMs: READ_CONNECT_MS,
+    connectionFor: relayKeeper.connectionFor,
+    notWaitedFor: relayKeeper.notWaitedFor,
+    heard: relayKeeper.heard
+  });
   const ask = pool.queryQuorum.bind(pool);
   pool.queryQuorum = (filter, timeoutMs = READ_ANSWER_MS) => ask(filter, Math.min(timeoutMs, READ_ANSWER_MS));
   return pool;
@@ -719,7 +729,7 @@ function adoptNip46Client(client: Nip46Client, userPubkey: string): void {
   nip46 = { client, userPubkey };
 }
 
-async function handle(action: string, payload: unknown): Promise<unknown> {
+async function handle(action: string, payload: unknown, id = ""): Promise<unknown> {
   if (session.signerOnly && !SIGNER_ONLY_ACTIONS.has(action)) {
     throw new Error("This session can only sign. Sign in at your own BitLogin page for anything else.");
   }
@@ -2152,7 +2162,8 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         const deps = { signer, store, relays: pool };
         if (action === "ecashLoad") return await loadEcash(deps);
         if (action === "ecashSetMints") return await setEcashMints({ ...deps, newKey: () => bytesToHex(generatePrivateKey()) }, (payload as { mints?: unknown }).mints);
-        return await rollEcash(deps, payload as EcashRoll);
+        // The page is told once the new proofs are sealed here, for that call alone: "Added" is true from then on.
+        return await rollEcash(deps, payload as EcashRoll, () => (self as unknown as Worker).postMessage({ notify: "ecash-sealed", id } satisfies WorkerNotification));
       } finally {
         pool.closeAll();
       }
@@ -2362,7 +2373,7 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
     action.startsWith("nip46") || action === "ecashPeek" || action === "drivePeek" || action === "receiptsPeek"
       ? (operation: () => Promise<unknown>) => operation()
       : (operation: () => Promise<unknown>) => requestQueue.run(LANE[action] ?? null, operation);
-  run(() => handle(action, payload)).then(
+  run(() => handle(action, payload, id)).then(
     (result) => {
       const response: WorkerResponse = { id, ok: true, result };
       (self as unknown as Worker).postMessage(response);

@@ -1091,8 +1091,11 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/ecash-fund.png` });
           mint.payAllFunding();
           await panel.locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 30_000 });
+          // Once the mint has issued them and they are sealed here, they are shown as added, and as still going to
+          // relays; then, once two relays have them, simply added.
           expect(await panel.locator("#ecash-total").textContent()).toBe("100");
-          expect(await panel.locator("#ecash-note").textContent()).toBe("Added 100 sats.");
+          expect(await panel.locator("#ecash-note").textContent()).toMatch(/^Added 100 sats\.( Sending to your relays\.)?$/u);
+          await panel.locator("#ecash-note").filter({ hasText: /^Added 100 sats\.$/u }).waitFor({ timeout: 30_000 });
           if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/ecash-home.png` });
 
           // The world asks to be paid. It is told "asking", the panel says how much and what it may cost, and on a

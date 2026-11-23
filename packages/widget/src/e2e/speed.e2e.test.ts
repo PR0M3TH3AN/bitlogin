@@ -347,11 +347,15 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
         mint.payAllFunding();
         const claimAt = Date.now();
         await frame().locator("#ecash-note").filter({ hasText: "Added 100 sats." }).waitFor({ timeout: 60_000 });
+        const addedAt = Date.now();
+        // And once two relays have them: the note no longer says they are being sent.
+        await frame().locator("#ecash-note").filter({ hasText: /^Added 100 sats\.$/u }).waitFor({ timeout: 60_000 });
+        results.push({ mode: "wallet: sats on relays after the invoice is paid", tookMs: Date.now() - claimAt, sinceAddedMs: Date.now() - addedAt });
         const claimLog = ((await panelFrame().evaluate(() => (window as any).workerLog)) as { action: string; start: number; end?: number }[])
           .filter((w) => w.start >= claimAt - 3000)
           .map((w) => ({ action: w.action, startMs: w.start - claimAt, tookMs: w.end ? w.end - w.start : null }));
         const mintAsked = mintCalls.filter((a) => a.at >= claimAt - 3000).map((a) => `${a.path}@${a.at - claimAt}`);
-        results.push({ mode: "wallet: sats arrive after the invoice is paid", tookMs: Date.now() - claimAt, note: "polled every 2.5 s", worker: claimLog, mintAsked });
+        results.push({ mode: "wallet: sats arrive after the invoice is paid", tookMs: addedAt - claimAt, note: "shown as added once sealed in this browser; the mint is asked every second", worker: claimLog, mintAsked });
         // Past "Checking with your relays": the folders are shown before the server list is read, and only then is
         // the screen for choosing a server shown, for an account with none.
         await open("files", '[data-files="servers"], #files:not(.files-checking) [data-files="browse"]', "again");

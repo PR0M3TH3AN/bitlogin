@@ -160,7 +160,8 @@ export interface HeadlessSigner {
   ecash: {
     load(): Promise<EcashState>;
     setMints(mints: string[]): Promise<EcashState>;
-    roll(roll: EcashRoll): Promise<EcashState>;
+    /** `sealed` is called once the new proofs are sealed in this browser, before any relay is asked. */
+    roll(roll: EcashRoll, sealed?: () => void): Promise<EcashState>;
     /** The mints people recommend (NIP-87), the user's own follows first. */
     recommended(): Promise<RankedMint[]>;
     /** The browser's own copy of the wallet, asking no relay: to show at once, marked as being checked. */
@@ -429,9 +430,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         await requirePubkey();
         return client.ecashSetMints(mints);
       },
-      async roll(roll) {
+      async roll(roll, sealed) {
         await requirePubkey();
-        return client.ecashRoll(roll);
+        return client.ecashRoll(roll, sealed);
       },
       async recommended() {
         await requirePubkey();
