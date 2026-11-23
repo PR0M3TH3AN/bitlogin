@@ -150,6 +150,15 @@ async function acknowledgeKeyBackup(widget: { locator: (selector: string) => any
   return shownKey;
 }
 
+/**
+ * The panel ignores a press in its first 0.9 s after it is shown (sign-in-window.md §SW19.8), as Allow does. After a
+ * client shows it, a test waits for the panel to say it is ready and then a moment more, as a person would.
+ */
+async function shownLongEnough(page: { waitForFunction: (fn: () => unknown, arg?: unknown, o?: { timeout: number }) => Promise<unknown>; waitForTimeout: (ms: number) => Promise<void> }): Promise<void> {
+  await page.waitForFunction(() => (window as any).said?.some((m: any) => m.t === "ready"), undefined, { timeout: 30_000 });
+  await page.waitForTimeout(1000);
+}
+
 /** Password sign-up through the generated-password screen, up to the phrase. */
 async function startPasswordSignUp(widget: { locator: (selector: string) => any }, loginName: string): Promise<void> {
   await widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(loginName);
@@ -900,6 +909,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 
         // The world asks its client, and the client shows the panel, naming the world.
         await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         const panel = page.frameLocator("#panel");
         await page.waitForFunction(() => (window as any).said.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
         // Nobody is signed in in this panel yet: it offers sign-in, with BitLogin's own address and the client's, and
@@ -963,7 +973,10 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         // The next time, the panel remembers who is signed in in it. Asked to switch, it offers the accounts kept in
         // it, with no password, and the question follows.
         await page.evaluate((w) => (window as any).showPanel({ world: w, mode: "switch" }), world);
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await panel.locator("#choose").waitFor({ state: "visible", timeout: 30_000 });
+        // A press in the panel's first 0.9 s after it is shown is ignored (§SW19.8): this one comes after, as a person's would.
+        await page.waitForTimeout(1000);
         await panel.locator(".connect-account-row").first().click();
         await panel.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
         // And everything else BitLogin does is in it too, under "Account and more", with no window.
@@ -992,6 +1005,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await propose({ t: "propose", event: { kind: 0, content: profile, tags: [["nswp:world", "https://evil.example"]] } }, "p1");
         await asking("p1");
         await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await panel.locator("#confirm").waitFor({ state: "visible", timeout: 30_000 });
         // Against the profile relays hold now (sign-up published one, with only a name): what would change.
         expect(await panel.locator("#confirm-title").textContent()).toBe("Change your Nostr profile?");
@@ -1009,6 +1023,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await propose({ t: "propose", event: { kind: 0, content: profile, tags: [] } }, "p2");
         await asking("p2");
         await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await panel.locator("#confirm-yes").waitFor({ state: "visible", timeout: 30_000 });
         await page.waitForTimeout(1000);
         await panel.locator("#confirm-yes").click();
@@ -1026,6 +1041,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await propose({ t: "wallet" }, "w1");
         await asking("w1");
         await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await panel.locator("#wallet").waitFor({ state: "visible", timeout: 30_000 });
         expect(await panel.locator("#wallet-site").textContent()).toBe(world);
         expect(await panel.locator("#wallet").textContent()).toContain("will receive a wallet connection");
@@ -1039,6 +1055,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await propose({ t: "wallet" }, "w2");
         await asking("w2");
         await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await walletWidget.locator('[data-action="vault-approve"]').waitFor({ timeout: 60_000 });
         await walletWidget.locator('[data-action="vault-approve"]').click();
         expect(await waitFor("w2")).toMatchObject({ t: "wallet", uri: nwc });
@@ -1051,6 +1068,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const mint = await startMockMint();
         try {
           await page.evaluate(() => (window as any).showPanel({ mode: "account" }));
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator("#open-ecash").waitFor({ state: "visible", timeout: 30_000 });
           await panel.locator("#account-slot bitlogin-auth .pubkey").waitFor({ timeout: 30_000 });
           await panel.locator("#open-ecash").click();
@@ -1081,6 +1099,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await propose({ t: "pay", invoice }, "e1");
           await asking("e1");
           await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator('[data-ecash="confirm"]').waitFor({ state: "visible", timeout: 60_000 });
           expect(await panel.locator("#ecash-site").textContent()).toBe(world);
           expect(await panel.locator("#ecash-pay-amount").textContent()).toBe("40");
@@ -1102,6 +1121,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await propose({ t: "pay", invoice: second }, "e2");
           await asking("e2");
           await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator("#ecash-pay-no").waitFor({ state: "visible", timeout: 60_000 });
           // 100, less the 40 paid and the one sat routing cost: the rest of the reserve came back as change.
           expect(await panel.locator("#ecash-pay-have").textContent()).toBe("59 sats");
@@ -1125,7 +1145,10 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
               });
             }
           };
-          const showFor = async () => page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          const showFor = async () => {
+            await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+            await shownLongEnough(page);
+          };
 
           // A tip to a person. The world names a key and an amount, and nothing else: BitLogin finds the lightning
           // address in that person's own signed profile, shows the name and the address, and pays exactly that much.
@@ -1177,6 +1200,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           expect(mint.paid).toHaveLength(2);
           // The limit is the person's to change, in their wallet, in a few steps: and it is kept with the account.
           await page.evaluate(() => (window as any).showPanel({ mode: "wallet" }));
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
           expect(await panel.locator("#ecash-limit").inputValue()).toBe("1000");
           expect(await panel.locator("#ecash-limit option").allTextContents()).toEqual(["1,000 sats", "10,000 sats", "100,000 sats", "No limit"]);
@@ -1305,6 +1329,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 
           // What was bought is in the panel, under the account.
           await page.evaluate(() => (window as any).showPanel({ mode: "library" }));
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator("#library-list li").waitFor({ timeout: 60_000 });
           expect(await panel.locator("#library-list li").textContent()).toMatch(live ? /Until |Yours to keep/u : /Season pass/u);
           if (!live) expect(await panel.locator("#library-list li").textContent()).toContain("Yours to keep");
@@ -1399,6 +1424,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const blossom = await startMockBlossom();
         try {
           await page.evaluate(() => (window as any).showPanel({ mode: "account" }));
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator("#account-slot bitlogin-auth .pubkey").waitFor({ timeout: 30_000 });
           await panel.locator("#open-files").click();
           // No server chosen yet: that comes first, and it says what a server is and is not.
@@ -1453,6 +1479,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await worldFrame.evaluate(({ bytes, to }) => (document.getElementById("signer") as HTMLIFrameElement).contentWindow!.postMessage({ nswp: "nswp-signer", v: 1, id: "f1", t: "file-save", name: "scene.json", type: "application/json", bytes: new Uint8Array(bytes) }, to), { bytes: offered, to: origin });
           await asking("f1");
           await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator("#files-save-yes").waitFor({ state: "visible", timeout: 60_000 });
           expect(await panel.locator("#files-site").textContent()).toBe(world);
           expect((await panel.locator("#files-path button").allTextContents()).join(" > ")).toBe(`Files > Worlds > ${new URL(world).host}`);
@@ -1470,6 +1497,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           await propose({ t: "file-pick" }, "f2");
           await asking("f2");
           await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator("#files-pick-no").waitFor({ state: "visible", timeout: 60_000 });
           await panel.locator('#files-list li[data-folder="Worlds"] .files-open').click();
           await panel.locator(`#files-list li[data-folder="${new URL(world).host}"] .files-open`).click();
@@ -1492,15 +1520,18 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 
         // Opened for the files alone, or the wallet alone, it goes straight there: one press from anywhere in a game.
         await page.evaluate(() => (window as any).showPanel({ mode: "files" }));
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await panel.locator("#files-path").waitFor({ state: "visible", timeout: 60_000 });
         expect(await panel.locator("#account").isVisible()).toBe(false);
         await page.evaluate(() => (window as any).showPanel({ mode: "wallet" }));
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         // (A wallet was started earlier in this test, so it opens at its balance.)
         await panel.locator("#ecash-total").waitFor({ state: "visible", timeout: 60_000 });
         expect(await panel.locator("#account").isVisible()).toBe(false);
 
         // Opened for the account alone, it shows the account.
         await page.evaluate(() => (window as any).showPanel({ mode: "account" }));
+        await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await panel.locator("#account").waitFor({ state: "visible", timeout: 30_000 });
         expect(context.pages().length).toBe(1);
         expect(errors).toEqual([]);
@@ -3428,10 +3459,13 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           expect(await ask({ t: "state" })).toMatchObject({ unlocked: false });
 
           await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           const panel = page.frameLocator("#panel");
           await panel.locator("#signin").waitFor({ state: "visible", timeout: 30_000 });
           // A password account, made in the panel: the generated password in a real field a manager can save from.
           const widget = panel.locator("#widget-slot bitlogin-auth");
+          // A press in the panel's first 0.9 s after it is shown is ignored (§SW19.8): this one comes after, as a person's would.
+          await page.waitForTimeout(1000);
           await widget.locator('[data-action="goto-create"]').click();
           await startPasswordSignUp(widget, `panel-${engine}`);
           await completeRecoveryCeremony(widget);
@@ -3450,6 +3484,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           worldFrame = await open();
           await worldFrame.waitForFunction(async () => (await (window as any).ask({ t: "state" })).unlocked === true, null, { timeout: 30_000, polling: 500 });
           await page.evaluate((w) => (window as any).showPanel({ world: w }), world);
+          await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
           await panel.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
           expect(await panel.locator("#signin").isVisible()).toBe(false);
           expect(context.pages().length).toBe(1);

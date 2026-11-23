@@ -91,6 +91,11 @@ change, and nothing else: no name, no server, no hash, no key.
 - **A file is saved to the person's first two servers** (BUD-03 asks for
   at least the first). Fetched from whichever still has it, and **checked
   against its hash**: a server is believed only as far as the hash goes.
+- **The person's own list is changed only once it has been read.** A new
+  list replaces the old one on relays, so it is built on the one a relay
+  answered with. When none answers, the folders stay on screen, read-only,
+  and the list can't be changed: silence is never taken for "no servers"
+  (2026-11-23).
 - **Servers people use** are counted from the kind 10063 lists people
   publish, one voice per account, the person's own follows first; one
   stranger's word alone is not shown. Each is then asked whether it would

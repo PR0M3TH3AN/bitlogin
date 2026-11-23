@@ -219,4 +219,21 @@ describe("a person's files on Blossom servers (docs/files.md)", () => {
     await files.put(folder.id, { name: "sculpture.glb", type: "model/gltf-binary", bytes: text("glb") }, { private: true });
     expect((await files.worldFolder("https://gallery.bitblocks.network")).files.map((f) => f.name)).toEqual(["sculpture.glb"]);
   });
+
+  it("never replaces a server list it couldn't read: silence is not \"no servers\"", async () => {
+    const signer = new NostrSigner(generatePrivateKey());
+    const store = storeFor(signer, [one.url]);
+    let silent = true;
+    const asked = store.servers;
+    store.servers = async () => (silent ? Promise.reject(new Error("No relay answered for your server list.")) : asked());
+    const files = createFiles(store);
+    await files.open();
+    expect(files.serversRead()).toBe(false);
+    expect(files.servers()).toEqual([]);
+    await expect(files.setServers([two.url])).rejects.toThrow("couldn't be read");
+    silent = false;
+    await files.loadServers();
+    expect(files.serversRead()).toBe(true);
+    expect(await files.setServers([...files.servers(), two.url])).toEqual([one.url, two.url]);
+  });
 });

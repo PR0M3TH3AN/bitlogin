@@ -19,6 +19,8 @@ import type { EcashRoll, EcashState } from "../worker/ecashStore.js";
 
 export interface EcashStore {
   load(): Promise<EcashState>;
+  /** The browser's own copy, asking no relay. Optional: where there is none, the wallet opens by `load` alone. */
+  peek?(): Promise<EcashState>;
   setMints(mints: string[]): Promise<EcashState>;
   roll(roll: EcashRoll): Promise<EcashState>;
 }
@@ -111,9 +113,23 @@ export function createEcashWallet(store: EcashStore) {
   }
 
   return {
-    /** Open the wallet: read it, then put right anything a mint says is spent. */
-    async open(): Promise<EcashState> {
+    /**
+     * Open the wallet: read it from relays, then (unless `check` is false) put right anything a mint says is spent.
+     * The mints can be asked afterwards, with `check()`, so the balance is on screen first.
+     */
+    async open(o: { check?: boolean } = {}): Promise<EcashState> {
       state = await store.load();
+      if (!state.offline && o.check !== false) await reconcile();
+      return state;
+    },
+    /** What the browser holds, shown at once while `open` reads relays. Nothing is spent or written from it. */
+    async peek(): Promise<EcashState | null> {
+      if (!store.peek) return null;
+      state = await store.peek();
+      return state;
+    },
+    /** Ask every mint whether what this wallet holds is still unspent, and put right what isn't. */
+    async check(): Promise<EcashState> {
       if (!state.offline) await reconcile();
       return state;
     },

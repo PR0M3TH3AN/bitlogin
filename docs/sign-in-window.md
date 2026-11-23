@@ -1258,6 +1258,42 @@ finds the panel open cannot read the key off it. The account page at the
 sign-in address is unchanged. The recovery phrase is shown only while an
 account is being made, as everywhere.
 
+## SW19.8 A panel kept between openings: `show` and `hide` (built on `beta`, 2026-11-23)
+
+A client may keep the panel's frame between openings, hidden, instead of
+loading it anew each time (docs/panel-speed-2026-11-23.md). It then says:
+
+- `{ bitlogin: "bitlogin-panel", v: 1, t: "show", mode, world? }`: show it
+  again, for that mode, with the same meanings and checks as `hello`;
+- `{ bitlogin: "bitlogin-panel", v: 1, t: "hide" }`: it has been hidden.
+
+They are taken only from the page that said `hello`, at its exact origin,
+and from the panel's own parent window. Anything else is ignored.
+
+**The contract: what a hidden panel may and may not do.** The panel holds
+the visitor's session in its worker, exactly as an open panel does.
+Keeping it changes nothing about how long that session lasts.
+
+- **While hidden it listens only for `show`.**
+  - A question a world had put to the person is answered "no" when the
+    panel is hidden.
+  - Every screen is put away. It answers no world's question, and runs no
+    wallet or file action. The wallet stops checking for sats that arrive.
+  - It signs nothing.
+- **After five minutes hidden, its worker is let go.** That worker holds
+  the session, and a new one starts at the next `show`.
+- **On sign-out, its worker is let go at once.** The lock is checked again
+  at each `show`, as at each opening.
+- **Each time it is shown, a press in the first 0.9 s is ignored**, as
+  Allow ignores one, so a press meant for the world can't land on Allow,
+  Pay or Send.
+- **The client can't read it.** It is another origin, as before. Hidden or
+  shown is the client's to say; the panel takes it at its word, and gains
+  nothing from it.
+
+A client that doesn't keep the panel goes on as before: a new frame and a
+`hello` at each opening.
+
 # SW20. Asking the person: careful kinds, and a wallet (built on `beta`)
 
 **Added 2026-11-21:** `tip`, `buy` and `have` join this family, and `pay`

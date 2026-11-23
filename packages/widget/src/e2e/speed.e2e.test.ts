@@ -40,7 +40,10 @@ try {
  */
 const ANSWERING_MS = [370, 414, 482, 525, 570, 613, 635, 728, 797, 1095, 1192];
 const REFUSING = 3;
+/** Accepts the connection and never finishes the handshake: relay.nostr.band, measured 2026-11-23. */
 const SILENT = 1;
+/** Connects, and then never answers a question: the same fault, one step later. Set to 0 to leave it out. */
+const CONNECTED_SILENT = Number(process.env.BITLOGIN_SPEED_CONNECTED_SILENT ?? "1");
 const ANSWER_MS = 110;
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -112,6 +115,13 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
       others.push(s);
       relayUrls.push(`ws://127.0.0.1:${(s.address() as { port: number }).port}`);
     }
+    for (let i = 0; i < CONNECTED_SILENT; i++) {
+      const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      wss.on("connection", () => {});
+      await new Promise((done) => wss.once("listening", done));
+      proxies.push(wss);
+      relayUrls.push(`ws://127.0.0.1:${(wss.address() as { port: number }).port}`);
+    }
     signIn = await serveDist(relayUrls.join(","));
     // A client that keeps the screen, as BitPortal's shell does: it frames the panel at a press, says hello, and
     // records when each thing it heard arrived.
@@ -126,8 +136,16 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
   window.said = [];
   addEventListener("message", (e) => { if (e.origin === SIGNIN && e.data && e.data.bitlogin === "bitlogin-panel") window.said.push({ ...e.data, at: Date.now() }); });
   window.nextMode = "account";
+  // keep: the frame is kept between openings and shown again (sign-in-window.md §SW19.8), as the shell may do.
+  window.keep = false;
   document.getElementById("open").addEventListener("click", () => {
     window.pressedAt = Date.now();
+    const kept = document.getElementById("panel");
+    if (window.keep && kept) {
+      kept.style.display = "";
+      kept.contentWindow.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "show", mode: window.nextMode }, SIGNIN);
+      return;
+    }
     window.said = [];
     const panel = document.createElement("iframe");
     panel.id = "panel";
@@ -187,6 +205,9 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
           };
         });
         const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (e) => pageErrors.push(String(e).slice(0, 300)));
+        page.on("console", (m) => m.type() === "error" && pageErrors.push(m.text().slice(0, 300)));
         const cdp = await context.newCDPSession(page);
         await cdp.send("Network.enable");
         await page.goto(`${client.origin}/`);
@@ -201,9 +222,18 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
         });
 
         /** Open the panel in a mode, at a real press, and time it until `usable` is on screen. */
-        const open = async (mode: string, usable: string, how: "cold" | "again", shownFirst?: string) => {
+        const open = async (mode: string, usable: string, how: "cold" | "again" | "kept", shownFirst?: string) => {
           if (how === "cold") await cdp.send("Network.clearBrowserCache");
-          await page.evaluate(() => document.getElementById("slot")!.replaceChildren());
+          if (how === "kept") {
+            // Hidden since the last opening, as a shell keeping it would: then shown again for this mode.
+            await page.evaluate((signin) => {
+              const kept = document.getElementById("panel") as HTMLIFrameElement;
+              kept.contentWindow!.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hide" }, signin);
+              kept.style.display = "none";
+              (window as any).keep = true;
+            }, signIn.origin);
+            await sleep(300);
+          } else await page.evaluate(() => ((window as any).keep = false, document.getElementById("slot")!.replaceChildren()));
           await page.evaluate((m) => ((window as any).nextMode = m), mode);
           downloads.length = 0;
           const askedFrom = asked.length;
@@ -215,7 +245,24 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
             shownAt = Date.now();
           }
           // Whichever of the screens named shows: the first of them that is visible.
-          await frame().locator(usable).filter({ visible: true }).first().waitFor({ state: "visible", timeout: 90_000 });
+          const reached = await frame()
+            .locator(usable)
+            .filter({ visible: true })
+            .first()
+            .waitFor({ state: "visible", timeout: 60_000 })
+            .then(() => true)
+            .catch(() => false);
+          if (!reached) {
+            // Never usable: what the panel said instead, and what went wrong in it, are kept for the report.
+            const said = await panelFrame().evaluate(() => [...document.querySelectorAll("#status, #library-note, #ecash-note, #files-note, .connect-warning:not([hidden])")].map((e) => e.textContent?.trim()).filter(Boolean)).catch(() => []);
+            // And what its worker was asked and when it answered, from the press: an action with no answer is where it stuck.
+            const stuck = await panelFrame()
+              .evaluate((from) => ((window as any).workerLog as { action: string; start: number; end?: number; ok?: boolean }[]).filter((w) => w.start >= from - 120_000).map((w) => ({ action: w.action, startMs: w.start - from, tookMs: w.end ? w.end - w.start : null, ok: w.ok })), pressedAt)
+              .catch(() => []);
+            const openRelayConnections = proxies.reduce((sum, wss) => sum + wss.clients.size, 0);
+            results.push({ mode, how, usable, failed: true, said, errors: pageErrors.splice(0), worker: stuck, openRelayConnections });
+            return null;
+          }
           const usableAt = Date.now();
           const f = panelFrame();
           const paint = (await f.evaluate(() => {
@@ -223,13 +270,14 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
             return fcp ? performance.timeOrigin + fcp.startTime : null;
           })) as number | null;
           const said = (await page.evaluate(() => (window as any).said)) as { t: string; at: number }[];
-          const work = ((await f.evaluate(() => (window as any).workerLog)) as { action: string; start: number; end?: number }[]).map((w) => ({ action: w.action, startMs: w.start - pressedAt, tookMs: w.end ? w.end - w.start : null }));
+          const work = ((await f.evaluate(() => (window as any).workerLog)) as { action: string; start: number; end?: number }[]).filter((w) => w.start >= pressedAt).map((w) => ({ action: w.action, startMs: w.start - pressedAt, tookMs: w.end ? w.end - w.start : null }));
           const questions = asked.slice(askedFrom).map((q) => ({ relay: q.relay, atMs: q.at - pressedAt, kinds: q.kinds }));
           const result = {
             mode,
             how,
-            pressToReadyMs: (said.find((m) => m.t === "ready")?.at ?? 0) - pressedAt,
-            pressToFirstPaintMs: paint ? Math.round(paint - pressedAt) : null,
+            usable,
+            pressToReadyMs: how === "kept" ? null : (said.find((m) => m.t === "ready")?.at ?? 0) - pressedAt,
+            pressToFirstPaintMs: how === "kept" ? null : paint ? Math.round(paint - pressedAt) : null,
             pressToSomethingShownMs: shownAt ? shownAt - pressedAt : null,
             pressToUsableMs: usableAt - pressedAt,
             files: downloads.length,
@@ -237,6 +285,8 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
             notModified: downloads.filter((d) => d.status === 304).length,
             worker: work,
             relayQuestions: questions.length,
+            /** Connections to the test's relays still open when it was usable: a pool not closed shows here. */
+            openRelayConnections: proxies.reduce((sum, wss) => sum + wss.clients.size, 0),
             relayQuestionsByKind: Object.entries(questions.reduce<Record<string, number>>((acc, q) => ((acc[q.kinds.join(",")] = (acc[q.kinds.join(",")] ?? 0) + 1), acc), {})).map(([k, n]) => `${k}:${n}`)
           };
           results.push(result);
@@ -248,6 +298,8 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
         await page.mouse.click(60, 20);
         const widget = frame().locator("#account-slot bitlogin-auth");
         await widget.locator('[data-action="goto-create"]').waitFor({ timeout: 60_000 });
+        // A press in the first 0.9 s after the panel is shown is ignored (§SW19.8), as a person's would be.
+        await sleep(1000);
         await widget.locator('[data-action="goto-create"]').click();
         await widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(`speed-${Date.now().toString(36)}`);
         await widget.locator('form[data-form="create-name"] button[type="submit"]').click();
@@ -280,7 +332,9 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
         const claimAt = Date.now();
         await frame().locator("#ecash-note").filter({ hasText: "Added 100 sats." }).waitFor({ timeout: 60_000 });
         results.push({ mode: "wallet: sats arrive after the invoice is paid", tookMs: Date.now() - claimAt, note: "polled every 2.5 s" });
-        await open("files", '[data-files="servers"], [data-files="browse"]', "again");
+        // Past "Checking with your relays": the folders are shown before the server list is read, and only then is
+        // the screen for choosing a server shown, for an account with none.
+        await open("files", '[data-files="servers"], #files:not(.files-checking) [data-files="browse"]', "again");
         if (await frame().locator('[data-files="servers"]').isVisible()) {
           await frame().locator("#files-server").fill(blossom.url);
           const addAt = Date.now();
@@ -299,7 +353,20 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
         }
         // Library is usable when its note has changed from "Opening": measured apart, as the list is there from the start.
         await open("library", '#library-note:not(:text("Opening your receipts."))', "again", "#library");
-        await writeFile(OUT, JSON.stringify({ measuredAt: new Date().toISOString(), relays: { answeringConnectMs: ANSWERING_MS, answerMs: ANSWER_MS, refusing: REFUSING, silent: SILENT }, mintAndHostDelayMs: 250, results }, null, 1));
+        // Kept between openings, hidden and shown again (§SW19.8), as the shell would. Not for a build from before
+        // `show` existed (BITLOGIN_SPEED_BEFORE).
+        for (let i = 0; i < (process.env.BITLOGIN_SPEED_BEFORE ? 0 : 2); i++) {
+          await open("account", "#account-slot bitlogin-auth .pubkey", "kept", "#account");
+          await open("wallet", '[data-ecash="home"]', "kept", "#ecash");
+          await open("files", '[data-files="browse"]', "kept", "#files");
+          await open("library", "#library-list, #library-empty:not([hidden])", "kept", "#library");
+        }
+        // What is usable for changing, past "Checking with your relays": the wallet's buttons and the folders' tools.
+        if (!process.env.BITLOGIN_SPEED_BEFORE) {
+          await open("wallet", "#ecash-go-fund:enabled", "again", "#ecash");
+          await open("files", '#files:not(.files-checking) [data-files="browse"]', "again", "#files");
+        }
+        await writeFile(OUT, JSON.stringify({ measuredAt: new Date().toISOString(), relays: { answeringConnectMs: ANSWERING_MS, answerMs: ANSWER_MS, refusing: REFUSING, silent: SILENT, connectedSilent: CONNECTED_SILENT }, mintAndHostDelayMs: 250, results }, null, 1));
         expect(results.length).toBeGreaterThan(10);
       } finally {
         await browser.close();

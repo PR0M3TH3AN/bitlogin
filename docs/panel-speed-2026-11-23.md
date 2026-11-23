@@ -4,7 +4,9 @@ Asked by the owner: "using anything in the bitlogin panels was really slow
 … Loading in wallet and files etc. Can we speed that up somehow? It needs
 to feel native." (NSWP `docs/backlog/bitlogin-panels-feel-native.md`.)
 
-**Measured only. Nothing is changed by this.**
+**First measured only; then fixes 1, 2 and 3 and the `show` message were
+built on beta and measured again with the same test: see "After the
+fixes", below.**
 
 ## How it was measured
 
@@ -188,6 +190,113 @@ first paint (0.15 to 0.4 s).
 | Never waits on the slowest relay, mint or host for what is on screen | No: 9 s per question | Yes for relays. The mint check moves behind the balance | Yes |
 | The first opening after a browser start | 1.4 to 19.6 s | About 1 to 3 s | About 1 s |
 
+## After the fixes (beta, measured 2026-11-23)
+
+The same test, the same slowed relays, mint and file host, on the same
+machine (load average 14 to 18). "Before" is main as released (6bb9673);
+"after" is beta with fixes 1, 2 and 3 and the `show` message. Seconds from
+the press; each a range over the openings measured. **Usable** is as
+before: the content on screen. For the wallet and the library that may be
+the browser's copy, marked "Checking with your relays", with nothing that
+spends or changes offered yet. **Changing** is when it is: the wallet's
+buttons enabled, the folders' tools no longer held.
+
+| Panel | Before: usable | After: usable | After: changing | Kept, shown again (§SW19.8) |
+|---|---|---|---|---|
+| account | 0.44 to 1.2 | 0.54 to 1.0 | the same | 0.03 to 0.5 |
+| wallet | 12.4 to 15.1 | **0.24 to 1.24** | 5.5 | 0.04 to 0.19 |
+| files (no folders yet) | 20.8 to 22.0 | **4.9 to 6.6** | 10.1 | 9.0 to 12.2 (see below) |
+| library | 4.7 to 7.0 | **2.9 to 3.8** | the same | 9.6 to 12.9 (see below) |
+
+Files with no folders yet has no copy in the browser to show, so it shows
+once the folders are read. With folders kept, they are shown at once, as
+the wallet is. The library's list comes from relays read quickly
+(receipts are never changed once written, below), about 2.2 s.
+
+### The relay that connects and then never answers
+
+Asked for by the owner: "Make sure a relay that connects and then never
+answers is cut off by a limit of its own." The test now has one such
+relay beside the one that never finishes its handshake (both are what
+relay.nostr.band did, at different times). Each read now has two limits of
+its own: a relay gets **3 s to accept the connection** and then **2.5 s to
+answer** a question, whatever longer timer the question had. Measured with
+it and without it (the handshake-silent relay is in both):
+
+| Panel | Before, without it | Before, with it | After, without it | After, with it |
+|---|---|---|---|---|
+| wallet | 12.1 to 13.8 | 12.4 to 15.1 | 0.29 to 0.63 | 0.24 to 1.24 |
+| files | 18.3 to 19.7 | 20.8 to 22.0 | 4.3 to 4.9 | 4.9 to 6.6 |
+| library | 4.6 to 6.4 | 4.7 to 7.0 | 2.6 to 3.0 | 2.9 to 3.8 |
+
+Before, it cost each question its whole timer (up to 6 s) and the panels 1
+to 2.5 s more; after, it costs at most the 2.5 s answer limit, and only
+where a read waits for every relay. relay.nostr.band stays in the built-in
+list, as the owner asked, and can't hold a panel up for longer than that.
+
+### Which writes this touches, and how each is protected
+
+Asked for by the orchestrator: "Quick reads are for showing, never for a
+write that replaces … Say in the report which writes this touches and how
+each is protected."
+
+- **Careful reads** (every relay that connects within 3 s is waited for,
+  each up to 2.5 s to answer; fewer answers never count as "none"): the
+  wallet, the folders, the account's own file-server list, the payment
+  settings (limit and open orders), the guest lists, and following a
+  world. Everything written after these is built on what they read.
+  - The **guest lists** were read quickly before; they are now careful, as
+    a new list is written on the one found.
+  - The **payment settings** were read quickly before; now careful, as they
+    are written whole.
+  - The **file-server list**: silence used to be read as "no servers", and
+    adding one would then have replaced the real list with just the new
+    one. Now, until a relay has answered with it, it can't be changed: the
+    folders stay on screen, read-only, and the panel says why
+    (`docs/files.md`, tested).
+  - The wallet's **limit form** waits for the limit to be read, and stays
+    held if that read fails.
+- **Quick reads** (finished when every relay has answered, or 0.7 s after
+  two have), for showing only: the servers people use, the mints people
+  recommend. Nothing is written from either.
+- **Receipts** are read quickly. What follows from that read is sending
+  again a receipt no relay answered with. A receipt record is never
+  changed once written (one record a receipt, the same words each time),
+  so sending it again can't overwrite anything newer.
+- **The browser's copy** (fix 3) is the sealed copy already kept, opened in
+  the worker as before. Showing it writes nothing, and while it is on
+  screen nothing that spends, receives or changes is offered: Pay, Send,
+  Receive, Add sats, a new mint and the limit wait for the fresh read;
+  rows and tools in Files are held. Nothing new is kept in the clear, and
+  nothing is kept unlocked longer: a hidden panel lets its worker go after
+  5 minutes, and at sign-out.
+- **Loads asked twice** while the first is still on its way share one
+  answer; a load asked after any change is asked anew (tested).
+
+### `show` and `hide`
+
+The panel takes `{ t: "show", mode }` and `{ t: "hide" }` from the
+client that framed it, checked against that client's exact origin. The
+rules a hidden panel keeps are its contract, in `docs/sign-in-window.md`
+§SW19.8: it answers nothing while hidden (a question already asked gets
+"no"), checks nothing, ignores a press for 0.9 s each time it is shown, and
+lets its worker go after 5 minutes hidden or at sign-out. Kept and shown
+again, the account and the wallet are on screen in 0.01 to 0.5 s.
+
+### Still slow
+
+- **Changing modes in a kept panel.** Shown as files or library right after
+  the wallet, it waits 9 to 13 s, because the worker answers one thing at a
+  time and the wallet's careful read and mint check are still in line. The
+  cure I propose: one line per store (wallet, files, receipts, settings),
+  so a read of one doesn't wait on another's. Changes stay in order within
+  each. Not built.
+- **The wallet's buttons at about 5.5 s**, and **files changing at about 10
+  s**: a careful read, then the server list behind the folders. Both wait
+  for the 2.5 s answer limit set by the silent relay.
+- **Sats arriving after an invoice is paid:** still about 18 s (checked
+  every 2.5 s, then written to relays). Not looked at yet.
+
 ## Who does what
 
 - **BitLogin:** fixes 1, 2 and 3, the `show` message, and trying the
@@ -195,4 +304,5 @@ first paint (0.15 to 0.4 s).
   before and after.
 - **BitPortal (the shell):** fix 4: keep the frame alive, hidden, and send
   `show`. Close it on sign-out and after a while hidden.
-- **The owner:** whether to drop relay.nostr.band from the built-in list.
+- **The owner:** kept relay.nostr.band in the built-in list (2026-11-23),
+  "but not let it hold us up": the read limits above.

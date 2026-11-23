@@ -80,11 +80,25 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
   show("loading");
   resize("tall");
 
+  /**
+   * While the browser's own copy is on screen and relays are being asked (docs/panel-speed-2026-11-23.md): it is
+   * shown, marked so, and nothing that spends, receives or changes is offered until the fresh answer is in.
+   */
+  let checking = false;
+  /** The account's limit is still being read: its form waits for it. */
+  let limiting = false;
+  const holdWhileChecking = () => {
+    for (const id of ["ecash-go-fund", "ecash-go-pay", "ecash-go-receive", "ecash-go-mint"]) $(id).disabled = checking;
+    for (const el of $("ecash-limit-form").querySelectorAll("button, select")) el.disabled = checking || limiting;
+  };
   const home = () => {
     const state = wallet.state();
-    if (state.mints.length === 0) return show("setup");
+    if (state.mints.length === 0 && !checking) return show("setup");
     $("ecash-total").textContent = wallet.balance().toLocaleString();
-    $("ecash-note").textContent = state.offline
+    holdWhileChecking();
+    $("ecash-note").textContent = checking
+      ? "Checking with your relays. This is what this browser held last time."
+      : state.offline
       ? "No relay answered, so this is the copy kept in this browser. It is still yours to spend."
       : state.unsaved
         ? "Kept in this browser. Your relays didn't take the latest change yet: it is sent again next time."
@@ -299,6 +313,8 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       const mine = funding;
       polling = setInterval(async () => {
         if (funding !== mine) return;
+        // A panel its client has hidden checks nothing: the next look, once it is shown again, will.
+        if (document.documentElement.dataset.panelHidden) return;
         try {
           if (!(await wallet.claim(mine))) return;
           const added = mine.amount;
@@ -373,6 +389,8 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
   };
   $("ecash-limit-form").onsubmit = async (e) => {
     e.preventDefault();
+    // Not before the limit is read: what is saved is written on it.
+    if (checking || limiting) return;
     busy(e.target, true);
     try {
       const kept = await worker.pay.setLimit(Number($("ecash-limit").value));
@@ -397,12 +415,44 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
   try {
     lib ??= await import("../vendor/bitlogin/bitlogin-ecash.js");
     wallet = lib.createEcashWallet(worker.ecash);
-    await wallet.open();
     // The limit is the account's. Where it can't be read, the default stands: never "no limit" by accident.
-    limitSats = await worker.pay
-      .settings()
-      .then((kept) => lib.cleanPayLimit(kept.limitSats))
-      .catch(() => lib.PAY_LIMIT.default);
+    const readLimit = () =>
+      worker.pay
+        .settings()
+        .then((kept) => lib.cleanPayLimit(kept.limitSats))
+        .catch(() => lib.PAY_LIMIT.default);
+    if (request) {
+      const limitRead = readLimit();
+      // A site is asking to be paid: nothing is shown until the wallet and the limit are both read, as before.
+      await wallet.open();
+      limitSats = await limitRead;
+    } else {
+      // The wallet opened by the person: what this browser held is on screen at once, marked as being checked.
+      const peeked = await wallet.peek().catch(() => null);
+      if (peeked && peeked.mints.length > 0) {
+        checking = true;
+        home();
+        resize("tall");
+      }
+      await wallet.open({ check: false });
+      checking = false;
+      // The limit, for its own form, behind the balance: the form waits for it.
+      limiting = true;
+      // Read here, as on its own: a failed read leaves the form held, as a change is written on what was read.
+      void worker.pay
+        .settings()
+        .then((kept) => {
+          limitSats = lib.cleanPayLimit(kept.limitSats);
+          limiting = false;
+          if (current === "home") home();
+        })
+        .catch(() => {});
+      // Then each mint is asked whether what is held is unspent, behind the balance, which is redrawn if it changed.
+      void wallet
+        .check()
+        .then(() => current === "home" && home())
+        .catch(() => {});
+    }
   } catch (err) {
     show("done");
     $("ecash-done-text").textContent = "Your wallet couldn't be opened. Nothing was changed.";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { framesOfClient, PANEL_CLIENTS, panelClientAllowed, panelMessage, readPanelHello, readPanelReply } from "./panel.js";
+import { framesOfClient, PANEL_CLIENTS, panelClientAllowed, panelMessage, readPanelControl, readPanelHello, readPanelReply } from "./panel.js";
 
 const REAL = "https://bitlogin.network";
 
@@ -82,5 +82,15 @@ describe("the sign-in panel (sign-in-window.md §SW19)", () => {
 describe("the panel, opened for what a person has bought (docs/paying.md)", () => {
   it("takes the mode, with no world", () => {
     expect(readPanelHello({ bitlogin: "bitlogin-panel", v: 1, t: "hello", mode: "library" })).toEqual({ t: "hello", mode: "library" });
+  });
+});
+
+describe("a panel the client keeps, shown again and hidden (sign-in-window.md §SW19.8)", () => {
+  const msg = (rest: Record<string, unknown>) => ({ bitlogin: "bitlogin-panel", v: 1, ...rest });
+  it("reads show, with a mode and a world as a hello has them, and hide", () => {
+    expect(readPanelControl(msg({ t: "show", mode: "wallet" }))).toEqual({ t: "show", mode: "wallet" });
+    expect(readPanelControl(msg({ t: "show", world: "https://gallery.bitblocks.network/x" }))).toEqual({ t: "show", mode: "ask", world: "https://gallery.bitblocks.network" });
+    expect(readPanelControl(msg({ t: "hide", mode: "wallet" }))).toEqual({ t: "hide" });
+    for (const bad of [msg({ t: "show", mode: "nonsense" }), msg({ t: "show", mode: "ask" }), msg({ t: "hello", mode: "wallet" }), { t: "show", mode: "wallet" }, msg({ t: "show", mode: "wallet", v: 2 }), null]) expect(readPanelControl(bad)).toBeNull();
   });
 });

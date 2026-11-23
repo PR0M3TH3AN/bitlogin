@@ -26,7 +26,7 @@ export { SIGN_LIMITS, type Asked } from "./policy.js";
 export { describeAsked, type AskedWords } from "./careful.js";
 export { applyChange, keepersOf, readOwnerList, resolveOwnerList, scopeOf, type GuestChange } from "./guests.js";
 export { askLockDevice } from "../lockDevice.js";
-export { PANEL_CLIENTS, panelClientAllowed, panelMessage, readPanelHello, type PanelHello, type PanelMode, type PanelToClient } from "./panel.js";
+export { PANEL_CLIENTS, panelClientAllowed, panelMessage, readPanelControl, readPanelHello, type PanelHello, type PanelMode, type PanelToClient } from "./panel.js";
 
 export interface FoundSigner {
   /** The site the signer is embedded in, as the browser reported it to the signer. Show this, exactly. */

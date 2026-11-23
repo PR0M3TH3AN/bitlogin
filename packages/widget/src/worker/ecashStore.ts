@@ -98,6 +98,11 @@ const state = (copy: LocalCopy, offline: boolean): EcashState => ({ mints: copy.
  * no relay has yet. With no relay answering, the browser's copy alone, and it
  * says so. Never "empty" because relays were silent.
  */
+/** The browser's own copy, and nothing asked of relays: to show at once, marked as being checked. It writes nothing. */
+export async function peekEcash(deps: { signer: NostrSigner; store: KeyValueStore }): Promise<EcashState> {
+  return state(await readLocal(deps.store, deps.signer), true);
+}
+
 export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStore; relays: EcashRelays; now?: number }): Promise<EcashState> {
   const { signer, store, relays } = deps;
   const me = signer.getPublicKey();
