@@ -52,12 +52,15 @@ describe("the sign-in panel (sign-in-window.md §SW19)", () => {
     expect(readPanelHello("hello")).toBeNull();
   });
 
-  it("says only that it is ready, what size it would like, and that it is done", () => {
+  it("says only that it is ready, what size it would like, that it is done, and that the account here is gone", () => {
     expect(panelMessage({ t: "ready" })).toEqual({ bitlogin: "bitlogin-panel", v: 1, t: "ready" });
-    for (const message of [{ t: "ready" }, { t: "size", size: "menu" }, { t: "size", size: "tall" }, { t: "close", allowed: true }, { t: "close", allowed: false }] as const) {
+    for (const message of [{ t: "ready" }, { t: "size", size: "menu" }, { t: "size", size: "tall" }, { t: "close", allowed: true }, { t: "close", allowed: false }, { t: "gone", why: "signed-out" }, { t: "gone", why: "locked" }] as const) {
       expect(readPanelReply(panelMessage(message))).toEqual(message);
     }
     expect(readPanelReply(panelMessage({ t: "size", size: "huge" } as never))).toBeNull();
+    // Gone says why in one of two words, and nothing more: anything else in it is not read.
+    expect(readPanelReply(panelMessage({ t: "gone", why: "deleted" } as never))).toBeNull();
+    expect(readPanelReply({ ...panelMessage({ t: "gone", why: "locked" }), pubkey: "ab" })).toEqual({ t: "gone", why: "locked" });
     // A wished height, in CSS pixels, kept within sense. The client clamps it again to what its screen allows.
     expect(readPanelReply(panelMessage({ t: "size", size: "tall", height: 541.6 }))).toEqual({ t: "size", size: "tall", height: 542 });
     expect(readPanelReply(panelMessage({ t: "size", size: "tall", height: 999999 }))).toEqual({ t: "size", size: "tall", height: 4000 });

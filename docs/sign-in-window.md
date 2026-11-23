@@ -1291,6 +1291,17 @@ Keeping it changes nothing about how long that session lasts.
   shown is the client's to say; the panel takes it at its word, and gains
   nothing from it.
 
+**When the account here goes, the panel says so.** On sign-out, or when
+the lock closes the session, the panel tells its client, shown or hidden:
+
+- `{ bitlogin: "bitlogin-panel", v: 1, t: "gone", why: "signed-out" }`
+- `{ bitlogin: "bitlogin-panel", v: 1, t: "gone", why: "locked" }`
+
+It carries nothing about the account: not who, not which key, not when.
+A client keeping the panel should remove the frame when it hears it; the
+panel has already let its worker go. A client reads only `why`, and only
+those two words. (Added on `beta`, 2026-11-23, for BitPortal's shell.)
+
 A client that doesn't keep the panel goes on as before: a new frame and a
 `hello` at each opening.
 

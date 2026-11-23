@@ -73,6 +73,44 @@ export class RelayPool {
     );
   }
 
+  /**
+   * Sent to every relay, as `publishAll`; but finished once every relay has answered, or `graceMs` after `enough` of
+   * them have taken it. A relay that connects and never answers then costs the grace, not the whole timeout. With
+   * fewer than `enough` taking it, the whole timeout is waited, so nothing is called taken out of impatience. A relay
+   * not waited for is reported as not having taken it.
+   */
+  publishEnough(event: NostrEvent, timeoutMs = 8000, enough = 2, graceMs = 1500): Promise<RelayPublishOutcome[]> {
+    const entries = [...this.connections.entries()];
+    return new Promise((resolve) => {
+      const got = new Map<string, RelayPublishOutcome>();
+      let took = 0;
+      let grace: ReturnType<typeof setTimeout> | null = null;
+      let over = false;
+      const finish = () => {
+        if (over) return;
+        over = true;
+        if (grace) clearTimeout(grace);
+        resolve(entries.map(([relayUrl]) => got.get(relayUrl) ?? { relayUrl, result: { ok: false, message: "Not waited for." } }));
+      };
+      if (entries.length === 0) return finish();
+      for (const [relayUrl, conn] of entries) {
+        conn
+          .publish(event, timeoutMs)
+          .then(
+            (result) => ({ relayUrl, result }),
+            (err: unknown) => ({ relayUrl, result: { ok: false, message: (err as Error).message } })
+          )
+          .then((outcome) => {
+            if (over) return;
+            got.set(relayUrl, outcome);
+            if (outcome.result.ok) took++;
+            if (got.size === entries.length) return finish();
+            if (took >= Math.min(enough, entries.length) && !grace) grace = setTimeout(finish, graceMs);
+          });
+      }
+    });
+  }
+
   closeAll(): void {
     for (const conn of this.connections.values()) conn.close();
   }

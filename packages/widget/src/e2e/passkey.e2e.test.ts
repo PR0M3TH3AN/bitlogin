@@ -893,6 +893,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       try {
         // The sandbox answers with this machine's own development certificate, which no browser trusts unasked.
         const context = await browser.newContext({ ignoreHTTPSErrors: !!live });
+        // A step that never finishes fails on its own, naming itself, rather than as the whole test's timeout.
+        context.setDefaultTimeout(60_000);
         const cdp = await context.newCDPSession(await context.newPage());
         await cdp.send("WebAuthn.enable");
         await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -1534,6 +1536,12 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await panel.locator("#account").waitFor({ state: "visible", timeout: 30_000 });
         expect(context.pages().length).toBe(1);
+
+        // Signed out in the panel: its client is told, in one word, so a client keeping the panel lets it go (§SW19.8).
+        // Nothing about the account goes with it.
+        await panel.locator('#account-slot bitlogin-auth [data-action="logout"]').click();
+        await page.waitForFunction(() => (window as any).said.some((m: any) => m.t === "gone"), null, { timeout: 30_000 });
+        expect((await page.evaluate(() => (window as any).said)).filter((m: any) => m.t === "gone")).toEqual([{ bitlogin: "bitlogin-panel", v: 1, t: "gone", why: "signed-out" }]);
         expect(errors).toEqual([]);
       } finally {
         await browser.close();

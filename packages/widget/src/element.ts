@@ -404,11 +404,15 @@ export class BitLoginAuthElement extends HTMLElement {
 
   /** The accounts kept on this device, read again from the worker; the view is drawn again where it shows them. */
   private async refreshAccounts(): Promise<void> {
+    const before = JSON.stringify(this.accounts);
     try {
       this.accounts = (await this.worker.accountsList()).accounts;
     } catch {
       this.accounts = [];
     }
+    // Drawn again only if the list changed: a redraw under a press that is half made loses the press (the button is
+    // replaced between pressing and letting go), and this runs just after the page opens, when a press is likeliest.
+    if (JSON.stringify(this.accounts) === before) return;
     if (this.screen === "welcome" || this.screen === "accounts" || this.screen === "dashboard") this.render();
   }
 
@@ -1792,7 +1796,8 @@ export class BitLoginAuthElement extends HTMLElement {
     this.session = null;
     clearActiveSession(this);
     this.releaseSigner();
-    if (had) this.dispatchEvent(new CustomEvent("bitlogin-logout"));
+    // Signed out by the lock: `locked` says so, for a page that tells its client why (the panel, §SW19.8).
+    if (had) this.dispatchEvent(new CustomEvent("bitlogin-logout", { detail: { locked: true } }));
     this.lockNote = "";
     this.goto("unlock");
   }

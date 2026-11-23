@@ -181,7 +181,13 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
       try {
         const context = await browser.newContext();
         // Every call to the mint and the file host takes a quarter of a second more, as a real one far away might.
-        for (const host of [mint.url, blossom.url]) await context.route(`${host}/**`, async (route) => (await sleep(250), route.continue()));
+        const mintCalls: { path: string; at: number }[] = [];
+        for (const host of [mint.url, blossom.url])
+          await context.route(`${host}/**`, async (route) => {
+            if (host === mint.url) mintCalls.push({ path: new URL(route.request().url()).pathname, at: Date.now() });
+            await sleep(250);
+            await route.continue();
+          });
         // What the page asks its worker, and when it is answered, recorded inside every frame of BitLogin's.
         await context.addInitScript(() => {
           if (!location.pathname.startsWith("/connect/")) return;
@@ -270,7 +276,10 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
             return fcp ? performance.timeOrigin + fcp.startTime : null;
           })) as number | null;
           const said = (await page.evaluate(() => (window as any).said)) as { t: string; at: number }[];
-          const work = ((await f.evaluate(() => (window as any).workerLog)) as { action: string; start: number; end?: number }[]).filter((w) => w.start >= pressedAt).map((w) => ({ action: w.action, startMs: w.start - pressedAt, tookMs: w.end ? w.end - w.start : null }));
+          const log = (await f.evaluate(() => (window as any).workerLog)) as { action: string; start: number; end?: number }[];
+          const work = log.filter((w) => w.start >= pressedAt).map((w) => ({ action: w.action, startMs: w.start - pressedAt, tookMs: w.end ? w.end - w.start : null }));
+          // Asked before the press and not answered by then: what a panel kept between openings may still be doing.
+          const stillRunning = log.filter((w) => w.start < pressedAt && (!w.end || w.end > pressedAt)).map((w) => ({ action: w.action, startMs: w.start - pressedAt, endMs: w.end ? w.end - pressedAt : null }));
           const questions = asked.slice(askedFrom).map((q) => ({ relay: q.relay, atMs: q.at - pressedAt, kinds: q.kinds }));
           const result = {
             mode,
@@ -284,9 +293,16 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
             downloadedBytes: downloads.reduce((sum, d) => sum + d.bytes, 0),
             notModified: downloads.filter((d) => d.status === 304).length,
             worker: work,
+            ...(stillRunning.length ? { stillRunning } : {}),
             relayQuestions: questions.length,
             /** Connections to the test's relays still open when it was usable: a pool not closed shows here. */
             openRelayConnections: proxies.reduce((sum, wss) => sum + wss.clients.size, 0),
+            /** When each kind was first and last asked, from the press: a load that asks in rounds shows here. */
+            relayQuestionTimes: Object.entries(questions.reduce<Record<string, [number, number]>>((acc, q) => {
+              const k = q.kinds.join(",");
+              acc[k] = acc[k] ? [Math.min(acc[k]![0], q.atMs), Math.max(acc[k]![1], q.atMs)] : [q.atMs, q.atMs];
+              return acc;
+            }, {})).map(([k, [first, last]]) => `${k}@${first}-${last}`),
             relayQuestionsByKind: Object.entries(questions.reduce<Record<string, number>>((acc, q) => ((acc[q.kinds.join(",")] = (acc[q.kinds.join(",")] ?? 0) + 1), acc), {})).map(([k, n]) => `${k}:${n}`)
           };
           results.push(result);
@@ -331,7 +347,11 @@ describe.skipIf(!playwright || !OUT)("how long BitLogin's panels take (bitlogin-
         mint.payAllFunding();
         const claimAt = Date.now();
         await frame().locator("#ecash-note").filter({ hasText: "Added 100 sats." }).waitFor({ timeout: 60_000 });
-        results.push({ mode: "wallet: sats arrive after the invoice is paid", tookMs: Date.now() - claimAt, note: "polled every 2.5 s" });
+        const claimLog = ((await panelFrame().evaluate(() => (window as any).workerLog)) as { action: string; start: number; end?: number }[])
+          .filter((w) => w.start >= claimAt - 3000)
+          .map((w) => ({ action: w.action, startMs: w.start - claimAt, tookMs: w.end ? w.end - w.start : null }));
+        const mintAsked = mintCalls.filter((a) => a.at >= claimAt - 3000).map((a) => `${a.path}@${a.at - claimAt}`);
+        results.push({ mode: "wallet: sats arrive after the invoice is paid", tookMs: Date.now() - claimAt, note: "polled every 2.5 s", worker: claimLog, mintAsked });
         // Past "Checking with your relays": the folders are shown before the server list is read, and only then is
         // the screen for choosing a server shown, for an account with none.
         await open("files", '[data-files="servers"], #files:not(.files-checking) [data-files="browse"]', "again");
