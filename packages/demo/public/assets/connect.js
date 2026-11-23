@@ -630,11 +630,15 @@ const showAccount = () => {
     const widget = makeWidget();
     // In the panel the private key is shown only to someone who has just proved who they are (§SW19.4).
     if (inPanel) widget.setAttribute("fresh-secrets", "");
-    widget.addEventListener("bitlogin-logout", () => {
+    widget.addEventListener("bitlogin-logout", (e) => {
       who = null;
       startOver();
-      // Signed out: the worker that held the session is let go at once.
-      if (inPanel) letWorkerGo();
+      // Signed out: the worker that held the session is let go at once, and a client keeping this panel between
+      // openings is told, so it lets the frame go too (§SW19.8). Shown or hidden; nothing about the account goes.
+      if (inPanel) {
+        letWorkerGo();
+        toClient({ t: "gone", why: e.detail?.locked ? "locked" : "signed-out" });
+      }
     });
     widget.addEventListener("bitlogin-login", async () => {
       who = await readCachedSession();

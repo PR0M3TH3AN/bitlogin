@@ -22,7 +22,8 @@ export interface EcashStore {
   /** The browser's own copy, asking no relay. Optional: where there is none, the wallet opens by `load` alone. */
   peek?(): Promise<EcashState>;
   setMints(mints: string[]): Promise<EcashState>;
-  roll(roll: EcashRoll): Promise<EcashState>;
+  /** `sealed`, where the store can say: called once the new proofs are sealed in this browser, before relays. */
+  roll(roll: EcashRoll, sealed?: () => void): Promise<EcashState>;
 }
 
 type Cashu = typeof import("@cashu/cashu-ts");
@@ -49,6 +50,8 @@ export interface FundQuote {
   /** The Lightning invoice to pay, to add `amount` sats. */
   invoice: string;
   quote: string;
+  /** When the mint says the invoice runs out, in seconds since 1970, where it says. */
+  expiresAt?: number;
 }
 
 export class EcashError extends Error {
@@ -163,20 +166,29 @@ export function createEcashWallet(store: EcashStore) {
       if (!Number.isSafeInteger(sats) || sats <= 0 || sats > 1_000_000) throw new EcashError("bad-input", "Choose a whole number of sats, up to a million.");
       try {
         const quote = await (await at(mint)).createMintQuoteBolt11(sats);
-        return { mint, amount: sats, invoice: quote.request, quote: quote.quote };
+        const expiresAt = typeof quote.expiry === "number" && quote.expiry > 0 ? quote.expiry : undefined;
+        return { mint, amount: sats, invoice: quote.request, quote: quote.quote, ...(expiresAt ? { expiresAt } : {}) };
       } catch (err) {
         throw mintError(err);
       }
     },
-    /** Take the sats of a funding invoice, once it is paid. Resolves false while it is not. */
-    async claim(funding: FundQuote): Promise<boolean> {
+    /**
+     * Take the sats of a funding invoice, once it is paid. Resolves false while it is not. `added` is called once the
+     * mint has issued them and they are sealed in this browser, before relays have them: from then on they are kept.
+     */
+    async claim(funding: FundQuote, added?: () => void): Promise<boolean> {
       try {
         const { MintQuoteState } = await lib();
         const wallet = await at(funding.mint);
         const checked = await wallet.checkMintQuoteBolt11(funding.quote);
         if (checked.state !== MintQuoteState.PAID) return false;
         const proofs = plain(await wallet.mintProofsBolt11(funding.amount, checked));
-        state = await store.roll({ destroy: [], keep: [{ mint: funding.mint, proofs }], history: { direction: "in", amount: sumProofs(proofs) } });
+        // Sealed in this browser: shown as held from then on, marked as not on a relay yet, until the roll's answer.
+        const sealed = () => {
+          state = { ...state, tokens: [...state.tokens, { event: "local:sealed", mint: funding.mint, proofs }], unsaved: true };
+          added?.();
+        };
+        state = await store.roll({ destroy: [], keep: [{ mint: funding.mint, proofs }], history: { direction: "in", amount: sumProofs(proofs) } }, sealed);
         return true;
       } catch (err) {
         throw mintError(err);

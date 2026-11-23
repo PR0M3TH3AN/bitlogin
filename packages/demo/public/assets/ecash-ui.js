@@ -311,22 +311,40 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       e.target.hidden = true;
       $("ecash-invoice").hidden = false;
       const mine = funding;
+      // Asked once a second while the invoice waits, one ask at a time; stopped once it is paid or runs out.
+      let asking = false;
       polling = setInterval(async () => {
-        if (funding !== mine) return;
+        if (funding !== mine || asking) return;
         // A panel its client has hidden checks nothing: the next look, once it is shown again, will.
         if (document.documentElement.dataset.panelHidden) return;
+        if (mine.expiresAt && Date.now() / 1000 > mine.expiresAt) {
+          stopPolling();
+          $("ecash-fund-status").textContent = "This invoice ran out without being paid. Nothing was added.";
+          return;
+        }
+        asking = true;
         try {
-          if (!(await wallet.claim(mine))) return;
-          const added = mine.amount;
+          // "Added" is said once the mint has issued the sats and they are sealed in this browser: from then on they
+          // are kept, whatever relays do. Until two relays have them, the note says they are still being sent.
+          const added = () => {
+            if (request || funding !== mine) return;
+            home();
+            $("ecash-note").textContent = `Added ${sats(mine.amount)}. Sending to your relays.`;
+          };
+          if (!(await wallet.claim(mine, added))) return;
           stopPolling();
           if (request) return void goOn();
           home();
-          $("ecash-note").textContent = `Added ${sats(added)}.`;
+          $("ecash-note").textContent = wallet.state().unsaved
+            ? `Added ${sats(mine.amount)}. Kept in this browser: your relays didn't take it yet, and it is sent again next time.`
+            : `Added ${sats(mine.amount)}.`;
         } catch (err) {
           stopPolling();
           fail(err);
+        } finally {
+          asking = false;
         }
-      }, 2500);
+      }, 1000);
     } catch (err) {
       fail(err);
     } finally {

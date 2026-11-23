@@ -92,8 +92,9 @@ import {
   type TakenBack
 } from "../embedded/takeBack.js";
 import { savePublicSession, clearPublicSession } from "../publicSession.js";
-import { SerialQueue } from "./serialQueue.js";
-import type { VaultConnectionSummary } from "./protocol.js";
+import { LaneQueue } from "./serialQueue.js";
+import { RelayKeeper } from "./relayKeeper.js";
+import type { VaultConnectionSummary, WorkerNotification } from "./protocol.js";
 import type {
   WorkerRequest,
   WorldSavePayload,
@@ -229,7 +230,23 @@ function applyRelaySets(sets: RelaySets): void {
   if (!hostVaultRelays) vaultRelayUrls = sets.vaultRelays;
   if (!hostDiscoveryRelays) discoveryRelayUrls = sets.discoveryRelays;
 }
-const requestQueue = new SerialQueue();
+const requestQueue = new LaneQueue();
+/**
+ * Each store's own line (docs/panel-speed-2026-11-23.md): its reads and writes run one at a time, in order, and
+ * beside the other stores'. Each touches only its own records, in this browser and on relays, and reads the session
+ * without changing it. Everything else runs alone, as every action did before: signing in and out, the lock and
+ * switching accounts wait for every line, and hold every line until they are done.
+ */
+const LANE: Record<string, string> = {
+  ecashLoad: "ecash", ecashSetMints: "ecash", ecashRoll: "ecash",
+  // Asks relays which mints people recommend, and writes nothing: a line of its own, so it holds up no wallet work.
+  ecashMints: "mints",
+  driveLoad: "drive", driveSave: "drive", blossomServers: "drive", blossomSetServers: "drive", blossomAuth: "drive",
+  receiptsLoad: "receipts", receiptsKeep: "receipts",
+  paySettingsLoad: "paySettings", paySettingsSave: "paySettings",
+  // Reads the account's profile and relay list, and keeps them only if the session is still the one that asked.
+  loadProfile: "profile", profileContent: "profile"
+};
 
 // ---- The optional lock (lock.ts, spec §21.5) ----
 
@@ -335,6 +352,8 @@ function requireApp(): HandoffApp {
 }
 
 function clearSession(): void {
+  // The kept relay connections go with the session (relayKeeper.ts): at sign-out, the lock, or another account.
+  relayKeeper.closeAll();
   session.signer?.destroy();
   if (session.everydayPrivateKey) session.everydayPrivateKey.fill(0);
   session.signer = null;
@@ -549,10 +568,30 @@ const READ_CONNECT_MS = 3000;
  * answer within a third of a second of connecting.
  */
 const READ_ANSWER_MS = 2500;
+/** The worker's relay connections, kept between actions, and the relays that failed a moment ago (relayKeeper.ts). */
+const relayKeeper = new RelayKeeper(READ_CONNECT_MS);
 const readPool = (urls: string[]): RelayPool => {
-  const pool = new RelayPool(urls, { connectTimeoutMs: READ_CONNECT_MS });
+  const pool = new RelayPool(urls, {
+    connectTimeoutMs: READ_CONNECT_MS,
+    connectionFor: relayKeeper.connectionFor,
+    notWaitedFor: relayKeeper.notWaitedFor,
+    heard: relayKeeper.heard
+  });
   const ask = pool.queryQuorum.bind(pool);
   pool.queryQuorum = (filter, timeoutMs = READ_ANSWER_MS) => ask(filter, Math.min(timeoutMs, READ_ANSWER_MS));
+  return pool;
+};
+/**
+ * How long, after two relays have taken a store's record, the rest are still given (docs/panel-speed-2026-11-23.md).
+ * The stores count a record as kept once two have, as before. Every relay that is answering takes it within this; a
+ * relay that connects and never answers cost each record its whole six seconds, one after another, and sats paid for
+ * took eighteen to show.
+ */
+const SEND_GRACE_MS = 1500;
+/** A careful read, and records sent until two relays have taken them and the rest have had their moment. */
+const storePool = (urls: string[]): RelayPool => {
+  const pool = readPool(urls);
+  pool.publishAll = (event, timeoutMs) => pool.publishEnough(event, timeoutMs, 2, SEND_GRACE_MS);
   return pool;
 };
 
@@ -690,7 +729,7 @@ function adoptNip46Client(client: Nip46Client, userPubkey: string): void {
   nip46 = { client, userPubkey };
 }
 
-async function handle(action: string, payload: unknown): Promise<unknown> {
+async function handle(action: string, payload: unknown, id = ""): Promise<unknown> {
   if (session.signerOnly && !SIGNER_ONLY_ACTIONS.has(action)) {
     throw new Error("This session can only sign. Sign in at your own BitLogin page for anything else.");
   }
@@ -1867,7 +1906,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
           finder.closeAll();
         }
       }
-      const pool = readPool([...new Set([...mine, ...vaultRelayUrls, ...(action.startsWith("blossom") ? discoveryRelayUrls : [])])].slice(0, 16));
+      const pool = storePool([...new Set([...mine, ...vaultRelayUrls, ...(action.startsWith("blossom") ? discoveryRelayUrls : [])])].slice(0, 16));
       try {
         const deps = { signer, store, relays: pool };
         if (action === "driveLoad") return await loadDrive(deps);
@@ -2037,7 +2076,7 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
       // within the limit is waited for. A receipt record is never changed once written (one record a receipt, the same
       // words each time), so sending it again can't overwrite anything newer: those may be read quickly.
       const relayUrlsHere = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
-      const pool = action === "receiptsLoad" || action === "receiptsKeep" ? quick(relayUrlsHere) : readPool(relayUrlsHere);
+      const pool = action === "receiptsLoad" || action === "receiptsKeep" ? quick(relayUrlsHere) : storePool(relayUrlsHere);
       try {
         const deps = { signer, store, relays: pool };
         if (action === "paySettingsLoad") return await loadPaySettings(deps);
@@ -2118,12 +2157,13 @@ async function handle(action: string, payload: unknown): Promise<unknown> {
         }
       } else finder.closeAll();
       const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
-      const pool = readPool(relayUrls);
+      const pool = storePool(relayUrls);
       try {
         const deps = { signer, store, relays: pool };
         if (action === "ecashLoad") return await loadEcash(deps);
         if (action === "ecashSetMints") return await setEcashMints({ ...deps, newKey: () => bytesToHex(generatePrivateKey()) }, (payload as { mints?: unknown }).mints);
-        return await rollEcash(deps, payload as EcashRoll);
+        // The page is told once the new proofs are sealed here, for that call alone: "Added" is true from then on.
+        return await rollEcash(deps, payload as EcashRoll, () => (self as unknown as Worker).postMessage({ notify: "ecash-sealed", id } satisfies WorkerNotification));
       } finally {
         pool.closeAll();
       }
@@ -2332,8 +2372,8 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
     // the queue is busy asking relays (docs/panel-speed-2026-11-23.md).
     action.startsWith("nip46") || action === "ecashPeek" || action === "drivePeek" || action === "receiptsPeek"
       ? (operation: () => Promise<unknown>) => operation()
-      : (operation: () => Promise<unknown>) => requestQueue.run(operation);
-  run(() => handle(action, payload)).then(
+      : (operation: () => Promise<unknown>) => requestQueue.run(LANE[action] ?? null, operation);
+  run(() => handle(action, payload, id)).then(
     (result) => {
       const response: WorkerResponse = { id, ok: true, result };
       (self as unknown as Worker).postMessage(response);

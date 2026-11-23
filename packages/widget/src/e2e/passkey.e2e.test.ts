@@ -893,6 +893,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       try {
         // The sandbox answers with this machine's own development certificate, which no browser trusts unasked.
         const context = await browser.newContext({ ignoreHTTPSErrors: !!live });
+        // A step that never finishes fails on its own, naming itself, rather than as the whole test's timeout.
+        context.setDefaultTimeout(60_000);
         const cdp = await context.newCDPSession(await context.newPage());
         await cdp.send("WebAuthn.enable");
         await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -1089,8 +1091,11 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/ecash-fund.png` });
           mint.payAllFunding();
           await panel.locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 30_000 });
+          // Once the mint has issued them and they are sealed here, they are shown as added, and as still going to
+          // relays; then, once two relays have them, simply added.
           expect(await panel.locator("#ecash-total").textContent()).toBe("100");
-          expect(await panel.locator("#ecash-note").textContent()).toBe("Added 100 sats.");
+          expect(await panel.locator("#ecash-note").textContent()).toMatch(/^Added 100 sats\.( Sending to your relays\.)?$/u);
+          await panel.locator("#ecash-note").filter({ hasText: /^Added 100 sats\.$/u }).waitFor({ timeout: 30_000 });
           if (process.env.BITLOGIN_SHOTS) await page.locator("#panel").screenshot({ path: `${process.env.BITLOGIN_SHOTS}/ecash-home.png` });
 
           // The world asks to be paid. It is told "asking", the panel says how much and what it may cost, and on a
@@ -1534,6 +1539,12 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await shownLongEnough(page); // a press in the panel's first 0.9 s after it is shown is ignored (§SW19.8)
         await panel.locator("#account").waitFor({ state: "visible", timeout: 30_000 });
         expect(context.pages().length).toBe(1);
+
+        // Signed out in the panel: its client is told, in one word, so a client keeping the panel lets it go (§SW19.8).
+        // Nothing about the account goes with it.
+        await panel.locator('#account-slot bitlogin-auth [data-action="logout"]').click();
+        await page.waitForFunction(() => (window as any).said.some((m: any) => m.t === "gone"), null, { timeout: 30_000 });
+        expect((await page.evaluate(() => (window as any).said)).filter((m: any) => m.t === "gone")).toEqual([{ bitlogin: "bitlogin-panel", v: 1, t: "gone", why: "signed-out" }]);
         expect(errors).toEqual([]);
       } finally {
         await browser.close();

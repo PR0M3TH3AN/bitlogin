@@ -87,7 +87,12 @@ export type PanelToClient =
    */
   | { t: "size"; size: "menu" | "tall"; height?: number }
   /** Done: close it. `allowed` says whether the world was allowed. The world learns more from its own signer. */
-  | { t: "close"; allowed: boolean };
+  | { t: "close"; allowed: boolean }
+  /**
+   * The account here is signed out, or locked: a client keeping this panel between openings should let it go now
+   * (sign-in-window.md §SW19.8). Sent whether the panel is shown or hidden. It says nothing about the account.
+   */
+  | { t: "gone"; why: "signed-out" | "locked" };
 
 export function panelMessage(message: PanelToClient | PanelHello): Record<string, unknown> {
   return { bitlogin: PANEL_PROTOCOL, v: PANEL_VERSION, ...message };
@@ -120,6 +125,7 @@ export function readPanelReply(data: unknown): PanelToClient | null {
     return { t: "size", size: d.size, ...(height ? { height } : {}) };
   }
   if (d.t === "close") return { t: "close", allowed: d.allowed === true };
+  if (d.t === "gone" && (d.why === "signed-out" || d.why === "locked")) return { t: "gone", why: d.why };
   return null;
 }
 

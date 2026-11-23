@@ -110,8 +110,13 @@ export class WorkerClient {
       // Unsolicited notification frames (no id) -- currently only the NIP-46
       // auth_url, which arrives mid-call and cannot ride a response.
       const maybeNotification = msg as unknown as Partial<WorkerNotification>;
-      if (maybeNotification.notify === "nip46-auth-url" && typeof maybeNotification.url === "string") {
+      if (maybeNotification.notify === "nip46-auth-url" && typeof (maybeNotification as { url?: unknown }).url === "string") {
         this.onNotification?.(maybeNotification as WorkerNotification);
+        return;
+      }
+      if (maybeNotification.notify === "ecash-sealed") {
+        const id = (maybeNotification as { id?: unknown }).id;
+        if (typeof id === "string") this.sealed.get(id)?.();
         return;
       }
       if (typeof (msg as WorkerResponse).id !== "string") return;
@@ -152,6 +157,8 @@ export class WorkerClient {
 
   /** Loads asked again while the same one is still on its way: the panel shown twice shares one answer, not two in line. */
   private readonly inFlight = new Map<string, Promise<unknown>>();
+  /** Calls to be told when their ecash is sealed in this browser, by call id. */
+  private readonly sealed = new Map<string, () => void>();
 
   private call<A extends WorkerAction>(
     action: A,
@@ -177,13 +184,15 @@ export class WorkerClient {
   private send<A extends WorkerAction>(
     action: A,
     payload: WorkerActionMap[A][0],
-    timeoutMs: number
+    timeoutMs: number,
+    sealed?: () => void
   ): Promise<WorkerActionMap[A][1]> {
     if (this.dead) {
       return Promise.reject(new Error(this.deadReason));
     }
     const id = `${Date.now().toString(36)}-${(this.counter++).toString(36)}`;
-    return new Promise((resolve, reject) => {
+    if (sealed) this.sealed.set(id, sealed);
+    const sent = new Promise<WorkerActionMap[A][1]>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`BitLogin's ${action} call timed out.`));
@@ -192,6 +201,10 @@ export class WorkerClient {
       const request: WorkerRequest = { id, action, payload };
       this.worker.postMessage(request);
     });
+    if (!sealed) return sent;
+    const done = () => this.sealed.delete(id);
+    sent.then(done, done);
+    return sent;
   }
 
   configure(payload: ConfigurePayload) {
@@ -440,8 +453,10 @@ export class WorkerClient {
   ecashSetMints(mints: string[]) {
     return this.call("ecashSetMints", { mints });
   }
-  ecashRoll(roll: WorkerActionMap["ecashRoll"][0]) {
-    return this.call("ecashRoll", roll);
+  /** `sealed` is called when the new proofs are sealed in this browser, before relays are asked. */
+  ecashRoll(roll: WorkerActionMap["ecashRoll"][0], sealed?: () => void) {
+    this.inFlight.clear();
+    return this.send("ecashRoll", roll, CALL_TIMEOUT_MS, sealed);
   }
   vaultFindForOrigin(payload: VaultFindForOriginPayload = {}) {
     return this.call("vaultFindForOrigin", payload);

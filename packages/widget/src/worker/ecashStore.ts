@@ -179,7 +179,12 @@ export interface EcashRoll {
  * the new records, the deletion of the old, a line of history. A record no
  * relay takes stays in the browser, unsaved, and is sent again later.
  */
-export async function rollEcash(deps: { signer: NostrSigner; store: KeyValueStore; relays: EcashRelays; now?: number }, roll: EcashRoll): Promise<EcashState> {
+export async function rollEcash(
+  deps: { signer: NostrSigner; store: KeyValueStore; relays: EcashRelays; now?: number },
+  roll: EcashRoll,
+  /** Told the moment the new proofs are sealed in this browser, before any relay is asked: they can't be lost from here. */
+  sealed?: (state: EcashState) => void
+): Promise<EcashState> {
   const { signer, store, relays } = deps;
   const now = deps.now ?? Date.now() / 1000;
   const destroy = new Set(roll.destroy.filter((id) => typeof id === "string" && id.length <= 80));
@@ -196,26 +201,33 @@ export async function rollEcash(deps: { signer: NostrSigner; store: KeyValueStor
   const next: LocalCopy = { wallet: local.wallet, tokens: [...local.tokens.filter((token) => !destroy.has(token.event)), ...added] };
   // First, here. From this line on, a crash or a dead relay loses nothing.
   await writeLocal(store, signer, next);
+  sealed?.(state(next, false));
 
   const gone = [...destroy].filter((id) => !isLocal(id));
-  const created: string[] = [];
-  for (const token of added) {
-    const event = signToken(signer, { mint: token.mint, proofs: token.proofs, ...(gone.length && created.length === 0 ? { del: gone } : {}) }, now);
-    if (!accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length)) continue;
-    token.event = event.id;
-    created.push(event.id);
-  }
+  // Every new record is signed first, so the line of history can name them, and all are sent at once.
+  const signed = added.map((token, i) => signToken(signer, { mint: token.mint, proofs: token.proofs, ...(gone.length && i === 0 ? { del: gone } : {}) }, now));
+  const me = signer.getPublicKey();
+  const history =
+    roll.history && Number.isSafeInteger(roll.history.amount) && roll.history.amount > 0
+      ? signer.signEvent({ kind: HISTORY_KIND, created_at: Math.floor(now), tags: [], content: signer.nip44Encrypt(me, writeHistory({ ...roll.history, created: signed.map((event) => event.id), destroyed: gone })) })
+      : null;
+  const [took, historyTook] = await Promise.all([
+    Promise.all(signed.map(async (event) => accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length))),
+    history ? relays.publishAll(history, 6000).then((o) => accepted(o, relays.relayUrls.length)).catch(() => false) : Promise.resolve(false)
+  ]);
+  for (const [i, token] of added.entries()) if (took[i]) token.event = signed[i]!.id;
   await writeLocal(store, signer, next);
+  const allSaved = took.every(Boolean);
+  // The line of history names records that must be on relays. Where one isn't, it is sent again later under another
+  // name, so the line is taken back: no history names a record that relays don't have.
+  if (history && historyTook && !allSaved) {
+    const withdraw = signer.signEvent({ kind: 5, created_at: Math.floor(now), tags: [["e", history.id], ["k", String(HISTORY_KIND)]], content: "" });
+    await relays.publishAll(withdraw, 6000).catch(() => []);
+  }
   // The old records are deleted only once what replaced them is on relays, or where nothing replaced them.
-  const allSaved = added.every((token) => !isLocal(token.event));
   if (gone.length && allSaved) {
     const deletion = signer.signEvent({ kind: 5, created_at: Math.floor(now), tags: [...gone.map((id) => ["e", id]), ["k", String(TOKEN_KIND)]], content: "" });
     await relays.publishAll(deletion, 6000).catch(() => []);
-  }
-  if (roll.history && allSaved && Number.isSafeInteger(roll.history.amount) && roll.history.amount > 0) {
-    const me = signer.getPublicKey();
-    const history = signer.signEvent({ kind: HISTORY_KIND, created_at: Math.floor(now), tags: [], content: signer.nip44Encrypt(me, writeHistory({ ...roll.history, created, destroyed: gone })) });
-    await relays.publishAll(history, 6000).catch(() => []);
   }
   return state(next, false);
 }

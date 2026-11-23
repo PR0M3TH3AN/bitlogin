@@ -297,6 +297,191 @@ again, the account and the wallet are on screen in 0.01 to 0.5 s.
 - **Sats arriving after an invoice is paid:** still about 18 s (checked
   every 2.5 s, then written to relays). Not looked at yet.
 
+## Round two (beta, measured 2026-11-23)
+
+Asked by the orchestrator: one queue per store; where the time goes when
+sats arrive; and what the floor is for a careful read. The same test, which
+now also records what a kept panel was still doing at each press, and when
+each kind of question was asked. (Tried and taken out again: each test
+relay at an address of its own, as real ones are. It changed little.)
+
+### One line per store
+
+The worker answered one thing at a time. Now each store has a line of its
+own: the wallet, the files, the receipts, the payment settings, the mints
+people recommend, and the profile. Work in a line runs in order, as before.
+Lines run side by side. Everything else runs alone: signing in and out, the
+lock, switching accounts, and every other action. It waits for every line
+to finish what it was given, and holds every line until it's done (tested:
+`serialQueue.test.ts`).
+
+Kept and shown again, right after the wallet (seconds from the press):
+
+| Panel | Before | After |
+|---|---|---|
+| library | 9.6 to 12.9 | 3.0 to 6.3 |
+| files | 9.0 to 12.2 | 0.3 to 9.5 |
+
+Files is still slow here. Two causes, both measured:
+
+- **In this test, every action looks up the account's relay list again.**
+  The test's relays are local `ws://` addresses, which BitLogin rightly
+  never keeps as an account's relays, so the list is never found. A real
+  account keeps it for the session after the first look. Here each careful
+  read pays an extra round, 1 to 3 s. The before and after numbers both
+  carry it.
+- **Each action opens new connections to every relay.** Beside the wallet's
+  read, the folders' first round took 3.3 s instead of 0.9 s. My reading,
+  not yet proven: Chromium throttles new WebSocket connections from a page
+  that has some pending, or has had some fail recently (the refusing and
+  silent relays). The fix I propose: the worker keeps its connections open
+  between actions, and remembers for a few minutes a relay that refused or
+  never answered. Not built.
+
+### Sats arriving after an invoice is paid: 17.5 s, now 7.4 to 7.8 s
+
+Where the 17.5 s went, from the moment the invoice was paid:
+
+- up to 2.5 s until the panel next asks the mint whether it's paid;
+- 0.3 s for the mint to issue the ecash;
+- **14 s writing it to relays.** The ecash is first written in this browser,
+  sealed, and from then on is never lost. Then two records are sent, one
+  after the other, and each waited for **every** relay to take it or for
+  six seconds, so a relay that connects and never answers cost 6 s each.
+
+**Changed:** the stores' records are sent until two relays have taken
+them, then the rest get 1.5 s more (`RelayPool.publishEnough`, tested). A
+record still counts as kept only once two relays have it, as before.
+Fewer than two, and the whole time is waited. Every relay that's answering
+takes it within the 1.5 s. Only the silent one is cut short. This applies to
+the wallet, the files, the server list and the payment settings. The
+take-back record is still sent to every relay and waited for in full. The
+write now takes 3.9 to 4.5 s.
+
+**Safe to shorten further, not changed:**
+
+- Ask the mint every 1 s instead of 2.5 s: about 1 s saved on average.
+- Send the history record beside the ecash record, not after it: about 2 s.
+- Say "Added" once the mint has issued the ecash and it's sealed in this
+  browser, with "Sending to your relays" until two have it. That's about
+  3 s in all. It never shows sats before the mint has issued them, and the
+  sealed copy is what's kept first now anyway.
+
+### The careful read's floor
+
+Measured, a careful read is: connect (the slowest answering relay, 1.2 s
+here), then the answer, then **the 2.5 s answer limit if a relay connects
+and never answers**. About 3.9 s with the connected-silent relay, 1.3 to
+1.5 s without it. Plus, in this test only, the relay-list round above.
+
+Can it finish on the relays that answered while the slow ones are still
+within their limits? Not safely. Everything a wallet or a folder writes is
+built on the copy this read brings up to date: the mint list, a folder and
+the settings are each written whole. A slow relay may hold the newer one.
+What can safely be shorter:
+
+- **The answer limit.** Relays that answer did so within 0.35 s of
+  connecting. 1.5 s instead of 2.5 s still gives them four times that, and
+  saves 1 s whenever one relay is silent. It's the owner's call how much
+  margin a slow but honest relay gets.
+- **Connections kept open, and dead relays remembered** (above). The connect
+  step goes after the first read, and a relay that refused isn't asked
+  again for a while.
+
+## Round three (beta, measured 2026-11-23)
+
+The orchestrator's decisions after round two: keep connections and
+remember failed relays; take all three further steps for sats; and leave
+the answer limit at 2.5 s until this is measured.
+
+### Kept connections, and a short memory of relays that failed
+
+`worker/relayKeeper.ts`. The worker keeps one connection to each relay,
+open between actions. A relay that refused, never finished connecting, or
+connected and then didn't answer is remembered for **3 minutes**
+(`REMEMBER_FAILED_MS`). The rules:
+
+- **What a remembered relay is spared.** It's asked nothing. It is still
+  **sent every record**, without being waited for, so it has the copy when
+  it comes back (`RelayPool`, tested).
+- **What makes a read careful.** A read that left a relay out still
+  waited for every relay that hadn't failed in the last three minutes. A
+  relay is remembered only for what it did when it was really tried, and
+  only for that long. Where every relay is remembered, every relay is
+  asked anyway, so a read never asks nobody (tested).
+- **When it all closes.** Every connection is closed, and every memory
+  forgotten, when the session goes: at sign-out, at the lock, on
+  switching accounts, and when the panel's worker is let go (all of these
+  go through the worker's `clearSession`, or end the worker).
+- **Only the worker's own reads.** Signing in, recovery and the vault keep
+  their own connections, as before.
+
+### Sats after an invoice is paid
+
+- The mint is asked **every second** while the invoice waits, one ask at a
+  time. It stops once the invoice is paid or runs out ("This invoice ran
+  out without being paid. Nothing was added."). Nothing is asked while the
+  panel is hidden.
+- The **line of history is sent beside the ecash record**, not after it.
+  If the ecash record isn't taken, the history is taken back (NIP-09), so
+  no history names a record that relays don't have (tested).
+- **"Added 100 sats. Sending to your relays."** is shown once the mint has
+  issued the sats and they're sealed in this browser. The worker says so
+  for that call alone, before any relay is asked (tested). Once two
+  relays have them, it says **"Added 100 sats."** If none takes them, it
+  says they're kept in this browser and sent again next time. It never
+  says "Added" before the mint has issued.
+
+### Measured, in the test
+
+Seconds from the press:
+
+| | Round two | Round three |
+|---|---|---|
+| Sats shown as added, after the invoice is paid | 7.4 to 7.8 | **1.8** |
+| ...and on two relays | 7.4 to 7.8 | **1.9** |
+| Kept panel: files, shown after the wallet | 0.3 to 9.5 | **0.34 to 1.47** |
+| Kept panel: library, shown after the wallet | 3.0 to 6.3 | **1.35 to 1.38** |
+| Add a file server and check it | 7 to 13.6 | **2.0** |
+| New panel: files, or the wallet's buttons | 4 to 6 | 4 to 5 (unchanged) |
+
+A new panel frame starts a new worker, with no connections and no memory.
+Its first careful read still waits out the silent relay's limit. That's
+where the limits still cost: about 2.5 s, once per new worker. In a kept
+panel they were not reached.
+
+### Measured against the real relays, read-only
+
+No account, and nothing sent: one question about a key nobody uses, to
+each built-in relay, from Chromium, with the worker's limits (3 s to
+connect, 2.5 s to answer).
+
+- **A careful read on new connections: 3.0 s.** relay.nostr.band never
+  finished its handshake, and held the read for the whole 3 s connect
+  limit. relay.damus.io, relay.mostr.pub and nostr-pub.wellorder.net
+  refused. The eleven that answered connected in 0.36 to 1.5 s and
+  answered 44 to 312 ms after.
+- **The same read over kept connections, with the failed ones left out:
+  0.31 s.**
+
+So, for the answer limit: no relay that answered needed more than 0.31 s.
+With connections kept, no read reached the 2.5 s limit. A new worker pays
+the **connect** limit (3 s) for a relay that never finishes its handshake,
+not the answer limit.
+
+### What the test can't show
+
+- **Writes to real relays.** How long their OK takes, and whether they
+  refuse a record by size or rate. Measuring that needs records published
+  to public relays, which I didn't do.
+- **A real account's size.** The test's account holds one wallet record,
+  no folders and no receipts. A real one has more to verify and decrypt.
+- **The relay list being kept.** The test's relays are local `ws://`, which
+  BitLogin never keeps as an account's relays, so every action looks the
+  list up again. A real account keeps it for the session.
+- **Phones, slow networks, and throttling over a long session.** All of it
+  was measured on one desktop, on one network.
+
 ## Who does what
 
 - **BitLogin:** fixes 1, 2 and 3, the `show` message, and trying the
