@@ -18,6 +18,25 @@ site back. An app that turns the lock on sees `bitlogin-logout` on lock and
 The new network rule (`connect-src 'self' wss:`) is for BitLogin's own
 signer page, not for apps.
 
+## BitLogin's own release, before any app is vendored
+
+Each time `main` moves (added 2026-11-23, after BitPortal found the
+`release/` folder still at 6bb9673 when main was at 1e1fd01):
+
+1. Merge to `main` only on the owner's word, with the PR's head pinned.
+2. In `~/Documents/GitHub/bitlogin-main` (a worktree on `main`):
+   `git pull --ff-only`, then `npm run build:demo` **and**
+   `npm run release:artifacts`.
+3. Check `release/bitlogin-widget-v0.1.0/integrity.json` names the merge
+   commit, `SHA256SUMS.txt` checks, and every file in it is byte-identical
+   to `packages/demo/dist/vendor/bitlogin/`: the build compared with the
+   live site.
+4. Compare the demo's `dist` with bitlogin.network, file by file.
+
+An app vendors exactly that `release/` folder: the bytes built and tested
+here, not a build of the same source made elsewhere (a bundler names chunks
+differently from one machine to another).
+
 ## The steps, for each app and each live branch
 
 1. A clean worktree off `origin/<branch>`, so nobody's work in progress is
