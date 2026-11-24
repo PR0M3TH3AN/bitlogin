@@ -23,6 +23,10 @@ signer page, not for apps.
 Each time `main` moves (added 2026-11-23, after BitPortal found the
 `release/` folder still at 6bb9673 when main was at 1e1fd01):
 
+0. Commit only on a full check that passed, tested in the same command
+   (2026-11-24, after a commit followed a red run unread):
+   `scripts/full-check.sh <log> && git commit …`. A run that failed is
+   quoted as failed wherever it is quoted, even when a later run passed.
 1. Merge to `main` only on the owner's word, with the PR's head pinned.
 2. In `~/Documents/GitHub/bitlogin-main` (a worktree on `main`):
    `git pull --ff-only`, then `npm run build:demo` **and**
