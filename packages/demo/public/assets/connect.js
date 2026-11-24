@@ -556,8 +556,9 @@ const ask = () => {
  * The optional lock is on, and locked (§SW12): nothing can be handed over until it is opened, with this device's
  * own unlock where that was set up, or the PIN. A wrong try is counted; one too many signs this browser out.
  */
-const unlock = (lock, then) => {
-  status("A site is asking to sign notes as you. This browser is locked.");
+const unlock = (lock, then, words) => {
+  status(words?.status ?? "A site is asking to sign notes as you. This browser is locked.");
+  $("unlock-why").textContent = words?.why ?? "This browser is locked. Open it to answer the site that is asking.";
   $("unlock").hidden = false;
   const done = async (result) => {
     if (result.ok) {
@@ -817,25 +818,52 @@ $("deny-3").addEventListener("click", () => leave(false));
 $("deny").addEventListener("click", () => leave(false));
 $("deny-2").addEventListener("click", () => leave(false));
 $("advanced").addEventListener("click", showAccount);
-$("open-files").addEventListener("click", async () => {
+/** What the person's own pages say when nobody is signed in, and when this browser is locked. */
+const OWN_PAGES = {
+  files: { open: () => showFiles(), signIn: "Sign in first, below. Then open Files.", locked: "your files open" },
+  wallet: { open: () => showEcash(), signIn: "Sign in first, below. Then open your wallet.", locked: "your wallet opens" },
+  library: { open: () => showLibrary(), signIn: "Sign in first, below. Then open Purchases.", locked: "what you've bought opens" }
+};
+/**
+ * Open one of the person's own pages, on this panel's own worker: taken up for the account signed in here, or, where
+ * the lock holds it, opened with the PIN first (2026-11-24). The account widget below has a worker of its own, and a
+ * PIN typed there opens that one alone: this one used to stay locked, and the wallet said "Sign in first".
+ */
+const openOwnPage = async (mode) => {
+  const page = OWN_PAGES[mode];
   who = await readCachedSession();
-  if (!who) return status("Sign in first, below. Then your files open here.");
-  await (await theWorker()).restore().catch(() => null);
-  void showFiles();
-});
-$("open-ecash").addEventListener("click", async () => {
-  // The wallet needs someone signed in: the widget below is where that is done.
-  who = await readCachedSession();
-  if (!who) return status("Sign in first, below. Then your wallet opens here.");
-  await (await theWorker()).restore().catch(() => null);
-  void showEcash();
-});
-$("open-library").addEventListener("click", async () => {
-  who = await readCachedSession();
-  if (!who) return status("Sign in first, below. Then what you've bought opens here.");
-  await (await theWorker()).restore().catch(() => null);
-  void showLibrary();
-});
+  // A panel shown again, for the account its worker already took up, needn't take it up again: that would wait
+  // behind whatever the worker is still reading (§SW19.8).
+  const restored = !who ? null : worker && restoredFor === who.pubkey ? true : await (await theWorker()).restore().catch(() => null);
+  if (restored && who) {
+    restoredFor = who.pubkey;
+    return void page.open();
+  }
+  const lock = who ? await (await theWorker()).lockStatus().catch(() => null) : null;
+  if (lock?.locked) {
+    for (const id of ["ask", "ask-app", "choose", "signin", "confirm", "wallet", "ecash", "files", "shop", "library", "guests", "account"]) $(id).hidden = true;
+    toClient({ t: "size", size: "tall" });
+    return unlock(
+      lock,
+      async () => {
+        const opened = await (await theWorker()).restore().catch(() => null);
+        who = await readCachedSession();
+        if (opened && who) {
+          restoredFor = who.pubkey;
+          return void page.open();
+        }
+        showAccount();
+        status(page.signIn);
+      },
+      { status: "This browser is locked.", why: `This browser is locked. Open it, and ${page.locked} next.` }
+    );
+  }
+  showAccount();
+  status(page.signIn);
+};
+$("open-files").addEventListener("click", () => void openOwnPage("files"));
+$("open-ecash").addEventListener("click", () => void openOwnPage("wallet"));
+$("open-library").addEventListener("click", () => void openOwnPage("library"));
 $("account-back").addEventListener("click", () => void leaveAccount());
 $("close").addEventListener("click", () => leave(false));
 
@@ -863,20 +891,9 @@ const begin = async (wantsSwitch) => {
 /** Open the panel for what it is shown for: the account, a file browser, a wallet, purchases, or a world's question. */
 const route = async (mode, world) => {
   if (mode === "account") return showAccount();
-  if (mode === "files" || mode === "wallet" || mode === "library") {
-    // Straight to the file browser or the wallet. Both are the signed-in person's: with nobody signed in, the
-    // account page comes first, and says why.
-    who = await readCachedSession();
-    // A panel shown again, for the account its worker already took up, needn't take it up again: that would wait
-    // behind whatever the worker is still reading (§SW19.8).
-    const restored = !who ? null : worker && restoredFor === who.pubkey ? true : await (await theWorker()).restore().catch(() => null);
-    if (restored && who) restoredFor = who.pubkey;
-    if (!restored) {
-      showAccount();
-      status(mode === "files" ? "Sign in first, below. Then open Files." : mode === "library" ? "Sign in first, below. Then open Purchases." : "Sign in first, below. Then open your wallet.");
-    } else void (mode === "files" ? showFiles() : mode === "library" ? showLibrary() : showEcash());
-    return;
-  }
+  // Straight to the file browser, the wallet or purchases. All are the signed-in person's: with nobody signed in, the
+  // account page comes first, and says why; with the lock on, its PIN is asked first.
+  if (mode === "files" || mode === "wallet" || mode === "library") return openOwnPage(mode);
   status("Looking for the world that asked.");
   found = await findEmbeddedSigner({ inClient: true, world });
   if (!found) status("BitLogin's signer wasn't found in that world, so there is nothing to allow. The world may not support it yet.");

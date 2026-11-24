@@ -44,10 +44,9 @@ What gets built is his to order.
   relays that answered don't have a saved record and didn't delete it, the
   browser's copy drops it. Relays still hold it, but the copy should keep
   it until a mint says it is spent.
-- **The wallet straight after the lock's PIN, in the same panel,** says
-  "Sign in first" (found 2026-11-24). The sats are untouched: tried with
-  sats kept only in the browser, they were all there once the lock was
-  turned off. The panel's own fault, not yet looked into.
+- **The wallet straight after the lock's PIN** used to say "Sign in first"
+  (found 2026-11-24). Mended on beta: the panel asks for the PIN itself,
+  then opens the wallet. The sats were never touched.
 - **One relay that takes wallet records is counted as no relay.** Records
   then wait in this browser and are sent again each time, piling up copies
   on that one relay. Copies are harmless but wasteful.
