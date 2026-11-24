@@ -44,16 +44,43 @@ let client = null;
 const contentHeight = () => Math.ceil((document.querySelector(".nav")?.getBoundingClientRect().height ?? 0) + (document.querySelector("main")?.getBoundingClientRect().height ?? 0)) + 2;
 let lastSize = "menu";
 let lastHeight = 0;
+/**
+ * Until `ready`, sizes are held, and only the last is said, just before it (2026-11-24). A client shows the panel at
+ * `ready`: it is shown once, at the size its first screen needs, not grown three times as that screen draws itself.
+ */
+let holdingSizes = false;
 const toClient = (message) => {
   if (!client) return;
   // A size goes with how tall the content is, so a short page is not shown with empty space under it.
   if (message.t === "size") {
     lastSize = message.size;
+    if (holdingSizes) return;
     lastHeight = contentHeight();
     message = { ...message, height: lastHeight };
   }
   window.parent.postMessage(panelMessage(message), client);
 };
+/** The most the first `ready` waits for the first screen: well inside the six seconds a client gives a panel. */
+const READY_WAIT_MS = 3000;
+/** How long the content's height must stay as it is for the first screen to count as drawn. */
+const STILL_MS = 150;
+/** Resolves once the content's height has stayed the same for STILL_MS, or at `until`. */
+const heightStill = (until) =>
+  new Promise((done) => {
+    let height = contentHeight();
+    let since = performance.now();
+    const look = () => {
+      const now = performance.now();
+      const next = contentHeight();
+      if (Math.abs(next - height) > 4) {
+        height = next;
+        since = now;
+      }
+      if (now - since >= STILL_MS || now >= until) return done();
+      requestAnimationFrame(look);
+    };
+    requestAnimationFrame(look);
+  });
 /** The content grew or shrank (a list arrived, a step changed): the client is told the new height. */
 if (inPanel && typeof ResizeObserver === "function") {
   let waiting = false;
@@ -976,8 +1003,19 @@ if (inPanel) {
   } else {
     client = hello.client;
     $("panel-client").textContent = `shown by ${new URL(client).host}`;
-    toClient({ t: "ready" });
+    // The first screen is drawn before `ready` is said, with its size just before it: the client shows the panel once,
+    // at that size. Nothing is shown before then, so nothing is said about how tall it is.
+    holdingSizes = true;
     shown();
+    const until = performance.now() + READY_WAIT_MS;
+    const first = route(hello.mode, hello.world).catch(() => {});
+    await Promise.race([first, new Promise((done) => setTimeout(done, READY_WAIT_MS))]);
+    await heightStill(until);
+    holdingSizes = false;
+    toClient({ t: "size", size: lastSize });
+    toClient({ t: "ready" });
+    // Shown from now, by the client: the first moments in which a press is ignored count from here.
+    shownAt = performance.now();
     // A client that keeps this panel between openings shows it again, in a mode, and hides it (§SW19.8). Only the
     // page that said hello, at its exact origin, is listened to.
     addEventListener("message", (e) => {
@@ -988,7 +1026,7 @@ if (inPanel) {
       shown();
       void route(control.mode, control.world);
     });
-    await route(hello.mode, hello.world);
+    await first;
   }
 } else if (!window.opener) {
   status("This window is opened by a site, when you ask it to sign in with BitLogin. There is nothing to do here on its own.");
