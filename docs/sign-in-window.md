@@ -1178,8 +1178,8 @@ nothing about the visitor: no key, no name, no account, no public key.
 | From | `t` | Fields | Meaning |
 |---|---|---|---|
 | client | `hello` | `world?`, `mode?` | Which world asked, and what for: `"ask"` (the default when `world` is given), `"switch"` (the account chooser), `"account"` (the account pages; the default without `world`), `"files"` (straight to the person's file browser), `"wallet"` (straight to their ecash wallet). Sent again every few hundred milliseconds until `ready`. |
-| panel | `ready` | | It heard a listed client. Nothing is said to any page before this. |
-| panel | `size` | `size: "menu" \| "tall"`, `height?` | The size it would like: the menu's, or taller for sign-in and the account pages; and how tall its content is, in CSS pixels. Sent again when that changes. The client decides, and clamps both. |
+| panel | `ready` | | It heard a listed client, and its first screen is drawn (2026-11-24): its content's height has stayed still for 0.15 s, or 3 s have passed since the hello. Nothing is said to any page before the hello. |
+| panel | `size` | `size: "menu" \| "tall"`, `height?` | The size it would like: the menu's, or taller for sign-in and the account pages; and how tall its content is, in CSS pixels. The first is said just before `ready`, once: a client showing the panel at `ready` shows it at the size its first screen needs, not grown as that screen draws itself. Sent again when that changes. The client decides, and clamps both. |
 | panel | `close` | `allowed: boolean` | Done; the client removes the frame. Whether the world was allowed. The world learns the rest from its own signer. |
 
 - The panel listens only to `window.parent`, and only where the browser
