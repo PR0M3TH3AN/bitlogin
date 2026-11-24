@@ -40,10 +40,9 @@ What gets built is his to order.
   clear the site's data there until relays have them. A relay list changed
   in another app is used at the next opening. Still missing: a way to see
   which relays refuse wallet records, and to change the list in BitLogin.
-- **The browser's copy forgets what relays didn't return.** When the
-  relays that answered don't have a saved record and didn't delete it, the
-  browser's copy drops it. Relays still hold it, but the copy should keep
-  it until a mint says it is spent.
+- **The browser's copy forgot what relays didn't return.** Mended on beta
+  (2026-11-24): a saved record the answering relays lacked, and didn't
+  delete or replace, is kept until a mint says its sats are spent.
 - **The wallet straight after the lock's PIN** used to say "Sign in first"
   (found 2026-11-24). Mended on beta: the panel asks for the PIN itself,
   then opens the wallet. The sats were never touched.

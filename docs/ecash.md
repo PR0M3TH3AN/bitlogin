@@ -56,6 +56,11 @@ that means for the person.
   record at a time, each waited for. Ten changes that relays never
   confirmed then took the opening past the panel's minute, and the wallet
   said it couldn't be opened. The owner's own wallet showed that screen.
+- **A saved record the answering relays didn't return is kept**
+  (2026-11-24), unless they deleted or replaced it. The relays holding it
+  may only have been slow, or gone, and the browser's copy used to forget
+  it. Only a mint saying its sats are spent drops it, through the check
+  that follows every opening.
 - **Sats no relay has confirmed are counted and said plainly**
   (2026-11-24): "N sats are kept only in this browser so far…", with
   "don't clear this site's data in this browser" until relays have them.
