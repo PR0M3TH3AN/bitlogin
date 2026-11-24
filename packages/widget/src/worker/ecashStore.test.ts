@@ -99,6 +99,31 @@ describe("where an ecash wallet is kept (docs/ecash.md)", () => {
     expect([...deps.relays.events.values()].filter((e) => e.kind === TOKEN_KIND).length).toBe(1);
   });
 
+  it("opens in one sending, however many records wait in this browser and however slowly relays answer (2026-11-24)", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    // Ten changes no relay took: ten records, in this browser only.
+    deps.relays.up = false;
+    for (let i = 0; i < 10; i++) await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof(`s${i}`, 1)] }] });
+    expect((await loadEcash(deps)).tokens.filter((t) => t.event.startsWith("local:"))).toHaveLength(10);
+    // Relays that answer questions and take a while over every record sent to them, and say nothing of it.
+    deps.relays.up = true;
+    const sent: number[] = [];
+    const slow = { ...deps.relays, publishAll: async (event: NostrEvent) => (sent.push(event.kind), await new Promise((done) => setTimeout(done, 200)), [] as RelayPublishOutcome[]) };
+    const started = Date.now();
+    const opened = await loadEcash({ ...deps, relays: slow });
+    // One record for the one mint, sent once: not ten, one after another.
+    expect(sent).toEqual([TOKEN_KIND]);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(opened).toMatchObject({ offline: false, unsaved: true });
+    expect(balances(opened.tokens)).toEqual({ [MINT]: 10 });
+    // And when a relay does take it, the ten are one record there, and nothing is left only here.
+    const after = await loadEcash(deps);
+    expect(after.unsaved).toBe(false);
+    expect(balances(after.tokens)).toEqual({ [MINT]: 10 });
+    expect([...deps.relays.events.values()].filter((e) => e.kind === TOKEN_KIND)).toHaveLength(1);
+  });
+
   it("does not delete the old record until what replaces it is on a relay", async () => {
     const deps = setup();
     await setEcashMints(deps, [MINT]);
