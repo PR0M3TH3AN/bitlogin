@@ -68,6 +68,7 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
   let signIn: { server: Server; origin: string };
   let client: { server: Server; origin: string };
   let serving = "";
+  let slowBuildJson = 0;
   let before = "";
   let after = "";
 
@@ -83,6 +84,7 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         const relative = url.pathname.endsWith("/") ? `${url.pathname}index.html` : url.pathname;
         const file = join(serving, normalize(relative).replace(/^(\.\.[/\\])+/u, ""));
         if (!existsSync(file)) return void res.writeHead(404).end();
+        if (relative === "/build.json" && slowBuildJson) await sleep(slowBuildJson);
         let body: Buffer | string = await readFile(file);
         if (["/connect/index.html", "/connect/panel/index.html", "/signer/index.html"].includes(relative)) body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relays}" data-discovery-relays="${relays}">`);
         // As bitlogin.network serves them: revalidated every time.
@@ -99,13 +101,28 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
   const SIGNIN = "${signIn.origin}";
   window.said = [];
   addEventListener("message", (e) => { if (e.origin === SIGNIN && e.data && e.data.bitlogin === "bitlogin-panel") window.said.push({ ...e.data, at: Date.now() }); });
+  // As BitPortal's shell: a kept frame shown again has 1.5 s to say a size, or it is thrown away and made anew; and a
+  // ready from a kept frame held hidden is answered with hide.
+  window.thrownAway = 0;
+  addEventListener("message", (e) => {
+    if (e.origin !== SIGNIN || !e.data || e.data.t !== "ready") return;
+    const kept = document.getElementById("panel");
+    if (kept && kept.style.visibility === "hidden") kept.contentWindow.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hide" }, SIGNIN);
+  });
   window.nextMode = "account";
   window.keep = false;
   document.getElementById("open").addEventListener("click", () => {
     const kept = document.getElementById("panel");
     if (window.keep && kept) {
-      kept.style.display = "";
+      kept.style.visibility = "";
+      const from = window.said.length;
       kept.contentWindow.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "show", mode: window.nextMode }, SIGNIN);
+      setTimeout(() => {
+        if (window.said.slice(from).some((m) => m.t === "size")) return;
+        window.thrownAway++;
+        window.keep = false;
+        document.getElementById("open").click();
+      }, 1500);
       return;
     }
     const panel = document.createElement("iframe");
@@ -163,11 +180,11 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
         const controlled = await panel()!.evaluate(() => !!navigator.serviceWorker?.controller);
 
-        // ---- Kept, hidden, as the shell keeps it. Then BitLogin is released: only the release after is served.
+        // ---- Kept, hidden, as the shell keeps it (visibility: hidden, laid out as it was). Then BitLogin is released: only the release after is served.
         await page.evaluate((signin) => {
           const kept = document.getElementById("panel") as HTMLIFrameElement;
           kept.contentWindow!.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hide" }, signin);
-          kept.style.display = "none";
+          kept.style.visibility = "hidden";
           (window as any).keep = true;
         }, signIn.origin);
         await sleep(500);
@@ -196,7 +213,7 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
           await page.evaluate((signin) => {
             const kept = document.getElementById("panel") as HTMLIFrameElement;
             kept.contentWindow!.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hide" }, signin);
-            kept.style.display = "none";
+            kept.style.visibility = "hidden";
           }, signIn.origin);
           await sleep(300);
         }
@@ -228,6 +245,30 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
             .catch(() => false);
         }
         results.push({ mode: "wallet, pressed in a panel open across a release", opened: told && thenOpened, told, toldSaid, thenOpened });
+
+        // ---- A slow line and no release: build.json answers after 1.6 s, past the check's own 1.5 s. The kept frame must still be kept.
+        slowBuildJson = 1600;
+        const thrownBefore = (await page.evaluate(() => (window as any).thrownAway)) as number;
+        await page.evaluate((signin) => {
+          const kept = document.getElementById("panel") as HTMLIFrameElement;
+          kept.contentWindow!.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hide" }, signin);
+          kept.style.visibility = "hidden";
+          (window as any).keep = true;
+        }, signIn.origin);
+        await sleep(500);
+        await page.evaluate((m) => ((window as any).nextMode = m), "wallet");
+        await page.mouse.click(60, 20);
+        const slowOpened = await frame()
+          .locator(usable.wallet!)
+          .first()
+          .waitFor({ state: "visible", timeout: 30_000 })
+          .then(() => true)
+          .catch(() => false);
+        await sleep(2000);
+        const thrownAfter = (await page.evaluate(() => (window as any).thrownAway)) as number;
+        results.push({ mode: "wallet, shown again on a slow line with no release", opened: slowOpened && thrownAfter === thrownBefore, thrownAway: thrownAfter - thrownBefore });
+        slowBuildJson = 0;
+        results.push({ mode: "kept frames thrown away by the shell", opened: ((await page.evaluate(() => (window as any).thrownAway)) as number) === 0 });
       } finally {
         if (process.env.BITLOGIN_STALE_OUT) writeFileSync(process.env.BITLOGIN_STALE_OUT, JSON.stringify(results, null, 2));
         await browser.close();
@@ -236,7 +277,9 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         ["wallet", true],
         ["files", true],
         ["library", true],
-        ["wallet, pressed in a panel open across a release", true]
+        ["wallet, pressed in a panel open across a release", true],
+        ["wallet, shown again on a slow line with no release", true],
+        ["kept frames thrown away by the shell", true]
       ]);
     },
     600_000

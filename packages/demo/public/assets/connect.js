@@ -55,10 +55,13 @@ const toClient = (message) => {
   if (message.t === "size") {
     lastSize = message.size;
     if (holdingSizes) return;
-    lastHeight = contentHeight();
-    // A frame not drawn has no height to give (2026-11-24): the client's own is kept until it is drawn, and the height
-    // is said then, when the content's size is seen to change.
-    message = lastHeight > 10 && document.documentElement.clientWidth > 0 ? { ...message, height: lastHeight } : message;
+    // A frame not drawn has no height to give (2026-11-24): the client's own is kept until it is drawn. Only a height
+    // said counts as the last one: otherwise a page then drawn at the height measured undrawn would look unchanged,
+    // and its height would never be said.
+    const height = contentHeight();
+    const known = height > 10 && document.documentElement.clientWidth > 0;
+    lastHeight = known ? height : 0;
+    message = known ? { ...message, height } : message;
   }
   window.parent.postMessage(panelMessage(message), client);
 };
@@ -1024,8 +1027,11 @@ const resumeAfterReload = () => {
   try {
     const kept = JSON.parse(sessionStorage.getItem(RESUME) ?? "null");
     sessionStorage.removeItem(RESUME);
-    if (!kept || typeof kept.client !== "string" || typeof kept.mode !== "string" || !(Date.now() - kept.at < 60_000)) return null;
-    return { client: kept.client, mode: kept.mode, world: typeof kept.world === "string" ? kept.world : undefined };
+    if (!kept || typeof kept.client !== "string" || !(Date.now() - kept.at < 60_000)) return null;
+    // The mode and world are checked as a hello's are: what this page wrote for itself is held to the same rules.
+    const asked = readPanelHello({ bitlogin: "bitlogin-panel", v: 1, t: "hello", mode: kept.mode, ...(typeof kept.world === "string" ? { world: kept.world } : {}) });
+    if (!asked) return null;
+    return { client: kept.client, mode: asked.mode, world: asked.world };
   } catch {
     return null;
   }
@@ -1092,6 +1098,15 @@ if (inPanel) {
     holdingSizes = false;
     toClient({ t: "size", size: lastSize });
     toClient({ t: "ready" });
+    // `ready` went with no height (its first screen not yet drawn at the cap): its height is said as soon as there is
+    // one, on a timer, not only when the resize watcher calls, which a page too slow or not drawn may not do for long.
+    if (lastHeight === 0) {
+      const since = performance.now();
+      const look = setInterval(() => {
+        if (lastHeight > 0 || performance.now() - since > 30_000) return clearInterval(look);
+        if (contentHeight() > 10 && document.documentElement.clientWidth > 0) toClient({ t: "size", size: lastSize });
+      }, 200);
+    }
     // Shown from now, by the client: the first moments in which a press is ignored count from here.
     shownAt = performance.now();
     // A client that keeps this panel between openings shows it again, in a mode, and hides it (§SW19.8). Only the
@@ -1102,6 +1117,10 @@ if (inPanel) {
       if (!control) return;
       if (control.t === "hide") return void hide();
       shown();
+      // `show` is heard, and said so at once, with the size last said: a client waits only a moment for that before it
+      // takes the kept frame for one that doesn't know `show` (BitPortal's shell: 1.5 s). The check below may take as
+      // long, on a slow line (2026-11-24).
+      toClient({ t: "size", size: lastSize });
       // Shown again after a release: brought up to date first, then what was asked. Nothing is in hand at a showing:
       // every screen was put away when it was hidden.
       void outOfDate().then((stale) => (stale && bringUpToDate(control.mode, control.world) ? undefined : route(control.mode, control.world)));

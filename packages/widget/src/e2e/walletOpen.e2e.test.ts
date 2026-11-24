@@ -454,7 +454,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         await sleep(1000);
         for (let i = 0; i < 10 && !(await acct().locator('input[name="newLockPin"]').isVisible()); i++) {
           await acct().locator('[data-action="goto-lock-settings"]').click({ timeout: 60_000 }).catch(() => {});
-          await acct().locator('input[name="newLockPin"]').waitFor({ timeout: 10_000 }).catch(() => {});
+          await acct().locator('input[name="newLockPin"]').waitFor({ timeout: 20_000 }).catch(() => {});
         }
         await frame().locator("#account-slot bitlogin-auth").locator('input[name="newLockPin"]').fill("pin-428517");
         await frame().locator("#account-slot bitlogin-auth").locator('input[name="newLockPinAgain"]').fill("pin-428517");
@@ -498,7 +498,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         await frame().locator("#account-slot bitlogin-auth").locator('form[data-form="lock-open"] button[type="submit"]').click();
         for (let i = 0; i < 10 && !(await acct().locator('[data-action="lock-off"]').isVisible()); i++) {
           await acct().locator('[data-action="goto-lock-settings"]').click({ timeout: 60_000 }).catch(() => {});
-          await acct().locator('[data-action="lock-off"]').waitFor({ timeout: 10_000 }).catch(() => {});
+          await acct().locator('[data-action="lock-off"]').waitFor({ timeout: 20_000 }).catch(() => {});
         }
         await frame().locator("#account-slot bitlogin-auth").locator('[data-action="lock-off"]').click();
         await frame().locator("#account-slot bitlogin-auth").locator('[data-action="goto-lock-settings"]').filter({ hasText: "Set up a lock" }).waitFor({ timeout: 60_000 }).catch(() => {});

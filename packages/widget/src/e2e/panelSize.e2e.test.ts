@@ -110,10 +110,15 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
   });
 
   /** Open the panel in a mode, wait for `usable`, and say what it said: its sizes, and when. */
-  const opening = async (mode: string, usable: string, worldAsked = false, kept: { frameStyle?: string; background?: boolean; laidOutAfter?: number } = {}) => {
+  const opening = async (mode: string, usable: string, worldAsked = false, kept: { frameStyle?: string; background?: boolean; laidOutAfter?: number; deadResizeObserver?: boolean } = {}) => {
     const browser = await playwright![(process.env.BITLOGIN_PANEL_ENGINE ?? "chromium") as "chromium"].launch();
     try {
       const context = await browser.newContext();
+      // The panel's resize watcher never calling back, as in a page too slow, or not drawn, for its rendering to run.
+      if (kept.deadResizeObserver)
+        await context.addInitScript(() => {
+          if (location.pathname.startsWith("/connect/")) (window as any).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+        });
       const page = await context.newPage();
       await page.goto(`${client.origin}/`);
       await page.frameLocator("#world").frameLocator("#signer").locator("body").waitFor({ state: "attached", timeout: 30_000 });
@@ -182,6 +187,14 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
     byTheCap(r);
     expect(r.sizes[0]!.height, JSON.stringify(r)).toBeGreaterThan(100);
     expect(r.afterReady, JSON.stringify(r)).toBe(0);
+  }, 120_000);
+  it("says its height after a bare ready, once its first screen is drawn, with no resize watcher to tell it", async () => {
+    // Not laid out until ready, so ready goes out at the cap with no height; then drawn, and its height must follow.
+    const r = await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { frameStyle: "display:none", deadResizeObserver: true });
+    byTheCap(r);
+    const later = r.sizes.filter((x) => typeof x.height === "number" && x.height > 100 && x.atMs >= r.ready!);
+    expect(later.length, JSON.stringify(r)).toBeGreaterThanOrEqual(1);
+    expect(later[0]!.atMs - r.ready!, JSON.stringify(r)).toBeLessThan(1500);
   }, 120_000);
   it("says ready by the cap when the client keeps the frame far out of view until then", async () => {
     byTheCap(await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { frameStyle: "position:absolute;left:-20000px;top:-20000px" }));

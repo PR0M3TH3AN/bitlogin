@@ -1321,6 +1321,14 @@ Keeping it changes nothing about how long that session lasts.
     was opened", with one press that reloads it and opens what was asked.
   - Nothing new in the protocol: a client sees the same frame say `ready`
     again, which it already ignores, and then its sizes.
+  - At a `show`, the panel says `size` at once, with the size it last
+    said, before it checks its build. A client waits only a moment for
+    that: BitPortal's shell gives 1.5 s, then takes the kept frame for one
+    that doesn't know `show`. The check may take as long on a slow line.
+  - **What a client does:** a `ready` from a kept frame the client holds
+    hidden is answered with `hide`. A `hide` sent while the panel was
+    reloading itself reached no page, and only the client knows the frame
+    is hidden. (BitPortal: its PR 231.)
 - **With the lock on, Files, the wallet and Purchases ask for the PIN in the
   panel itself, then open** (2026-11-24). The account widget has a worker of
   its own, and a PIN typed there opens that worker alone. Straight after it,
