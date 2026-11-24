@@ -137,13 +137,21 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
   // sent again now. A proof a relay already has is the relay's: the local copy of it is dropped.
   const known = new Set(onRelays.flatMap((token) => token.proofs.map((proof) => proof.secret)));
   const next: LocalCopy = { wallet, tokens: [...onRelays] };
+  // Gathered by mint into as few records as will hold them, and all sent at once (2026-11-24): one at a time, each
+  // waited for, ten of them on relays that never say whether they took a record ran past the panel's minute, and the
+  // wallet said it couldn't be opened. Now the opening waits for one sending, however many there are.
+  const unsent = new Map<string, EcashProof[]>();
   for (const token of local.tokens.filter((t) => isLocal(t.event))) {
     const proofs = token.proofs.filter((proof) => !known.has(proof.secret));
-    if (proofs.length === 0) continue;
-    const event = signToken(signer, { mint: token.mint, proofs }, deps.now ?? Date.now() / 1000);
-    const took = accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length);
-    next.tokens.push({ event: took ? event.id : token.event, mint: token.mint, proofs });
+    for (const proof of proofs) known.add(proof.secret);
+    if (proofs.length) unsent.set(token.mint, [...(unsent.get(token.mint) ?? []), ...proofs]);
   }
+  const resend: { mint: string; proofs: EcashProof[] }[] = [];
+  for (const [mint, proofs] of unsent) for (let i = 0; i < proofs.length; i += ECASH_LIMITS.proofsWritten) resend.push({ mint, proofs: proofs.slice(i, i + ECASH_LIMITS.proofsWritten) });
+  const now = deps.now ?? Date.now() / 1000;
+  const signed = resend.map((record) => signToken(signer, record, now));
+  const took = await Promise.all(signed.map(async (event) => accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length)));
+  for (const [i, record] of resend.entries()) next.tokens.push({ event: took[i] ? signed[i]!.id : localId(), ...record });
   await writeLocal(store, signer, next);
   return state(next, false);
 }

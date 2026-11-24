@@ -48,6 +48,21 @@ that means for the person.
   twice.
 - **Their own write relays (NIP-65) and BitLogin's list,** the same place a
   take-back is kept.
+- **What waits in this browser is sent again in one go** (2026-11-24): by
+  mint, in as few records as hold it, all at once. It used to go one
+  record at a time, each waited for. Ten changes that relays never
+  confirmed then took the opening past the panel's minute, and the wallet
+  said it couldn't be opened. The owner's own wallet showed that screen.
+- **Sats no relay has confirmed are counted and said plainly**
+  (2026-11-24): "N sats are kept only in this browser so far…", with
+  "don't clear this site's data in this browser" until relays have them.
+- **Where opening fails, the screen says why and offers "Try again".** The
+  reasons it can name: relays took too long; BitLogin is locked or signed
+  out on that page; part of the page couldn't be loaded; the browser
+  wouldn't let the wallet's copy be read or kept; or the error's own
+  words. The whole reason goes to the console. A balance already on
+  screen from this browser's copy stays there, marked, with nothing that
+  spends offered until the wallet opens.
 
 ## EC3. Dealing with a mint
 

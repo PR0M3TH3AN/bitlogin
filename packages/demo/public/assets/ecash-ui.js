@@ -16,6 +16,8 @@ const host = (url) => {
 const TOO_SOON_MS = 900;
 
 let lib = null;
+/** How often the wallet's code has been asked for: after a failure, under a new address (see `opening`). */
+let tries = 0;
 let wallet = null;
 
 /**
@@ -53,6 +55,8 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     $("ecash-error").hidden = !text;
   };
   let current = "loading";
+  /** Why the last opening failed, while the browser's copy is on screen: nothing that spends is offered meanwhile. */
+  let trouble = "";
   const show = (name) => {
     current = name;
     for (const view of views) view.hidden = view.dataset.ecash !== name;
@@ -61,6 +65,8 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     $("ecash-nav").hidden = name === "loading" || name === "confirm" || name === "done" || (name === "home" && !!request) || (name === "setup" && !!request);
     $("ecash-back").textContent = name === "home" || name === "setup" ? "Back to your account" : "Back to the wallet";
     if (name !== "fund") stopPolling();
+    $("ecash-retry").hidden = !trouble;
+    if (trouble) $("ecash-nav").hidden = false;
   };
   const fail = (err) => error(err?.message || "That didn't work. Nothing was spent.");
   const busy = (form, on) => {
@@ -88,21 +94,29 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
   /** The account's limit is still being read: its form waits for it. */
   let limiting = false;
   const holdWhileChecking = () => {
-    for (const id of ["ecash-go-fund", "ecash-go-pay", "ecash-go-receive", "ecash-go-mint"]) $(id).disabled = checking;
-    for (const el of $("ecash-limit-form").querySelectorAll("button, select")) el.disabled = checking || limiting;
+    for (const id of ["ecash-go-fund", "ecash-go-pay", "ecash-go-receive", "ecash-go-mint"]) $(id).disabled = checking || !!trouble;
+    for (const el of $("ecash-limit-form").querySelectorAll("button, select")) el.disabled = checking || limiting || !!trouble;
   };
+  /** The sats no relay has confirmed yet: held in this browser's copy alone (2026-11-24). */
+  const onlyHere = () =>
+    wallet
+      .state()
+      .tokens.filter((token) => token.event.startsWith("local:"))
+      .reduce((sum, token) => sum + token.proofs.reduce((n, proof) => n + proof.amount, 0), 0);
   const home = () => {
     const state = wallet.state();
     if (state.mints.length === 0 && !checking) return show("setup");
     $("ecash-total").textContent = wallet.balance().toLocaleString();
     holdWhileChecking();
-    $("ecash-note").textContent = checking
+    $("ecash-note").textContent = trouble
+      ? troubleNote()
+      : checking
       ? "Checking with your relays. This is what this browser held last time."
-      : state.offline
-      ? "No relay answered, so this is the copy kept in this browser. It is still yours to spend."
-      : state.unsaved
-        ? "Kept in this browser. Your relays didn't take the latest change yet: it is sent again next time."
-        : "Kept with your account, sealed so only you can read it.";
+      : onlyHere() > 0
+        ? `${sats(onlyHere())} ${onlyHere() === 1 ? "is" : "are"} kept only in this browser so far. No relay has confirmed ${onlyHere() === 1 ? "it" : "them"} yet. ${onlyHere() === 1 ? "It is" : "They are"} sent again each time the wallet opens. Until then, don't clear this site's data in this browser.${state.offline ? " No relay answered just now; this is the copy kept here, still yours to spend." : ""}`
+        : state.offline
+          ? "No relay answered, so this is the copy kept in this browser. It is still yours to spend."
+          : "Kept with your account, sealed so only you can read it.";
     $("ecash-mints").replaceChildren(
       ...wallet.balances().map(({ mint, sats: held }) => {
         const row = document.createElement("li");
@@ -401,6 +415,8 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
   $("ecash-go-mint").onclick = () => show("setup");
   $("ecash-back").onclick = () => {
     if (current === "done" && request) return finish(null);
+    // The wallet couldn't be opened: Close leaves it.
+    if (current === "done" && trouble) return finish(undefined);
     if (current === "home" || (current === "setup" && wallet.state().mints.length === 0)) return finish(request ? null : undefined);
     if (request) return void goOn();
     home();
@@ -430,8 +446,25 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     await startTip();
   };
 
-  try {
-    lib ??= await import("../vendor/bitlogin/bitlogin-ecash.js");
+  /**
+   * Why the wallet couldn't be opened, in words a person can act on (2026-11-24: the screen used to say only that it
+   * couldn't). The whole reason is on the console too.
+   */
+  const whyNot = (err) => {
+    const said = `${err?.name ?? ""}: ${err?.message ?? String(err ?? "")}`;
+    if (/timed out/iu.test(said)) return "Your relays took too long to answer.";
+    if (/No identity is unlocked|can only sign/iu.test(said)) return "BitLogin is locked or signed out on this page. Sign in again, then open the wallet.";
+    if (/dynamically imported module|Importing a module script failed|error loading dynamically imported/iu.test(said))
+      return "Part of BitLogin's page couldn't be loaded, perhaps because BitLogin was just updated. Try again, or reload the page.";
+    if (/quota|indexeddb|storage/iu.test(said)) return "This browser wouldn't let BitLogin read or keep its copy of your wallet.";
+    return `Something went wrong: ${err?.message || "no reason was given"}.`;
+  };
+  const troubleNote = () => `${trouble} This is what this browser held last time, and it is still yours. Nothing was changed.`;
+
+  /** Open the wallet. Throws where it can't be: the caller says why, and offers to try again. */
+  const opening = async () => {
+    // A module that failed to load is remembered by its address, failed: tried again, it is asked for anew.
+    lib ??= await import(tries++ === 0 ? "../vendor/bitlogin/bitlogin-ecash.js" : `../vendor/bitlogin/bitlogin-ecash.js?again=${tries}`);
     wallet = lib.createEcashWallet(worker.ecash);
     // The limit is the account's. Where it can't be read, the default stands: never "no limit" by accident.
     const readLimit = () =>
@@ -471,14 +504,44 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
         .then(() => current === "home" && home())
         .catch(() => {});
     }
-  } catch (err) {
-    show("done");
-    $("ecash-done-text").textContent = "Your wallet couldn't be opened. Nothing was changed.";
-    $("ecash-nav").hidden = false;
-    $("ecash-back").textContent = "Close";
-    $("ecash-back").onclick = () => finish(request ? null : undefined);
-    return;
-  }
+  };
+  /** Open it, and where it can't be, say why and offer to try again. The balance already on screen stays there. */
+  const opened = async () => {
+    try {
+      await opening();
+      trouble = "";
+      return true;
+    } catch (err) {
+      console.error("bitlogin: the wallet couldn't be opened:", err);
+      const fromBrowser = checking;
+      checking = false;
+      trouble = whyNot(err);
+      if (fromBrowser && !request) home();
+      else {
+        show("done");
+        $("ecash-done-text").textContent = `Your wallet couldn't be opened. ${trouble} Nothing was changed.`;
+        $("ecash-back").textContent = "Close";
+      }
+      $("ecash-nav").hidden = false;
+      $("ecash-retry").hidden = false;
+      return false;
+    }
+  };
+  $("ecash-retry").onclick = async () => {
+    $("ecash-retry").hidden = true;
+    const onScreen = current === "home";
+    trouble = "";
+    if (onScreen) {
+      // The browser's copy stays on screen, marked as being checked, while relays are asked again.
+      checking = true;
+      home();
+    } else show("loading");
+    if (!(await opened())) return;
+    if (request) await goOn();
+    else home();
+  };
+
+  if (!(await opened())) return;
   if (request) await goOn();
   else home();
 }
