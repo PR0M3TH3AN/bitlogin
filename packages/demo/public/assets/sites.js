@@ -101,7 +101,10 @@ const draw = () => {
         if (words.known) item.append(el("p", `BitLogin knows this address: it is ${words.known}.`, "connect-small"));
       }
       item.append(el("p", `As ${me && me.pubkey === entry.pubkey ? me.name || "the account signed in here" : `another account (${shortKey(entry.pubkey)})`}.`));
-      if (entry.wants) {
+      if (entry.refused) {
+        item.append(el("p", "It had been allowed more than any site may now have, so BitLogin ended it."));
+        if (entry.hadNames?.length) item.append(el("p", `Data names it had been allowed: ${entry.hadNames.join(", ")}.`, "connect-small"));
+      } else if (entry.wants) {
         const can = describePermissions(entry.wants, entry.site);
         const what = el("ul");
         for (const line of [...can.ordinary, ...can.sensitive]) what.append(el("li", line));

@@ -3159,9 +3159,9 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           "post notes",
           "post reactions",
           "save its own data (testapp:)",
-          "read its own saved data"
+          "read its own saved data (testapp:)"
         ]);
-        expect(await popup.locator("#app-sensitive li").allTextContents()).toEqual(["change your profile", "delete what you have posted"]);
+        expect(await popup.locator("#app-sensitive li").allTextContents()).toEqual(["change your profile", "delete what you have posted, which can include records BitLogin keeps for you on relays"]);
         // An application BitLogin does not know is remembered for seven days, unless they untick it.
         expect(await popup.locator("#remember-app").isChecked()).toBe(true);
         expect(await popup.locator("#app-lasts").textContent()).toContain("7 days");

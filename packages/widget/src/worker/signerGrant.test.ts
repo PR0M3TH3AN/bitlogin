@@ -147,4 +147,19 @@ describe("what the embedded signer remembers for a site", () => {
     // And it is gone, so the user is asked again and sees what is asked.
     expect(store.values.size).toBe(0);
   });
+
+  it("ends a grant kept with a name no site may now hold, at once: any name, or one of BitLogin's", async () => {
+    for (const appData of [["*"], ["bitlogin-drive:"], ["nswp:"], ["b"]]) {
+      const store = new TestStore();
+      const permissions = { sign: [30078], appData, proofs: [], read: [30078], peers: [] };
+      expect(await saveSignerGrant(store, grant({ permissions }), NOW)).toBe(true);
+      expect(await loadSignerGrant(store, SITE, NOW), appData[0]).toBeNull();
+      expect(store.values.size).toBe(0);
+    }
+    // The playground's own name is kept as it was.
+    const store = new TestStore();
+    const permissions = { sign: [30078], appData: ["nswp-agents/poc/"], proofs: [], read: [30078], peers: [] };
+    await saveSignerGrant(store, grant({ permissions }), NOW);
+    expect((await loadSignerGrant(store, SITE, NOW))?.permissions).toEqual(permissions);
+  });
 });

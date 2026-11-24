@@ -16,8 +16,8 @@
  * back to this page, so it is not listed: the list cannot see it.
  */
 import { familyDomain, inFamily, knownFamily, readFamily } from "./family.js";
-import { knownAppName, readPermissions, type AppPermissions } from "./permissions.js";
-import { cleanOrigin } from "./policy.js";
+import { knownAppName, mayHold, readPermissions, type AppPermissions } from "./permissions.js";
+import { cleanName, cleanOrigin } from "./policy.js";
 
 export const ALLOWED_KEY = "bitlogin:allowed-sites:v1";
 export const ALLOWED_LIMITS = {
@@ -46,6 +46,13 @@ export interface AllowedSite {
   remembered: boolean;
   /** For an application: what it was approved for. Absent for a site that declared nothing. */
   wants?: AppPermissions;
+  /**
+   * What it was approved for is no longer anything a site may hold (a rule tightened since: docs/sign-in-window.md
+   * §SW9.3). Its grant ended, and it is listed as ended, so the person sees that it had been allowed.
+   */
+  refused?: true;
+  /** For a refused one: the data names it had been allowed, as kept, so the person can see what they were. */
+  hadNames?: string[];
 }
 
 const HEX64 = /^[0-9a-f]{64}$/u;
@@ -58,9 +65,14 @@ function readEntry(input: unknown): AllowedSite | null {
   if (!site || site !== e.site || typeof e.pubkey !== "string" || !HEX64.test(e.pubkey)) return null;
   if (typeof e.at !== "number" || typeof e.until !== "number" || !Number.isFinite(e.at) || !Number.isFinite(e.until) || e.until < e.at) return null;
   const wants = e.wants === undefined ? undefined : readPermissions(e.wants);
-  if (wants === null || (family && wants)) return null;
+  if (family && e.wants !== undefined) return null;
+  // A set that no longer reads as one, or that this site may no longer hold, is not dropped from the list without a
+  // word: the entry stays, as ended by BitLogin.
+  const refused = wants === null || (wants !== undefined && !mayHold(site, wants));
+  const had = (e.wants as { appData?: unknown } | undefined)?.appData;
+  const hadNames = refused && Array.isArray(had) ? had.filter((n): n is string => typeof n === "string").map((n) => cleanName(n)).filter(Boolean).slice(0, 8) : [];
   const members = family && Array.isArray(e.members) ? [...new Set(e.members.filter((m): m is string => inFamily(m, family)))].slice(0, ALLOWED_LIMITS.members) : [];
-  return { site, ...(members.length ? { members } : {}), pubkey: e.pubkey, at: Math.floor(e.at), until: Math.floor(e.until), remembered: e.remembered === true, ...(wants ? { wants } : {}) };
+  return { site, ...(members.length ? { members } : {}), pubkey: e.pubkey, at: Math.floor(e.at), until: Math.floor(e.until), remembered: e.remembered === true, ...(wants && !refused ? { wants } : {}), ...(refused ? { refused: true as const, ...(hadNames.length ? { hadNames } : {}) } : {}) };
 }
 
 /** The record as it was stored, read again: anything that is not an entry is dropped, and so is one long ended. Newest first. */
@@ -112,13 +124,17 @@ export function removeAllowed(list: readonly AllowedSite[], site: string, pubkey
 
 /** What an entry is, in words, for the list. `family` is the domain, for a family's entry. */
 export function describeAllowed(entry: AllowedSite, nowSeconds: number): { known: string | null; family: string | null; ended: boolean; lasts: string } {
-  const ended = entry.until <= nowSeconds;
+  const ended = entry.refused === true || entry.until <= nowSeconds;
   const family = familyDomain(entry.site) || null;
   return {
     known: family ? (knownFamily(entry.site) ? `every site at ${family}` : null) : knownAppName(entry.site),
     family,
     ended,
-    lasts: ended ? "Ended." : entry.remembered ? "Remembered on this device until then, unless you sign out there sooner." : "For one visit: it ended when that site's page was closed or loaded again, and by then at the latest."
+    lasts: entry.refused
+      ? "Ended by BitLogin: it had been allowed to write or read data under names no site may now have, such as BitLogin's own records or every application's. If you use it, it will ask you again."
+      : ended
+        ? "Ended."
+        : entry.remembered ? "Remembered on this device until then, unless you sign out there sooner." : "For one visit: it ended when that site's page was closed or loaded again, and by then at the latest."
   };
 }
 
