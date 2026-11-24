@@ -72,7 +72,16 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
     const panel = document.createElement("iframe");
     panel.id = "panel";
     panel.src = SIGNIN + "/connect/panel/";
-    panel.style.cssText = "width:420px;height:640px;border:0";
+    // How the client keeps the frame until \`ready\`: drawn (as BitPortal does), not drawn at all, or far out of view.
+    panel.style.cssText = "width:420px;height:640px;border:0;" + (window.frameStyle || "");
+    if (window.frameStyle) {
+      const show = (e) => {
+        if (e.origin !== SIGNIN || !e.data || e.data.t !== "ready") return;
+        removeEventListener("message", show);
+        panel.style.cssText = "width:420px;height:640px;border:0";
+      };
+      addEventListener("message", show);
+    }
     document.getElementById("slot").replaceChildren(panel);
     const again = setInterval(() => {
       if (window.said.some((m) => m.t === "ready")) return clearInterval(again);
@@ -93,13 +102,25 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
   });
 
   /** Open the panel in a mode, wait for `usable`, and say what it said: its sizes, and when. */
-  const opening = async (mode: string, usable: string, worldAsked = false) => {
+  const opening = async (mode: string, usable: string, worldAsked = false, kept: { frameStyle?: string; background?: boolean } = {}) => {
     const browser = await playwright!.chromium.launch();
     try {
-      const page = await browser.newPage();
+      const context = await browser.newContext();
+      const page = await context.newPage();
       await page.goto(`${client.origin}/`);
       await page.frameLocator("#world").frameLocator("#signer").locator("body").waitFor({ state: "attached", timeout: 30_000 });
+      if (kept.frameStyle) await page.evaluate((style) => ((window as any).frameStyle = style), kept.frameStyle);
       await page.evaluate(([m, w]) => (window as any).open(m, w || undefined), [mode, worldAsked ? world.origin : ""]);
+      // The visitor looks at another tab from the press until after the cap, then comes back.
+      let hiddenSaid = "";
+      if (kept.background) {
+        const other = await context.newPage();
+        await other.goto("about:blank");
+        await other.bringToFront();
+        hiddenSaid = (await page.evaluate(() => document.visibilityState)) as string;
+        await sleep(4500);
+        await page.bringToFront();
+      }
       await page.frameLocator("#panel").locator(usable).first().waitFor({ timeout: 60_000 });
       // Past any late change.
       await sleep(2500);
@@ -107,6 +128,7 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
       const openedAt = (await page.evaluate(() => (window as any).openedAt)) as number;
       const readyAt = said.findIndex((m) => m.t === "ready");
       return {
+        ...(kept.background ? { hiddenSaid } : {}),
         ready: readyAt >= 0 ? said[readyAt]!.at - openedAt : null,
         sizes: said.filter((m) => m.t === "size").map((m) => ({ size: m.size, height: m.height, atMs: m.at - openedAt })),
         afterReady: said.slice(readyAt + 1).filter((m) => m.t === "size").length,
@@ -123,6 +145,23 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
     expect(r.afterReady, JSON.stringify(r)).toBe(0);
     expect(r.sizes.length, JSON.stringify(r)).toBe(1);
   };
+
+  /** `ready` is said by the cap, whatever the browser does with a frame it isn't drawing. */
+  const byTheCap = (r: Awaited<ReturnType<typeof opening>>) => {
+    if (process.env.BITLOGIN_PANEL_SAY) appendFileSync(process.env.BITLOGIN_PANEL_SAY, `${JSON.stringify(r)}\n`);
+    expect(r.ready, JSON.stringify(r)).not.toBeNull();
+    expect(r.ready!, JSON.stringify(r)).toBeLessThan(4000);
+    expect(r.sizes.length, JSON.stringify(r)).toBeGreaterThanOrEqual(1);
+  };
+  it("says ready by the cap when the client keeps the frame undrawn (display: none) until then", async () => {
+    byTheCap(await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { frameStyle: "display:none" }));
+  }, 120_000);
+  it("says ready by the cap when the client keeps the frame far out of view until then", async () => {
+    byTheCap(await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { frameStyle: "position:absolute;left:-20000px;top:-20000px" }));
+  }, 120_000);
+  it("says ready by the cap when the visitor is on another tab from the press until after it", async () => {
+    byTheCap(await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { background: true }));
+  }, 120_000);
 
   it("is shown once, at the size its first screen needs: the account page, nobody signed in", async () => {
     once(await opening("account", '#account-slot bitlogin-auth [data-action="goto-create"]'));

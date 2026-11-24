@@ -56,7 +56,9 @@ const toClient = (message) => {
     lastSize = message.size;
     if (holdingSizes) return;
     lastHeight = contentHeight();
-    message = { ...message, height: lastHeight };
+    // A frame not drawn has no height to give (2026-11-24): the client's own is kept until it is drawn, and the height
+    // is said then, when the content's size is seen to change.
+    message = lastHeight > 10 ? { ...message, height: lastHeight } : message;
   }
   window.parent.postMessage(panelMessage(message), client);
 };
@@ -64,22 +66,30 @@ const toClient = (message) => {
 const READY_WAIT_MS = 3000;
 /** How long the content's height must stay as it is for the first screen to count as drawn. */
 const STILL_MS = 150;
-/** Resolves once the content's height has stayed the same for STILL_MS, or at `until`. */
+/**
+ * Resolves once the content's height has stayed the same for STILL_MS, or at `until`, whichever comes first. Timers,
+ * not animation frames: a browser gives none to a frame it isn't drawing (one a client keeps hidden or out of view
+ * until `ready`, or a tab in the background), and `ready` must still be said by the cap (2026-11-24).
+ */
 const heightStill = (until) =>
   new Promise((done) => {
     let height = contentHeight();
     let since = performance.now();
-    const look = () => {
+    const look = setInterval(() => {
       const now = performance.now();
       const next = contentHeight();
       if (Math.abs(next - height) > 4) {
         height = next;
         since = now;
       }
-      if (now - since >= STILL_MS || now >= until) return done();
-      requestAnimationFrame(look);
+      if (now - since >= STILL_MS) end();
+    }, 50);
+    const cap = setTimeout(() => end(), Math.max(0, until - performance.now()));
+    const end = () => {
+      clearInterval(look);
+      clearTimeout(cap);
+      done();
     };
-    requestAnimationFrame(look);
   });
 /** The content grew or shrank (a list arrived, a step changed): the client is told the new height. */
 if (inPanel && typeof ResizeObserver === "function") {
