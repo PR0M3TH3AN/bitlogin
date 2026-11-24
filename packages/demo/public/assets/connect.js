@@ -58,7 +58,7 @@ const toClient = (message) => {
     lastHeight = contentHeight();
     // A frame not drawn has no height to give (2026-11-24): the client's own is kept until it is drawn, and the height
     // is said then, when the content's size is seen to change.
-    message = lastHeight > 10 ? { ...message, height: lastHeight } : message;
+    message = lastHeight > 10 && document.documentElement.clientWidth > 0 ? { ...message, height: lastHeight } : message;
   }
   window.parent.postMessage(panelMessage(message), client);
 };
@@ -82,7 +82,10 @@ const heightStill = (until) =>
         height = next;
         since = now;
       }
-      if (now - since >= STILL_MS) end();
+      // Still, and laid out: a height of 10 or under is a page not yet laid out, and is waited past (2026-11-24, seen on
+      // the live portal: five first openings in fourteen said `ready` with no height). At the cap, whatever was last.
+      // Laid out at a width, too: a frame not drawn may be laid out at none, every line wrapped, and far too tall.
+      if (height > 10 && document.documentElement.clientWidth > 0 && now - since >= STILL_MS) end();
     }, 50);
     const cap = setTimeout(() => end(), Math.max(0, until - performance.now()));
     const end = () => {
