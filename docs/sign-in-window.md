@@ -1299,6 +1299,28 @@ Keeping it changes nothing about how long that session lasts.
   the session, and a new one starts at the next `show`.
 - **On sign-out, its worker is let go at once.** The lock is checked again
   at each `show`, as at each opening.
+- **A panel kept across a release brings itself up to date** (2026-11-24).
+  The owner met this: he was signed in, and the wallet wouldn't open until
+  he reloaded. Code for the wallet, Files and Purchases is fetched only
+  when they are opened, and a page from one release then ran the next
+  release's code against its older page. The panel isn't controlled by
+  the service worker (only BitLogin's own front pages register it), so
+  nothing kept a release together.
+  - Each build has an id, in every page (`<meta name="bitlogin-build">`)
+    and in `build.json`.
+  - At each `show`, the panel asks `build.json` which build is served,
+    waiting 1.5 s at most. If it is a newer one, the panel reloads itself
+    and comes back to what it was shown for.
+  - What it was asked is kept for a minute in its own session storage:
+    the client's address, already heard from and checked, and the mode.
+    It still speaks only to that address and hears only from it. Nothing
+    is in hand at a showing, since every screen was put away when it was
+    hidden.
+  - Opened from the account page of a panel left open, where something
+    may be typed, the page says "BitLogin has been updated since this page
+    was opened", with one press that reloads it and opens what was asked.
+  - Nothing new in the protocol: a client sees the same frame say `ready`
+    again, which it already ignores, and then its sizes.
 - **With the lock on, Files, the wallet and Purchases ask for the PIN in the
   panel itself, then open** (2026-11-24). The account widget has a worker of
   its own, and a PIN typed there opens that worker alone. Straight after it,

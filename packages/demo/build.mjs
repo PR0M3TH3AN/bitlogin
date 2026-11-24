@@ -59,6 +59,28 @@ if (channel) {
   console.log(`Marked every page as the ${channel} channel.`);
 }
 
+// Which build this is (2026-11-24): a page kept open across a release, as a shell keeps the panel, asks `build.json`
+// whether it is still the one being served, and brings itself up to date when it isn't. Its own id is in its page.
+// The id is the hash of everything built so far, so two builds of the same files have the same one.
+{
+  const { createHash } = await import("node:crypto");
+  const digest = createHash("sha256");
+  for (const path of filesBelow(outDir).sort()) {
+    digest.update(path);
+    digest.update("\0");
+    digest.update(readFileSync(join(outDir, path)));
+    digest.update("\0");
+  }
+  const build = digest.digest("hex").slice(0, 16);
+  for (const page of filesBelow(outDir).filter((path) => path.endsWith(".html"))) {
+    const file = join(outDir, page);
+    const html = readFileSync(file, "utf8");
+    if (!html.includes("</head>")) continue;
+    writeFileSync(file, html.replace("</head>", `<meta name="bitlogin-build" content="${build}" />\n</head>`));
+  }
+  writeFileSync(join(outDir, "build.json"), `${JSON.stringify({ build })}\n`);
+}
+
 const swPath = join(outDir, "sw.js");
 const swTemplate = readFileSync(swPath, "utf8");
 const artifacts = filesBelow(outDir)

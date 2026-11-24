@@ -110,6 +110,8 @@ if (inPanel && typeof ResizeObserver === "function") {
 const here = inPanel ? "panel" : "window";
 const status = (text) => {
   $("status").textContent = text;
+  // The press that reloads an out-of-date page goes with the line that says so, and with nothing else.
+  $("reload-updated").hidden = true;
 };
 /** A press sooner than a person could have read the question was meant for the site, and is ignored. */
 const TOO_SOON_MS = 900;
@@ -901,9 +903,11 @@ const openOwnPage = async (mode) => {
   showAccount();
   status(page.signIn);
 };
-$("open-files").addEventListener("click", () => void openOwnPage("files"));
-$("open-ecash").addEventListener("click", () => void openOwnPage("wallet"));
-$("open-library").addEventListener("click", () => void openOwnPage("library"));
+// Opened from the account page, where something may be typed: the person is asked, with one press, before a reload.
+const openFromButton = async (mode) => ((await outOfDate()) ? updated(mode) : openOwnPage(mode));
+$("open-files").addEventListener("click", () => void openFromButton("files"));
+$("open-ecash").addEventListener("click", () => void openFromButton("wallet"));
+$("open-library").addEventListener("click", () => void openFromButton("library"));
 $("account-back").addEventListener("click", () => void leaveAccount());
 $("close").addEventListener("click", () => leave(false));
 
@@ -988,6 +992,65 @@ if (inPanel) {
   );
 }
 
+/**
+ * Which build this page is, and whether it is still the one being served (2026-11-24). A shell keeps the panel's
+ * frame between openings, and BitLogin may be released meanwhile: the wallet's, the files' and the purchases' code is
+ * fetched only when it is opened, so a page from the release before would run code from the release after against its
+ * own older page. The owner met it: signed in, and the wallet would not open until he reloaded.
+ */
+const BUILD = document.querySelector('meta[name="bitlogin-build"]')?.getAttribute("content") ?? "";
+/** Whether a newer build is being served than this page's. Not known (offline, slow, an old host): taken as current. */
+const outOfDate = async () => {
+  if (!BUILD) return false;
+  try {
+    const answer = await Promise.race([
+      fetch(new URL(inPanel ? "../../build.json" : "../build.json", location.href), { cache: "no-store" }),
+      new Promise((done) => setTimeout(() => done(null), 1500))
+    ]);
+    if (!answer || !answer.ok) return false;
+    const served = (await answer.json())?.build;
+    return typeof served === "string" && served.length > 0 && served !== BUILD;
+  } catch {
+    return false;
+  }
+};
+/**
+ * What the panel was asked, kept across its own reload, so it comes back to it: the client's address, already heard
+ * from and checked, and the mode. Only this page's own storage holds it, for a minute; messages still go only to that
+ * address and are heard only from it, from the same frame's parent.
+ */
+const RESUME = "bitlogin:panel-resume";
+const resumeAfterReload = () => {
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(RESUME) ?? "null");
+    sessionStorage.removeItem(RESUME);
+    if (!kept || typeof kept.client !== "string" || typeof kept.mode !== "string" || !(Date.now() - kept.at < 60_000)) return null;
+    return { client: kept.client, mode: kept.mode, world: typeof kept.world === "string" ? kept.world : undefined };
+  } catch {
+    return null;
+  }
+};
+/** Reload this panel, to come back to `mode`. False where nothing can be kept across it: then the person is asked. */
+const bringUpToDate = (mode, world) => {
+  try {
+    sessionStorage.setItem(RESUME, JSON.stringify({ client, mode, world, at: Date.now() }));
+  } catch {
+    return false;
+  }
+  location.reload();
+  return true;
+};
+/** BitLogin was updated while this page was open: one press brings it up to date, and opens what was asked. */
+const updated = (mode) => {
+  status("BitLogin has been updated since this page was opened. Reload it to open this.");
+  $("reload-updated").hidden = false;
+  toClient({ t: "size", size: "tall" });
+  $("reload-updated").onclick = () => {
+    $("reload-updated").hidden = true;
+    if (!inPanel || !bringUpToDate(mode)) location.reload();
+  };
+};
+
 const helloFromClient = () =>
   new Promise((resolve) => {
     const on = (e) => {
@@ -1009,7 +1072,9 @@ if (inPanel) {
   document.body.classList.add("panel");
   for (const element of document.querySelectorAll("[data-panel-only]")) element.hidden = false;
   $("panel-me").textContent = location.host;
-  const hello = window.parent === window ? null : await helloFromClient();
+  // Reloaded by itself to be up to date: what it was asked comes back, from the address already checked.
+  const resumed = window.parent === window ? null : resumeAfterReload();
+  const hello = window.parent === window ? null : resumed && panelClientAllowed(resumed.client, location.origin) ? resumed : await helloFromClient();
   if (!hello) {
     for (const element of document.querySelectorAll(".panel-foot, .panel-close")) element.hidden = true;
     status(`This panel is shown inside ${PANEL_CLIENTS.map((origin) => new URL(origin).host).join(" or ")}, where a world asks to sign you in. There is nothing to do here on its own.`);
@@ -1037,7 +1102,9 @@ if (inPanel) {
       if (!control) return;
       if (control.t === "hide") return void hide();
       shown();
-      void route(control.mode, control.world);
+      // Shown again after a release: brought up to date first, then what was asked. Nothing is in hand at a showing:
+      // every screen was put away when it was hidden.
+      void outOfDate().then((stale) => (stale && bringUpToDate(control.mode, control.world) ? undefined : route(control.mode, control.world)));
     });
     await first;
   }
