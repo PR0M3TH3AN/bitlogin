@@ -49,10 +49,15 @@ let lastHeight = 0;
  * `ready`: it is shown once, at the size its first screen needs, not grown three times as that screen draws itself.
  */
 let holdingSizes = false;
+/** Which showing holds the sizes: each `show` and each `hide` is a new one (2026-11-24). */
+let showing = 0;
 const toClient = (message) => {
   if (!client) return;
   // A size goes with how tall the content is, so a short page is not shown with empty space under it.
   if (message.t === "size") {
+    // Hidden, no size is said or kept as the last one, by any caller: its screens are put away, and the bar alone
+    // would be the height a later showing starts from (2026-11-24).
+    if (document.documentElement.dataset.panelHidden) return;
     lastSize = message.size;
     if (holdingSizes) return;
     // A frame not drawn has no height to give (2026-11-24): the client's own is kept until it is drawn. Only a height
@@ -976,6 +981,9 @@ const letWorkerGo = () => {
 };
 const hide = () => {
   document.documentElement.dataset.panelHidden = "1";
+  // A hold taken at a showing ends with it: its end, still to come, says nothing.
+  showing++;
+  holdingSizes = false;
   if (found?.ask && !finished) void found.answer(null).catch(() => false);
   finished = true;
   found = null;
@@ -1129,15 +1137,20 @@ if (inPanel) {
       // And what it was shown for is drawn before its size is said again, as at the first `ready`: a screen passing
       // through "loading" on its way is not said, so the panel isn't shrunk and grown again.
       holdingSizes = true;
+      // The hold is this showing's: a later showing or a hide takes it over, and this one's end then says nothing.
+      const mine = ++showing;
       void outOfDate().then(async (stale) => {
+        if (mine !== showing) return;
         if (stale && bringUpToDate(control.mode, control.world)) return;
         const until = performance.now() + READY_WAIT_MS;
         try {
           await Promise.race([route(control.mode, control.world), new Promise((done) => setTimeout(done, READY_WAIT_MS))]);
           await heightStill(until);
         } finally {
-          holdingSizes = false;
-          toClient({ t: "size", size: lastSize });
+          if (mine === showing) {
+            holdingSizes = false;
+            toClient({ t: "size", size: lastSize });
+          }
         }
       });
     });

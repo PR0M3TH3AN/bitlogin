@@ -278,6 +278,29 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         // Nor is a screen passing through "loading" on its way said: no size at the showing below the wallet's.
         const heights = sizesSaid.map((x) => Number(x.match(/^size:(\d+)/u)?.[1] ?? "0")).filter((h) => h > 0);
         results.push({ mode: "no smaller size said on the way to the wallet", opened: heights.every((h) => h > 300), heights });
+        // ---- Shown, hidden again inside the hold (closed within a moment), and shown again: the second showing's
+        // first size is the screen's height, not the bar's that was left when the screens were put away.
+        await page.evaluate((signin) => {
+          const kept = document.getElementById("panel") as HTMLIFrameElement;
+          kept.contentWindow!.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hide" }, signin);
+          kept.style.visibility = "hidden";
+        }, signIn.origin);
+        await sleep(500);
+        await page.mouse.click(60, 20);
+        // Inside the hold: after the build check has given up (1.5 s) and the screen is drawn, before its size is said.
+        await sleep(Number(process.env.BITLOGIN_STALE_HIDE_AT ?? "1600"));
+        await page.evaluate((signin) => {
+          const kept = document.getElementById("panel") as HTMLIFrameElement;
+          kept.contentWindow!.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hide" }, signin);
+          kept.style.visibility = "hidden";
+        }, signIn.origin);
+        await sleep(2500);
+        const againFrom = (await page.evaluate(() => (window as any).said.length)) as number;
+        await page.mouse.click(60, 20);
+        await sleep(2500);
+        const againSaid = ((await page.evaluate((from) => (window as any).said.slice(from), againFrom)) as { t: string; height?: number }[]).filter((m) => m.t === "size");
+        const againFirst = againSaid[0]?.height ?? 0;
+        results.push({ mode: "after a hide inside the hold, the next showing starts at the screen's height", opened: againFirst === 0 || againFirst > 300, againSaid: againSaid.map((m) => m.height ?? "none") });
         slowBuildJson = 0;
         results.push({ mode: "kept frames thrown away by the shell", opened: ((await page.evaluate(() => (window as any).thrownAway)) as number) === 0 });
       } finally {
@@ -292,6 +315,7 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         ["wallet, shown again on a slow line with no release", true],
         ["the first size at a showing is not the bar alone", true],
         ["no smaller size said on the way to the wallet", true],
+        ["after a hide inside the hold, the next showing starts at the screen's height", true],
         ["kept frames thrown away by the shell", true]
       ]);
     },
