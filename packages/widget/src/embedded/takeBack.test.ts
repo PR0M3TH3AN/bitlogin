@@ -112,12 +112,13 @@ describe("the take-back record (docs/take-back.md)", () => {
   it("is a kind no site can ever have signed, and a name no application can write under", () => {
     expect(NEVER_KINDS).toContain(TAKE_BACK_KIND);
     expect(signClass(TAKE_BACK_KIND)).toBe("never");
-    // Even an application approved to save data under any name: BitLogin's own names are not among them. A
-    // newer, emptier record signed for an application would otherwise give back what was taken back.
-    const anything = readPermissions({ name: "App", sign: [TAKE_BACK_KIND], appData: ["*"] })!;
-    expect(anything).not.toBeNull();
-    expect(prepareForApp(anything, { kind: TAKE_BACK_KIND, content: "x", tags: [["d", "app:notes"]] }, A, NOW)).not.toBeNull();
-    expect(prepareForApp(anything, { kind: TAKE_BACK_KIND, content: "x", tags: [["d", TAKE_BACK_D]] }, A, NOW)).toBeNull();
+    // No application may be approved to save under BitLogin's names, and a set kept from before that could cover
+    // them still can't: a newer, emptier record signed for an application would otherwise give back what was taken.
+    expect(readPermissions({ name: "App", sign: [TAKE_BACK_KIND], appData: ["*"] })).toBeNull();
+    const app = readPermissions({ name: "App", sign: [TAKE_BACK_KIND], appData: ["appnotes:"] })!;
+    expect(prepareForApp(app, { kind: TAKE_BACK_KIND, content: "x", tags: [["d", "appnotes:1"]] }, A, NOW)).not.toBeNull();
+    const keptFromBefore = { sign: [TAKE_BACK_KIND], appData: ["*"], proofs: [], read: [], peers: [] };
+    expect(prepareForApp(keptFromBefore, { kind: TAKE_BACK_KIND, content: "x", tags: [["d", TAKE_BACK_D]] }, A, NOW)).toBeNull();
   });
 });
 

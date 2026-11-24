@@ -21,11 +21,29 @@ describe("the sign-in address's record of sites allowed (§SW18)", () => {
       null
     ]);
     const list = readAllowed(raw, 400);
-    expect(list.map((e) => e.site)).toEqual(["https://b.example", "https://a.example"]);
+    // A set that no longer reads as one is not dropped without a word: the site is listed, as ended by BitLogin.
+    expect(list.map((e) => e.site)).toEqual(["https://b.example", "https://f.example", "https://a.example"]);
     expect(list[0]).toMatchObject({ remembered: true, wants: { name: "B", sign: [1] } });
+    expect(list[1]).toMatchObject({ refused: true });
+    expect(list[1]!.wants).toBeUndefined();
     expect(readAllowed("not json", 0)).toEqual([]);
     expect(readAllowed(JSON.stringify({ site: "https://a.example" }), 0)).toEqual([]);
     expect(readAllowed(null, 0)).toEqual([]);
+  });
+
+  it("lists a site allowed any name, or one of BitLogin's, as ended by BitLogin, with the names it had", () => {
+    const raw = JSON.stringify([
+      entry("https://any.example", 300, { remembered: true, wants: { sign: [30078], appData: ["*"], read: [30078] } as never }),
+      entry("https://drive.example", 300, { remembered: true, wants: { sign: [30078], appData: ["bitlogin-drive:"] } as never }),
+      entry("https://ok.example", 300, { remembered: true, wants: { sign: [30078], appData: ["okapp:notes:"] } as never })
+    ]);
+    const [any, drive, ok] = readAllowed(raw, 400);
+    expect(any).toMatchObject({ site: "https://any.example", refused: true, hadNames: ["*"] });
+    expect(drive).toMatchObject({ site: "https://drive.example", refused: true, hadNames: ["bitlogin-drive:"] });
+    expect(describeAllowed(any!, 400)).toMatchObject({ ended: true });
+    expect(describeAllowed(any!, 400).lasts).toContain("Ended by BitLogin");
+    expect(ok!.refused).toBeUndefined();
+    expect(describeAllowed(ok!, 400).ended).toBe(false);
   });
 
   it("drops an entry thirty days after it ended, and keeps no more than its limit", () => {

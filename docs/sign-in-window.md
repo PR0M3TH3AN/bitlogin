@@ -294,8 +294,11 @@ remembered (§SW11).
 - `name`: what the application calls itself. Shown second, after the
   address, and never instead of it.
 - `sign`: the kinds it may have signed.
-- `appData`: prefixes of the `d` tag it may write kind 30078 under. `"*"`
-  is any prefix, for an application whose kind-30078 events have none.
+- `appData`: the names it may write and read kind 30078 under: prefixes of
+  the `d` tag. Each must be a name a site could call its own: at least
+  eight characters, ending in `/` or `:` (`"myapp:"`, `"nswp-agents/poc/"`).
+  There is no `"*"`: a set asking for any name is refused whole
+  (2026-11-24). Some names are never anyone's to ask for (§SW9.3).
 - `proofs`: the other origins it may prove the user's identity to with a
   web-request proof (kind 27235). Its own origin is always allowed and need
   not be named.
@@ -322,11 +325,23 @@ half of what it asked for fails in ways its user cannot see.
 
 | Tier | Kinds | An application |
 |---|---|---|
-| Never | Remote-signer and wallet traffic (24133, 13194, 23194, 23195); room signals (27301); kind 30078 under `bitlogin:` | Cannot ask. A set naming one is refused whole |
+| Never | Remote-signer and wallet traffic (24133, 13194, 23194, 23195); room signals (27301); kind 30078 under a reserved name: anything starting `bitlogin` (BitLogin's own: the lock, what was taken back, the files and their keys, receipts, payment settings) or `nswp:governance:` (a world owner's guest and block lists) | Cannot ask. A set naming one, or a prefix covering one, is refused whole. And it is checked on every note, whatever was granted: no such note is signed, opened or, by its address, deleted for any site |
 | Reserved | Passes and grants (27300, 27302, 27303) | Only the address they are reserved to may ask (§SW9.10). For any other site the set is no request at all |
-| Sensitive | Profile (0), follows (3), deletion (5), mute and relay lists (10000, 10002, 10050), relay sign-in (22242), kind 30078 under `"*"`, and reading messages (§SW9.5) | May ask. The window lists these apart, under a plain warning |
+| Sensitive | Profile (0), follows (3), deletion (5), mute and relay lists (10000, 10002, 10050), relay sign-in (22242), and reading messages (§SW9.5) | May ask. The window lists these apart, under a plain warning |
 | Ordinary | Everything else | May ask |
 
+- **A grant kept from before a rule tightened ends at once.** A site's
+  remembered grant is read again each time it is taken up. One whose set
+  no longer passes (any name, a name of BitLogin's, a short name, or a name
+  another address keeps) is deleted, not narrowed: the site is signed out
+  there and must ask again, and the window shows what it now asks. On the
+  account's "Sites you allowed" page it is listed as ended by BitLogin,
+  with the data names it had been allowed (2026-11-24).
+- **Data names reserved to an address.** As kinds are (§SW9.10), a known
+  application's own name under its visitors' keys is its alone:
+  `bitportal/` (a visitor's BitPortal settings) only for
+  `https://portal.bitblocks.network`. No other site may ask for it or a
+  name covering it, nor have a note under it signed.
 - **Never and Reserved are floors under the user.** No press makes these
   signable from a site they are not for. Kinds 27302 and 27303 give a world
   a terminal on the user's own computer; one careless Allow must not be able

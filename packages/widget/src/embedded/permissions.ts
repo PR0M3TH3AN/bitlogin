@@ -14,7 +14,7 @@ export interface AppPermissions {
   name?: string;
   /** Kinds it may have signed. */
   sign: number[];
-  /** Prefixes of the `d` tag it may write kind 30078 under. "*" is any. */
+  /** Prefixes of the `d` tag it may write and read kind 30078 under: names it can call its own (`APP_DATA_NAME`). */
   appData: string[];
   /** Other origins it may prove the user's identity to with a web-request proof (kind 27235). Its own is always allowed. */
   proofs: string[];
@@ -33,8 +33,41 @@ const KIND_RELAY_PROOF = 22242;
 const KIND_SEAL = 13;
 const KIND_SAVE = 37304;
 
-/** BitLogin's own names under kind 30078. No application may write them, whatever it was allowed. */
-export const RESERVED_APP_DATA_PREFIX = "bitlogin:";
+/**
+ * Names under kind 30078 that are kept under the person's own key by BitLogin or by what it signs for, and never
+ * written or opened for a site, whatever it was allowed (docs/sign-in-window.md §SW9.4). Checked on each note itself,
+ * and no prefix that starts with one, or that one starts with, may be granted.
+ *
+ * - `bitlogin`: everything of BitLogin's, `bitlogin:` and `bitlogin-` alike: the lock, what was taken back, the
+ *   files' folders and their keys, the receipts, the payment settings.
+ * - `nswp:governance:`: a world owner's guest list and block list (embedded/guests.ts), changed only on BitLogin's
+ *   own page, one person at a time.
+ */
+export const RESERVED_APP_DATA: readonly string[] = ["bitlogin", "nswp:governance:"];
+
+/** Whether a `d` under kind 30078 is one no site may ever have written or opened. */
+export function isReservedAppData(d: string): boolean {
+  return RESERVED_APP_DATA.some((name) => d.startsWith(name));
+}
+
+/**
+ * What a granted name must look like to be a site's own: at least eight characters, ending in "/" or ":", so the
+ * name it covers is a whole one ("myapp/", "nswp-agents/poc/"), never a letter or a word that covers other
+ * applications' names. No "*": a site that could write or read every application's data under a person's key is
+ * not something one press should give.
+ */
+export const APP_DATA_NAME = { leastChars: 8 } as const;
+
+/** Whether an address ("30078:<key>:<d>") names a reserved record. */
+function reservedAddress(address: string | undefined): boolean {
+  const m = typeof address === "string" ? /^30078:[0-9a-f]{64}:(.*)$/su.exec(address) : null;
+  return !!m && isReservedAppData(m[1]!);
+}
+
+function grantableAppData(prefix: string): boolean {
+  if (prefix.length < APP_DATA_NAME.leastChars || !(prefix.endsWith("/") || prefix.endsWith(":"))) return false;
+  return !RESERVED_APP_DATA.some((name) => prefix.startsWith(name) || name.startsWith(prefix));
+}
 
 /**
  * Never signed for a site, whatever it declares and whatever the user
@@ -59,12 +92,13 @@ export const NEVER_FOR_APPS: readonly number[] = [13194, 23194, 23195, 24133, 27
  * reviewed release. Someone who serves their own sign-in address serves
  * their own list.
  */
-export const KNOWN_APPS: Readonly<Record<string, { name: string; reserved?: readonly number[] }>> = {
+export const KNOWN_APPS: Readonly<Record<string, { name: string; reserved?: readonly number[]; names?: readonly string[] }>> = {
   "https://bitvid.network": { name: "Bitvid" },
   "https://beta.bitvid.network": { name: "Bitvid (beta)" },
   "https://unstable.bitvid.network": { name: "Bitvid (unstable)" },
   "https://bitunlock.network": { name: "BitUnlock" },
-  "https://portal.bitblocks.network": { name: "BitPortal", reserved: [27300, 27302, 27303] },
+  // `bitportal/settings` is a visitor's BitPortal settings, sealed to their own key: BitPortal's to write, no one else's.
+  "https://portal.bitblocks.network": { name: "BitPortal", reserved: [27300, 27302, 27303], names: ["bitportal/"] },
   "https://imsatisfied.app": { name: "Satisfied" },
   "https://adzaps.net": { name: "AdZap" },
   "https://www.adzaps.net": { name: "AdZap" },
@@ -166,7 +200,22 @@ export const heldAsLocal = (site: string): boolean => !Object.hasOwn(KNOWN_APPS,
  */
 export function mayHold(site: string, perms: AppPermissions): boolean {
   const mine = reservedFor(site);
-  return [...perms.sign, ...perms.read].every((kind) => !RESERVED_KINDS.includes(kind) || mine.includes(kind));
+  if (![...perms.sign, ...perms.read].every((kind) => !RESERVED_KINDS.includes(kind) || mine.includes(kind))) return false;
+  // Nor a data name another address keeps under its visitors' keys, nor one that would cover it.
+  const others = namesOfOthers(site);
+  return perms.appData.every((prefix) => !others.some((name) => prefix.startsWith(name) || name.startsWith(prefix)));
+}
+
+/**
+ * The data names (kind 30078) a named address keeps under its own visitors' keys, which no other site may ask for
+ * (`KNOWN_APPS`). As with reserved kinds, where BitLogin and the site are both local copies, the site may: so it can
+ * be tried before it is live.
+ */
+export function namesOfOthers(site: string): string[] {
+  if (isLocalAddress(here()) && isLocalAddress(site)) return [];
+  return Object.entries(KNOWN_APPS)
+    .filter(([address]) => address !== site)
+    .flatMap(([, app]) => app.names ?? []);
 }
 
 /** Kinds that change how others see the user, or what reaches them. Listed apart in the window. */
@@ -212,7 +261,7 @@ export function readPermissions(input: unknown): AppPermissions | null {
 
   for (const prefix of appData) {
     if (typeof prefix !== "string" || prefix.length === 0 || prefix.length > PERMISSION_CAPS.prefixChars) return null;
-    if (prefix !== "*" && (prefix.startsWith(RESERVED_APP_DATA_PREFIX) || RESERVED_APP_DATA_PREFIX.startsWith(prefix))) return null;
+    if (!grantableAppData(prefix)) return null;
     // One line of ordinary characters: this is shown to the user.
     if (cleanName(prefix) !== prefix) return null;
   }
@@ -273,9 +322,12 @@ export const APP_SITE_TAG = "bitlogin:site";
 const tagValues = (tags: string[][], name: string): string[] => tags.filter((t) => t[0] === name && typeof t[1] === "string").map((t) => t[1]!);
 
 function allowedAppData(perms: AppPermissions, tags: string[][]): boolean {
-  const d = tagValues(tags, "d")[0];
-  if (d === undefined || d.startsWith(RESERVED_APP_DATA_PREFIX)) return false;
-  return perms.appData.some((prefix) => prefix === "*" || d.startsWith(prefix));
+  // Every "d" the note carries is held to the rule, not only the first: a relay may go by any of them.
+  const ds = tagValues(tags, "d");
+  const d = ds[0];
+  if (d === undefined || ds.some(isReservedAppData)) return false;
+  // A set kept from before the names were tightened is checked again here too, as well as where it is read.
+  return perms.appData.some((prefix) => grantableAppData(prefix) && ds.every((name) => name.startsWith(prefix)));
 }
 
 /**
@@ -337,6 +389,9 @@ export function prepareForApp(perms: AppPermissions, input: unknown, siteInput: 
     tags.push([...(tag as string[])]);
   }
   if (e.kind === KIND_APP_DATA && !allowedAppData(perms, tags)) return null;
+  if (e.kind === KIND_APP_DATA && tagValues(tags, "d").some((d) => namesOfOthers(site).some((name) => d.startsWith(name)))) return null;
+  // Nor asked to be deleted by its address: a deletion naming one of the reserved names (NIP-09 "a" tags).
+  if (e.kind === 5 && tags.some((t) => t[0] === "a" && reservedAddress(t[1]))) return null;
   if (e.kind === KIND_HTTP_PROOF && !allowedWebProof(perms, site, tags)) return null;
   // A seal carries no tags at all (NIP-59), so it cannot carry the mark either.
   if (e.kind === KIND_SEAL) {
@@ -396,7 +451,7 @@ const KIND_WORDS: Readonly<Record<number, string>> = {
   1: "post notes",
   3: "change who you follow",
   4: "send private messages (older kind)",
-  5: "delete what you have posted",
+  5: "delete what you have posted, which can include records BitLogin keeps for you on relays",
   6: "repost notes",
   7: "post reactions",
   13: "send private messages",
@@ -470,8 +525,7 @@ export function describePermissions(perms: AppPermissions, site: string): Permis
   for (const kind of perms.sign) {
     if (kind === KIND_HTTP_PROOF) continue;
     if (kind === KIND_APP_DATA) {
-      if (perms.appData.includes("*")) add(sensitive, "save application data under any name, including other applications' data");
-      else add(ordinary, `save its own data (${perms.appData.join(", ")})`);
+      add(ordinary, `save its own data (${perms.appData.join(", ")})`);
       continue;
     }
     const words = KIND_WORDS[kind];
@@ -486,8 +540,7 @@ export function describePermissions(perms: AppPermissions, site: string): Permis
 
   for (const kind of perms.read) {
     if (kind === KIND_APP_DATA) {
-      if (perms.appData.includes("*")) add(sensitive, "read application data saved under any name");
-      else add(ordinary, "read its own saved data");
+      add(ordinary, `read its own saved data (${perms.appData.join(", ")})`);
       continue;
     }
     const words = READ_WORDS[kind];

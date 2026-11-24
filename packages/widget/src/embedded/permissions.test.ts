@@ -13,6 +13,8 @@ import {
   NEVER_FOR_APPS,
   prepareForApp,
   isLocalAddress,
+  isReservedAppData,
+  RESERVED_APP_DATA,
   readPeerFor,
   reservedKindsFor,
   readPeersFor,
@@ -44,10 +46,27 @@ describe("readPermissions", () => {
   });
 
   it("refuses BitLogin's own names under application data, and any prefix that would cover them", () => {
-    for (const prefix of ["bitlogin:", "bitlogin:password:v1", "bitlogin", "bit", "b"]) {
-      expect(readPermissions({ sign: [30078], appData: [prefix] })).toBeNull();
+    for (const prefix of ["bitlogin:", "bitlogin:password:v1", "bitlogin", "bit", "b", "bitlogin-drive:", "bitlogin-pay-settings:", "bitlogin-receipt:", "bitlogin-"]) {
+      expect(readPermissions({ sign: [30078], appData: [prefix] }), prefix).toBeNull();
     }
     expect(readPermissions({ sign: [30078], appData: ["bitroad:"] })).not.toBeNull();
+  });
+
+  it("refuses a world owner's guest and block lists as application data, and any prefix that covers them", () => {
+    for (const prefix of ["nswp:governance:", "nswp:governance:user-allow:", "nswp:", "nswp"]) {
+      expect(readPermissions({ sign: [30078], read: [30078], appData: [prefix] }), prefix).toBeNull();
+    }
+  });
+
+  it("grants only a name a site could call its own: eight characters or more, ending in / or :", () => {
+    for (const prefix of ["*", "b", "myapp", "my-app-notes", "abc:", "ab/c/"]) expect(readPermissions({ sign: [30078], appData: [prefix] }), prefix).toBeNull();
+    for (const prefix of ["bitroad:", "example:", "bitportal/", "nswp-agents/poc/"]) expect(readPermissions({ sign: [30078], appData: [prefix] }), prefix).not.toBeNull();
+  });
+
+  it("refuses any name for reading or writing: a set asking for \"*\" is refused whole", () => {
+    expect(readPermissions({ sign: [30078], appData: ["*"] })).toBeNull();
+    expect(readPermissions({ read: [30078], appData: ["*"] })).toBeNull();
+    expect(readPermissions({ sign: [30078], read: [30078], appData: ["myapp:", "*"] })).toBeNull();
   });
 
   it("refuses anything malformed rather than approving part of it", () => {
@@ -97,10 +116,79 @@ describe("prepareForApp", () => {
     expect(data("example:settings")).not.toBeNull();
     expect(data("other:settings")).toBeNull();
     expect(prepareForApp(perms, { kind: 30078, content: "x", tags: [] }, SITE, NOW)).toBeNull();
-    const any = set({ appData: ["*"] });
-    expect(data("anything-at-all", any)).not.toBeNull();
-    expect(data("bitlogin:password:v1", any)).toBeNull();
-    expect(data("bitlogin:recovery:v1", any)).toBeNull();
+    expect(data("bitlogin:password:v1")).toBeNull();
+    expect(data("bitlogin:recovery:v1")).toBeNull();
+    // Every "d" the note carries is held to the rule, not only the first.
+    expect(prepareForApp(perms, { kind: 30078, content: "x", tags: [["d", "example:a"], ["d", "bitlogin-drive:x"]] }, SITE, NOW)).toBeNull();
+  });
+
+  describe("what BitLogin keeps for the person is never written or opened for a site, whatever it was allowed", () => {
+    // Sets as they could have been kept on a device before the names were tightened: not read again here, so
+    // they hold exactly what was approved then. The rule is on each note.
+    const kept = (appData: string[]): AppPermissions => ({ sign: [5, 30078], appData, proofs: [], read: [30078], peers: [] });
+    const anyName = kept(["*"]);
+    const driveName = kept(["bitlogin-drive:"]);
+    const governance = kept(["nswp:"]);
+    const note = (perms: AppPermissions, d: string) => prepareForApp(perms, { kind: 30078, content: "sealed", tags: [["d", d]] }, SITE, NOW);
+    const theirs = (d: string) => ({ kind: 30078, pubkey: ME, tags: [["d", d]] });
+
+    it("a site granted any name can't read the folders' note or replace the payment settings", () => {
+      expect(readPeerFor(anyName, ME, theirs("bitlogin-drive:0123456789abcdef"))).toBeNull();
+      expect(readPeersFor(anyName, ME, theirs("bitlogin-drive:0123456789abcdef"))).toEqual([]);
+      expect(note(anyName, "bitlogin-pay-settings")).toBeNull();
+      expect(note(anyName, "bitlogin-receipt:abc")).toBeNull();
+      // Nor have them deleted by their address.
+      expect(prepareForApp(anyName, { kind: 5, content: "", tags: [["a", `30078:${ME}:bitlogin-drive:0123456789abcdef`]] }, SITE, NOW)).toBeNull();
+      // And a kept "*" no longer opens or writes anything at all.
+      expect(note(anyName, "someone-else:notes")).toBeNull();
+      expect(readPeerFor(anyName, ME, theirs("someone-else:notes"))).toBeNull();
+    });
+
+    it("a site granted bitlogin-drive: can't read the folders' note or replace the payment settings", () => {
+      expect(readPeerFor(driveName, ME, theirs("bitlogin-drive:0123456789abcdef"))).toBeNull();
+      expect(note(driveName, "bitlogin-drive:0123456789abcdef")).toBeNull();
+      expect(note(driveName, "bitlogin-pay-settings")).toBeNull();
+    });
+
+    it("a world owner's guest list can't be rewritten or opened for a site", () => {
+      const list = "nswp:governance:user-allow:v1:37300:" + ME + ":world";
+      expect(note(governance, list)).toBeNull();
+      expect(note(anyName, list)).toBeNull();
+      expect(readPeerFor(governance, ME, theirs(list))).toBeNull();
+      expect(prepareForApp(governance, { kind: 5, content: "", tags: [["a", `30078:${ME}:${list}`]] }, SITE, NOW)).toBeNull();
+    });
+
+    it("names what is reserved, and only that", () => {
+      expect(RESERVED_APP_DATA).toEqual(expect.arrayContaining(["bitlogin", "nswp:governance:"]));
+      for (const d of ["bitlogin:lock:v1", "bitlogin:taken-back:v1", "bitlogin-drive:x", "bitlogin-receipt:x", "bitlogin-pay-settings", "nswp:governance:block:v1:x"]) expect(isReservedAppData(d), d).toBe(true);
+      for (const d of ["nswp-agents/poc/1", "bitportal/x", "example:settings"]) expect(isReservedAppData(d), d).toBe(false);
+    });
+  });
+
+  it("keeps BitPortal's own data name for BitPortal: no other site may ask for it, or have it written or opened", () => {
+    const portal = "https://portal.bitblocks.network";
+    const asks = readPermissions({ sign: [30078], read: [30078], appData: ["bitportal/"] })!;
+    expect(mayHold(portal, asks)).toBe(true);
+    expect(mayHold(SITE, asks)).toBe(false);
+    // Nor a name inside it, nor one covering it.
+    expect(mayHold(SITE, readPermissions({ sign: [30078], appData: ["bitportal/settings/"] })!)).toBe(false);
+    expect(mayHold(SITE, readPermissions({ sign: [30078], appData: ["bitportal/x:"] })!)).toBe(false);
+    // A set kept from before, held by another site: nothing under the name is signed for it.
+    expect(prepareForApp(asks, { kind: 30078, content: "x", tags: [["d", "bitportal/settings"]] }, SITE, NOW)).toBeNull();
+    expect(prepareForApp(asks, { kind: 30078, content: "x", tags: [["d", "bitportal/settings"]] }, portal, NOW)).not.toBeNull();
+  });
+
+  it("takes the agents playground's request as it is, and holds it to its own name", () => {
+    const playground = readPermissions({ sign: [30078], appData: ["nswp-agents/poc/"], read: [30078] });
+    expect(playground).toEqual({ sign: [30078], appData: ["nswp-agents/poc/"], proofs: [], read: [30078], peers: [] });
+    const at = "http://127.0.0.1:4318";
+    const saved = prepareForApp(playground!, { kind: 30078, content: "sealed", tags: [["d", "nswp-agents/poc/ada"]] }, at, NOW);
+    expect(saved?.tags).toEqual([["d", "nswp-agents/poc/ada"], [APP_SITE_TAG, at]]);
+    expect(prepareForApp(playground!, { kind: 30078, content: "sealed", tags: [["d", "nswp-agents/poc/ada/history"]] }, at, NOW)).not.toBeNull();
+    // Read back: its own notes, sealed to the person's own key; and nothing outside its name.
+    expect(readPeersFor(playground!, ME, { kind: 30078, pubkey: ME, tags: [["d", "nswp-agents/poc/ada"]] })).toEqual([ME]);
+    expect(readPeersFor(playground!, ME, { kind: 30078, pubkey: ME, tags: [["d", "nswp-agents/other"]] })).toEqual([]);
+    expect(describePermissions(playground!, at)).toEqual({ ordinary: ["save its own data (nswp-agents/poc/)", "read its own saved data (nswp-agents/poc/)"], sensitive: [] });
   });
 
   it("binds a web-request proof to the asking site or an origin the user was shown", () => {
@@ -370,21 +458,21 @@ describe("describePermissions", () => {
       "save its own data (example:)",
       "save its own kind of data (kind 30310)",
       "sign kinds BitLogin has no words for: 9999",
-      "read its own saved data",
+      "read its own saved data (example:)",
       "exchange encrypted messages with one service it names (bbbbbbbb…)"
     ]);
     expect(words.sensitive).toEqual([
       "change your profile",
-      "delete what you have posted",
+      "delete what you have posted, which can include records BitLogin keeps for you on relays",
       "upload, list and delete your files at file hosts",
       "read your private messages",
       "read the money in your Cashu wallet"
     ]);
   });
 
-  it("says plainly what any-name application data means", () => {
-    const words = describePermissions(set({ appData: ["*"] }), SITE);
-    expect(words.sensitive).toEqual(["save application data under any name, including other applications' data", "read application data saved under any name"]);
+  it("names what it may save and read, in its own words", () => {
+    const words = describePermissions(set(), SITE);
+    expect(words.ordinary).toEqual(expect.arrayContaining(["save its own data (example:)", "read its own saved data (example:)"]));
   });
 
   it("never shows a site's own text beyond its cleaned name and prefixes", () => {
