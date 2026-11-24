@@ -1,8 +1,11 @@
 /**
  * A Cashu mint for tests: real blind signatures, held in memory, served over
  * HTTP on this machine. It speaks enough of the protocol for a wallet to add
- * sats, swap, pay and check what is spent (NUT-00 to NUT-08), and can be made
- * to misbehave. TEST SUPPORT ONLY: nothing that ships imports this.
+ * sats, swap, pay and check what is spent (NUT-00 to NUT-08), restore what it
+ * signed (NUT-09), and can be made to misbehave. By default it refuses an output
+ * it has signed before, as standard mints do; `signsAgain` makes it sign it
+ * again, the kind of mint a seed must never be used with (docs/ecash-seed-counter.md).
+ * TEST SUPPORT ONLY: nothing that ships imports this.
  */
 import { createServer, type Server } from "node:http";
 import { createBlindSignature, createNewMintKeys, hashToCurve, pointFromHex } from "@cashu/cashu-ts";
@@ -24,10 +27,17 @@ export interface MockMint {
   /** Every invoice the mint paid. */
   paid: string[];
   requests: string[];
+  /** How many outputs it has signed, each once. */
+  signedCount(): number;
   close(): Promise<void>;
 }
 
-export async function startMockMint(): Promise<MockMint> {
+export interface MockMintOptions {
+  /** Sign an output it has signed before, instead of refusing the whole request. Off by default. */
+  signsAgain?: boolean;
+}
+
+export async function startMockMint(options: MockMintOptions = {}): Promise<MockMint> {
   const keys = createNewMintKeys(12);
   const id = keys.keysetId;
   const pub: Record<string, string> = {};
@@ -41,11 +51,27 @@ export async function startMockMint(): Promise<MockMint> {
   const funding = new Map<string, { amount: number; state: "UNPAID" | "PAID" | "ISSUED"; request: string }>();
   const invoices = new Map<string, number>();
   const melts = new Map<string, { request: string; amount: number; fee_reserve: number; state: "UNPAID" | "PAID" }>();
+  /** Every output it has signed, by its blinded message: what restore hands back. */
+  const signed = new Map<string, { amount: number; id: string; C_: string }>();
+  /**
+   * Refused before anything is taken, as standard mints do: an output already signed, or one given twice. A mint
+   * that `signsAgain` lets them through.
+   */
+  const fresh = (outputs: { B_: string }[] | undefined): void => {
+    if (options.signsAgain || !outputs) return;
+    const seen = new Set<string>();
+    for (const output of outputs) {
+      if (signed.has(output.B_) || seen.has(output.B_)) throw Object.assign(new Error("Blinded message of output already signed"), { code: 10002 });
+      seen.add(output.B_);
+    }
+  };
   const sign = (outputs: { amount: number | string; B_: string }[], amounts?: number[]) =>
     outputs.map((output, i) => {
       const amount = amounts ? amounts[i]! : Number(output.amount);
-      const signed = createBlindSignature(pointFromHex(output.B_), priv(amount), id);
-      return { amount, id, C_: (signed.C_ as Point).toHex(true) };
+      const blind = createBlindSignature(pointFromHex(output.B_), priv(amount), id);
+      const signature = { amount, id, C_: (blind.C_ as Point).toHex(true) };
+      signed.set(output.B_, signature);
+      return signature;
     });
   const Y = (secret: string): Point => hashToCurve(new TextEncoder().encode(secret));
   /** Every input is the mint's own, unspent, and none is given twice. Returns their sum. */
@@ -85,12 +111,13 @@ export async function startMockMint(): Promise<MockMint> {
     payAllFunding() {
       for (const q of funding.values()) if (q.state === "UNPAID") q.state = "PAID";
     },
+    signedCount: () => signed.size,
     close: () => new Promise((resolve) => server.close(() => resolve()))
   };
 
   const handle = (method: string, path: string, body: any): unknown => {
     if (method === "GET" && path === "/v1/info") {
-      return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true } } };
+      return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true }, 9: { supported: true }, 13: { supported: true } } };
     }
     if (method === "GET" && path === "/v1/keysets") return { keysets: [{ id, unit: "sat", active: true, input_fee_ppk: 0 }] };
     if (method === "GET" && (path === "/v1/keys" || path === `/v1/keys/${id}`)) return { keysets: [{ id, unit: "sat", active: true, input_fee_ppk: 0, keys: pub }] };
@@ -109,6 +136,7 @@ export async function startMockMint(): Promise<MockMint> {
       const q = funding.get(body.quote);
       if (!q || q.state !== "PAID") throw new Error("quote not paid");
       if (body.outputs.reduce((sum: number, o: any) => sum + Number(o.amount), 0) !== q.amount) throw new Error("outputs do not match the quote");
+      fresh(body.outputs);
       q.state = "ISSUED";
       return { signatures: sign(body.outputs) };
     }
@@ -116,6 +144,7 @@ export async function startMockMint(): Promise<MockMint> {
       const out = body.outputs.reduce((sum: number, o: any) => sum + Number(o.amount), 0);
       const inSum = body.inputs.reduce((sum: number, i: any) => sum + Number(i.amount), 0);
       if (inSum !== out) throw new Error("inputs do not equal outputs");
+      fresh(body.outputs);
       take(body.inputs);
       return { signatures: sign(body.outputs) };
     }
@@ -140,6 +169,7 @@ export async function startMockMint(): Promise<MockMint> {
       if (how === "refuse") throw new Error("Lightning payment failed.");
       const given = body.inputs.reduce((sum: number, i: any) => sum + Number(i.amount), 0);
       if (given < q.amount + q.fee_reserve) throw new Error("not enough inputs");
+      fresh(body.outputs);
       take(body.inputs);
       q.state = "PAID";
       mint.paid.push(q.request);
@@ -147,6 +177,11 @@ export async function startMockMint(): Promise<MockMint> {
       // Routing cost one sat. The rest of what was given comes back, on the blank outputs.
       const change = split(given - q.amount - 1).slice(0, (body.outputs ?? []).length);
       return { quote: body.quote, ...q, unit: "sat", expiry: 0, payment_preimage: "00".repeat(32), change: sign((body.outputs ?? []).slice(0, change.length), change) };
+    }
+    if (method === "POST" && path === "/v1/restore") {
+      // NUT-09: what it signed, for the blinded messages it is shown. Nothing it didn't sign; nothing changes.
+      const found = (body.outputs as { amount: number; id: string; B_: string }[]).filter((o) => signed.has(o.B_));
+      return { outputs: found, signatures: found.map((o) => signed.get(o.B_)!) };
     }
     if (method === "POST" && path === "/v1/checkstate") {
       const bySecretY = new Map([...spent].map((secret) => [Y(secret).toHex(true), true]));
@@ -168,7 +203,7 @@ export async function startMockMint(): Promise<MockMint> {
         const out = handle(req.method ?? "GET", path, body);
         res.writeHead(200, { "content-type": "application/json", ...cors }).end(JSON.stringify(out));
       } catch (err) {
-        res.writeHead((err as { status?: number }).status ?? 400, { "content-type": "application/json", ...cors }).end(JSON.stringify({ detail: (err as Error).message, code: 11000 }));
+        res.writeHead((err as { status?: number }).status ?? 400, { "content-type": "application/json", ...cors }).end(JSON.stringify({ detail: (err as Error).message, code: (err as { code?: number }).code ?? 11000 }));
       }
     });
   });
