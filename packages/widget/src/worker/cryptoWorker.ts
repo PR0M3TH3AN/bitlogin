@@ -230,6 +230,8 @@ function applyRelaySets(sets: RelaySets): void {
   if (!hostVaultRelays) vaultRelayUrls = sets.vaultRelays;
   if (!hostDiscoveryRelays) discoveryRelayUrls = sets.discoveryRelays;
 }
+/** How long the wallet's opening waits for the account's relay list to be read again, where the session has one. */
+const RELAY_LIST_WAIT_MS = 1500;
 const requestQueue = new LaneQueue();
 /**
  * Each store's own line (docs/panel-speed-2026-11-23.md): its reads and writes run one at a time, in order, and
@@ -2142,20 +2144,27 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
     case "ecashRoll": {
       const { signer } = requireUnlocked();
       const me = signer.getPublicKey();
-      // Their own write relays, and BitLogin's: the same place a take-back is kept.
+      // Their own write relays, and BitLogin's: the same place a take-back is kept. The list is read again each time
+      // (2026-11-24): one changed in another app since sign-in, to relays that take wallet records, is used at the
+      // next opening, with no sign-out. Where the session already has a list, that read is waited for only briefly,
+      // and finishes behind, for the next time.
       const finder = readPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
+      const fresh = finder
+        .queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)
+        .then((found) => writeRelaysFrom(found.outcomes.flatMap((o) => o.events), me))
+        .catch(() => [] as string[])
+        .then((list) => {
+          // Kept for this session, as loadProfile keeps it, unless the session changed meanwhile.
+          if (list.length && session.signer === signer) session.relays = list;
+          return list;
+        })
+        .finally(() => finder.closeAll());
       let mine: string[] = session.relays;
-      if (mine.length === 0) {
-        try {
-          mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
-          // Kept for this session, as loadProfile keeps it: the next read needn't look it up again.
-          if (mine.length) session.relays = mine;
-        } catch {
-          mine = [];
-        } finally {
-          finder.closeAll();
-        }
-      } else finder.closeAll();
+      if (mine.length === 0) mine = await fresh;
+      else {
+        const read = await Promise.race([fresh, new Promise<string[]>((done) => setTimeout(() => done([]), RELAY_LIST_WAIT_MS))]);
+        if (read.length) mine = read;
+      }
       const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
       const pool = storePool(relayUrls);
       try {
