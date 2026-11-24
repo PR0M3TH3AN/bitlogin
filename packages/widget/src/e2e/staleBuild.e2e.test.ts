@@ -257,6 +257,8 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         }, signIn.origin);
         await sleep(500);
         await page.evaluate((m) => ((window as any).nextMode = m), "wallet");
+        const saidFrom = (await page.evaluate(() => (window as any).said.length)) as number;
+        const pressedAt = Date.now();
         await page.mouse.click(60, 20);
         const slowOpened = await frame()
           .locator(usable.wallet!)
@@ -266,7 +268,16 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
           .catch(() => false);
         await sleep(2000);
         const thrownAfter = (await page.evaluate(() => (window as any).thrownAway)) as number;
-        results.push({ mode: "wallet, shown again on a slow line with no release", opened: slowOpened && thrownAfter === thrownBefore, thrownAway: thrownAfter - thrownBefore });
+        const sizesSaid = ((await page.evaluate((from) => (window as any).said.slice(from), saidFrom)) as { t: string; height?: number; at: number }[])
+          .filter((m) => m.t === "size" || m.t === "ready")
+          .map((m) => `${m.t}${m.height ? `:${m.height}` : ""}@${m.at - pressedAt}`);
+        // The first size said at the showing is the height last said, not the bar alone with every screen put away.
+        const firstHeight = Number((sizesSaid[0] ?? "").match(/^size:(\d+)/u)?.[1] ?? "0");
+        results.push({ mode: "wallet, shown again on a slow line with no release", opened: slowOpened && thrownAfter === thrownBefore, thrownAway: thrownAfter - thrownBefore, sizesSaid });
+        results.push({ mode: "the first size at a showing is not the bar alone", opened: firstHeight === 0 || firstHeight > 300, firstHeight });
+        // Nor is a screen passing through "loading" on its way said: no size at the showing below the wallet's.
+        const heights = sizesSaid.map((x) => Number(x.match(/^size:(\d+)/u)?.[1] ?? "0")).filter((h) => h > 0);
+        results.push({ mode: "no smaller size said on the way to the wallet", opened: heights.every((h) => h > 300), heights });
         slowBuildJson = 0;
         results.push({ mode: "kept frames thrown away by the shell", opened: ((await page.evaluate(() => (window as any).thrownAway)) as number) === 0 });
       } finally {
@@ -279,6 +290,8 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         ["library", true],
         ["wallet, pressed in a panel open across a release", true],
         ["wallet, shown again on a slow line with no release", true],
+        ["the first size at a showing is not the bar alone", true],
+        ["no smaller size said on the way to the wallet", true],
         ["kept frames thrown away by the shell", true]
       ]);
     },

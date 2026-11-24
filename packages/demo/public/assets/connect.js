@@ -101,7 +101,9 @@ const heightStill = (until) =>
 if (inPanel && typeof ResizeObserver === "function") {
   let waiting = false;
   new ResizeObserver(() => {
-    if (waiting || !client) return;
+    // Hidden, nothing is said: its screens were put away, and the bar alone would become the height said last, to be
+    // said again at the next showing (2026-11-24).
+    if (waiting || !client || document.documentElement.dataset.panelHidden) return;
     waiting = true;
     requestAnimationFrame(() => {
       waiting = false;
@@ -1117,13 +1119,27 @@ if (inPanel) {
       if (!control) return;
       if (control.t === "hide") return void hide();
       shown();
-      // `show` is heard, and said so at once, with the size last said: a client waits only a moment for that before it
-      // takes the kept frame for one that doesn't know `show` (BitPortal's shell: 1.5 s). The check below may take as
-      // long, on a slow line (2026-11-24).
-      toClient({ t: "size", size: lastSize });
+      // `show` is heard, and said so at once: a client waits only a moment for a size before it takes the kept frame
+      // for one that doesn't know `show` (BitPortal's shell: 1.5 s), and the check below may take as long on a slow
+      // line (2026-11-24). Said with the height last said, not measured now: at a hide every screen was put away, and
+      // what is left is the bar alone, which would have the panel drawn short and then grown.
+      if (client) window.parent.postMessage(panelMessage({ t: "size", size: lastSize, ...(lastHeight > 0 ? { height: lastHeight } : {}) }), client);
       // Shown again after a release: brought up to date first, then what was asked. Nothing is in hand at a showing:
       // every screen was put away when it was hidden.
-      void outOfDate().then((stale) => (stale && bringUpToDate(control.mode, control.world) ? undefined : route(control.mode, control.world)));
+      // And what it was shown for is drawn before its size is said again, as at the first `ready`: a screen passing
+      // through "loading" on its way is not said, so the panel isn't shrunk and grown again.
+      holdingSizes = true;
+      void outOfDate().then(async (stale) => {
+        if (stale && bringUpToDate(control.mode, control.world)) return;
+        const until = performance.now() + READY_WAIT_MS;
+        try {
+          await Promise.race([route(control.mode, control.world), new Promise((done) => setTimeout(done, READY_WAIT_MS))]);
+          await heightStill(until);
+        } finally {
+          holdingSizes = false;
+          toClient({ t: "size", size: lastSize });
+        }
+      });
     });
     await first;
   }
