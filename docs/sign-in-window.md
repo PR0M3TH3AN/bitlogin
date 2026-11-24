@@ -1299,6 +1299,10 @@ Keeping it changes nothing about how long that session lasts.
   the session, and a new one starts at the next `show`.
 - **On sign-out, its worker is let go at once.** The lock is checked again
   at each `show`, as at each opening.
+- **With the lock on, Files, the wallet and Purchases ask for the PIN in the
+  panel itself, then open** (2026-11-24). The account widget has a worker of
+  its own, and a PIN typed there opens that worker alone. Straight after it,
+  the wallet used to say "Sign in first", as if nobody were signed in.
 - **Each time it is shown, a press in the first 0.9 s is ignored**, as
   Allow ignores one, so a press meant for the world can't land on Allow,
   Pay or Send.

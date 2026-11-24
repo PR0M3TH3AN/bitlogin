@@ -452,7 +452,10 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         // The lock: turned on, locked, and opened with its PIN.
         await press("account", "again");
         await sleep(1000);
-        await frame().locator("#account-slot bitlogin-auth").locator('[data-action="goto-lock-settings"]').click({ timeout: 120_000 });
+        for (let i = 0; i < 10 && !(await acct().locator('input[name="newLockPin"]').isVisible()); i++) {
+          await acct().locator('[data-action="goto-lock-settings"]').click({ timeout: 60_000 }).catch(() => {});
+          await acct().locator('input[name="newLockPin"]').waitFor({ timeout: 10_000 }).catch(() => {});
+        }
         await frame().locator("#account-slot bitlogin-auth").locator('input[name="newLockPin"]').fill("pin-428517");
         await frame().locator("#account-slot bitlogin-auth").locator('input[name="newLockPinAgain"]').fill("pin-428517");
         await frame().locator("#account-slot bitlogin-auth").locator('form[data-form="lock-enable"] button[type="submit"]').click();
@@ -463,10 +466,40 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         await frame().locator("#account-slot bitlogin-auth").locator('input[name="lockPin"]').fill("pin-428517");
         await frame().locator("#account-slot bitlogin-auth").locator('form[data-form="lock-open"] button[type="submit"]').click();
         await frame().locator("#account-slot bitlogin-auth").locator(".pubkey").waitFor({ timeout: 120_000 });
-        // Not checked here: the wallet straight after the PIN, in the same panel. It says "Sign in first" there
-        // (found 2026-11-24, the panel's own fault, apart from the wallet's copy). The lock is turned off instead,
-        // and the same sats must be there.
-        await frame().locator("#account-slot bitlogin-auth").locator('[data-action="goto-lock-settings"]').click();
+        // The wallet straight after the PIN, in the same panel (2026-11-24: it said "Sign in first"). The panel's own
+        // worker is still locked, as the PIN typed in the account widget opens that widget's worker alone: the
+        // panel asks for the PIN itself, and then the wallet opens, with the same sats.
+        const pinThenWallet = async (condition: string, how: "again" | "kept") => {
+          await press("wallet", how);
+          const asked = await frame()
+            .locator("#unlock-pin")
+            .waitFor({ state: "visible", timeout: 30_000 })
+            .then(() => true)
+            .catch(() => false);
+          const said = asked ? "" : ((await panelFrame()?.evaluate(() => document.body.innerText.replace(/\s+/gu, " ").slice(0, 200)).catch(() => "")) ?? "");
+          results.push({ condition: `${condition}: the PIN asked`, asked, said });
+          expect({ asked, said }).toEqual({ asked: true, said: "" });
+          await sleep(1000);
+          await frame().locator("#unlock-pin").fill("pin-428517");
+          await frame().locator("#unlock-go").click();
+          await frame().locator('[data-ecash="home"] #ecash-total').filter({ visible: true }).waitFor({ timeout: 60_000 });
+          await frame().locator("#ecash-note").filter({ hasText: /^3 sats are kept only in this browser so far\. /u }).waitFor({ timeout: 60_000 });
+          expect(await frame().locator("#ecash-total").textContent()).toBe("33");
+          results.push({ condition, screen: "home", balance: "33" });
+        };
+        await pinThenWallet("3 sats only in this browser, after the PIN in the account page, the same panel", "kept");
+        // A new panel, with the lock on: the PIN first, then the wallet.
+        await pinThenWallet("3 sats only in this browser, a new panel with the lock on", "again");
+        // And with the lock turned off, the same sats.
+        await press("account", "again");
+        await frame().locator("#account-slot bitlogin-auth").locator('form[data-form="lock-open"]').waitFor({ timeout: 60_000 });
+        await sleep(1000);
+        await frame().locator("#account-slot bitlogin-auth").locator('input[name="lockPin"]').fill("pin-428517");
+        await frame().locator("#account-slot bitlogin-auth").locator('form[data-form="lock-open"] button[type="submit"]').click();
+        for (let i = 0; i < 10 && !(await acct().locator('[data-action="lock-off"]').isVisible()); i++) {
+          await acct().locator('[data-action="goto-lock-settings"]').click({ timeout: 60_000 }).catch(() => {});
+          await acct().locator('[data-action="lock-off"]').waitFor({ timeout: 10_000 }).catch(() => {});
+        }
         await frame().locator("#account-slot bitlogin-auth").locator('[data-action="lock-off"]').click();
         await frame().locator("#account-slot bitlogin-auth").locator('[data-action="goto-lock-settings"]').filter({ hasText: "Set up a lock" }).waitFor({ timeout: 60_000 }).catch(() => {});
         keptHere(await wallet("3 sats only in this browser, after the lock and its PIN, the lock then turned off"));
@@ -487,8 +520,9 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
       }
       // Every condition but the two made to fail ends with the balance on screen.
       const made = ["the wallet's code couldn't be loaded", "the relays' read fails, this browser's copy on screen"];
-      expect(results.filter((r) => !made.includes(String(r.condition))).map((r) => [r.condition, r.how, r.screen])).toEqual(
-        results.filter((r) => !made.includes(String(r.condition))).map((r) => [r.condition, r.how, "home"])
+      const opened = results.filter((r) => r.how && !made.includes(String(r.condition)));
+      expect(opened.map((r) => [r.condition, r.how, r.screen])).toEqual(
+        opened.map((r) => [r.condition, r.how, "home"])
       );
     },
     1_200_000
