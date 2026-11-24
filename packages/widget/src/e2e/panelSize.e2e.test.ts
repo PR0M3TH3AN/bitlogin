@@ -42,6 +42,9 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
         const relative = url.pathname.endsWith("/") ? `${url.pathname}index.html` : url.pathname;
         const file = join(DIST, normalize(relative).replace(/^(\.\.[/\\])+/u, ""));
         if (!existsSync(file)) return void res.writeHead(404).end();
+        // A slow network, on the test's word: the panel's own files come late, each by up to this many milliseconds.
+        const slow = Number(process.env.BITLOGIN_PANEL_SLOW_MS ?? "0");
+        if (slow && /\.(css|js)$/u.test(relative)) await sleep(Math.floor(slow / 2 + (slow / 2) * ((relative.length * 7919) % 100) / 100));
         let body: Buffer | string = await readFile(file);
         if (["/connect/index.html", "/connect/panel/index.html"].includes(relative)) body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relays}" data-discovery-relays="${relays}">`);
         res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", "cache-control": "no-store" }).end(body);
@@ -74,7 +77,12 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
     panel.src = SIGNIN + "/connect/panel/";
     // How the client keeps the frame until \`ready\`: drawn (as BitPortal does), not drawn at all, or far out of view.
     panel.style.cssText = "width:420px;height:640px;border:0;" + (window.frameStyle || "");
-    if (window.frameStyle) {
+    // Not laid out at first, then laid out unseen, as a frame whose layout comes late.
+    if (window.laidOutAfter) {
+      panel.style.cssText = "width:420px;height:640px;border:0;display:none";
+      setTimeout(() => (panel.style.cssText = "width:420px;height:640px;border:0;visibility:hidden"), window.laidOutAfter);
+    }
+    if (window.frameStyle || window.laidOutAfter) {
       const show = (e) => {
         if (e.origin !== SIGNIN || !e.data || e.data.t !== "ready") return;
         removeEventListener("message", show);
@@ -102,14 +110,15 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
   });
 
   /** Open the panel in a mode, wait for `usable`, and say what it said: its sizes, and when. */
-  const opening = async (mode: string, usable: string, worldAsked = false, kept: { frameStyle?: string; background?: boolean } = {}) => {
-    const browser = await playwright!.chromium.launch();
+  const opening = async (mode: string, usable: string, worldAsked = false, kept: { frameStyle?: string; background?: boolean; laidOutAfter?: number } = {}) => {
+    const browser = await playwright![(process.env.BITLOGIN_PANEL_ENGINE ?? "chromium") as "chromium"].launch();
     try {
       const context = await browser.newContext();
       const page = await context.newPage();
       await page.goto(`${client.origin}/`);
       await page.frameLocator("#world").frameLocator("#signer").locator("body").waitFor({ state: "attached", timeout: 30_000 });
       if (kept.frameStyle) await page.evaluate((style) => ((window as any).frameStyle = style), kept.frameStyle);
+      if (kept.laidOutAfter) await page.evaluate((ms) => ((window as any).laidOutAfter = ms), kept.laidOutAfter);
       await page.evaluate(([m, w]) => (window as any).open(m, w || undefined), [mode, worldAsked ? world.origin : ""]);
       // The visitor looks at another tab from the press until after the cap, then comes back.
       let hiddenSaid = "";
@@ -155,6 +164,20 @@ describe.skipIf(!playwright)("the panel's sizes on a first opening", () => {
   };
   it("says ready by the cap when the client keeps the frame undrawn (display: none) until then", async () => {
     byTheCap(await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { frameStyle: "display:none" }));
+  }, 120_000);
+  it("is measured as BitPortal keeps it: visibility hidden until ready, laid out at its width", async () => {
+    const r = await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { frameStyle: "visibility:hidden" });
+    byTheCap(r);
+    // Laid out, though not seen: its first size says how tall its first screen is, and nothing changes after.
+    expect(r.sizes[0]!.height, JSON.stringify(r)).toBeGreaterThan(100);
+    expect(r.afterReady, JSON.stringify(r)).toBe(0);
+  }, 120_000);
+  it("waits for its first screen to be laid out before ready, up to the cap", async () => {
+    // Laid out 2 s after it is made: before the cap, after the first screen would otherwise have been called still.
+    const r = await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { laidOutAfter: 2000 });
+    byTheCap(r);
+    expect(r.sizes[0]!.height, JSON.stringify(r)).toBeGreaterThan(100);
+    expect(r.afterReady, JSON.stringify(r)).toBe(0);
   }, 120_000);
   it("says ready by the cap when the client keeps the frame far out of view until then", async () => {
     byTheCap(await opening("ask", '#widget-slot bitlogin-auth [data-action="goto-create"]', true, { frameStyle: "position:absolute;left:-20000px;top:-20000px" }));
