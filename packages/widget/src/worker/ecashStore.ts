@@ -137,6 +137,18 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
   // sent again now. A proof a relay already has is the relay's: the local copy of it is dropped.
   const known = new Set(onRelays.flatMap((token) => token.proofs.map((proof) => proof.secret)));
   const next: LocalCopy = { wallet, tokens: [...onRelays] };
+  // A saved record the relays that answered didn't return, and didn't delete or replace, is kept here as it was
+  // (2026-11-24): the relays holding it may have been slow, or gone. Dropped, its sats would then be on nothing but
+  // those relays. Whether they are spent is the mint's to say: the wallet's check asks it, and only then are they
+  // dropped. It is not sent again: it is on relays, which may only not have answered.
+  const replaced = new Set(records.flatMap((record) => record.del));
+  for (const token of local.tokens.filter((t) => !isLocal(t.event))) {
+    if (byId.has(token.event) || deleted.has(token.event) || replaced.has(token.event)) continue;
+    const proofs = token.proofs.filter((proof) => !known.has(proof.secret));
+    if (proofs.length === 0) continue;
+    for (const proof of proofs) known.add(proof.secret);
+    next.tokens.push({ event: token.event, mint: token.mint, proofs });
+  }
   // Gathered by mint into as few records as will hold them, and all sent at once (2026-11-24): one at a time, each
   // waited for, ten of them on relays that never say whether they took a record ran past the panel's minute, and the
   // wallet said it couldn't be opened. Now the opening waits for one sending, however many there are.

@@ -124,6 +124,36 @@ describe("where an ecash wallet is kept (docs/ecash.md)", () => {
     expect([...deps.relays.events.values()].filter((e) => e.kind === TOKEN_KIND)).toHaveLength(1);
   });
 
+  it("keeps a saved record that the relays which answered didn't return, until a mint says it is spent (2026-11-24)", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    const first = await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof("held", 21)] }] });
+    const saved = first.tokens[0]!.event;
+    expect(saved.startsWith("local:")).toBe(false);
+    // The relays that answer now don't have that record (the ones that do were slow, or are gone), and didn't delete it.
+    const lacking = { ...deps.relays, queryQuorum: async (filter: NostrFilter) => {
+      const found = await deps.relays.queryQuorum(filter);
+      return { ...found, outcomes: found.outcomes.map((o) => ({ events: o.events.filter((e) => e.id !== saved) })) };
+    } };
+    const opened = await loadEcash({ ...deps, relays: lacking });
+    expect(balances(opened.tokens)).toEqual({ [MINT]: 21 });
+    // And it stays in this browser's copy: the next opening with no relay at all still has it.
+    deps.relays.up = false;
+    expect(balances((await loadEcash(deps)).tokens)).toEqual({ [MINT]: 21 });
+  });
+
+  it("still drops a record the relays say was deleted or replaced, though they didn't return it", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    const first = await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof("a", 8)] }] });
+    const old = first.tokens[0]!.event;
+    // Spent and replaced: the new record names the old one, and the old one is deleted on relays.
+    await rollEcash(deps, { destroy: [old], keep: [{ mint: MINT, proofs: [proof("change", 3)] }] });
+    expect(deps.relays.events.has(old)).toBe(false);
+    const reopened = await loadEcash(deps);
+    expect(balances(reopened.tokens)).toEqual({ [MINT]: 3 });
+  });
+
   it("does not delete the old record until what replaces it is on a relay", async () => {
     const deps = setup();
     await setEcashMints(deps, [MINT]);
