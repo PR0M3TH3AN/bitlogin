@@ -37,12 +37,17 @@ What gets built is his to order.
   relays only. This is the one gap that can lose sats to a relay fault.
 - **A warning when records stay unsaved:** built on beta (2026-11-24). The
   wallet now says how many sats are kept only in this browser, and not to
-  clear the site's data there until relays have them. Still missing: a
-  way to see which relays refuse wallet records, and a choice of others.
+  clear the site's data there until relays have them. A relay list changed
+  in another app is used at the next opening. Still missing: a way to see
+  which relays refuse wallet records, and to change the list in BitLogin.
 - **The browser's copy forgets what relays didn't return.** When the
   relays that answered don't have a saved record and didn't delete it, the
   browser's copy drops it. Relays still hold it, but the copy should keep
   it until a mint says it is spent.
+- **The wallet straight after the lock's PIN, in the same panel,** says
+  "Sign in first" (found 2026-11-24). The sats are untouched: tried with
+  sats kept only in the browser, they were all there once the lock was
+  turned off. The panel's own fault, not yet looked into.
 - **One relay that takes wallet records is counted as no relay.** Records
   then wait in this browser and are sent again each time, piling up copies
   on that one relay. Copies are harmless but wasteful.

@@ -47,7 +47,10 @@ that means for the person.
   honours a deletion can't bring spent ecash back, and no proof is counted
   twice.
 - **Their own write relays (NIP-65) and BitLogin's list,** the same place a
-  take-back is kept.
+  take-back is kept. The list is read again at every opening (2026-11-24),
+  so a list changed in another app is used at the next one, with no
+  sign-out. Where the session already has a list, that read is waited for
+  for 1.5 s at most, and otherwise finishes behind, for the next opening.
 - **What waits in this browser is sent again in one go** (2026-11-24): by
   mint, in as few records as hold it, all at once. It used to go one
   record at a time, each waited for. Ten changes that relays never
