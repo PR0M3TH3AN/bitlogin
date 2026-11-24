@@ -131,10 +131,12 @@ relay gone, rule 5 and the mint are enough.
 
 ### 7. Where the seed comes from
 
-- **The function:** `seed = HKDF-SHA256(ikm = the account's private key,
-  salt = "bitlogin/ecash-seed/v1", info = "nut13", length = 64)`. The
-  label is used for nothing else, so the seed can never equal anything
-  else made from that key.
+- **The function:** `seed = HKDF-Expand(HKDF-Extract(salt =
+  SHA-256("bitlogin/ecash-seed/v1"), ikm = the account's private key),
+  info = "nut13", 64 bytes)`, as BitLogin's other keys are made (`labelSalt`,
+  `hkdfExtract`, `hkdfExpand` in `@bitlogin/core/crypto`). The label is used
+  for nothing else, so the seed can never equal anything else made from that
+  key. Built in `worker/ecashSeed.ts` (2026-11-24).
 - **Made in the worker.** The account's key never leaves it.
 - **The seed never leaves the worker either.** The Cashu library runs on
   the wallet's page, because only that page may reach a mint: every
