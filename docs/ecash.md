@@ -53,6 +53,9 @@ that means for the person.
   record at a time, each waited for. Ten changes that relays never
   confirmed then took the opening past the panel's minute, and the wallet
   said it couldn't be opened. The owner's own wallet showed that screen.
+- **Sats no relay has confirmed are counted and said plainly**
+  (2026-11-24): "N sats are kept only in this browser so far…", with
+  "don't clear this site's data in this browser" until relays have them.
 - **Where opening fails, the screen says why and offers "Try again".** The
   reasons it can name: relays took too long; BitLogin is locked or signed
   out on that page; part of the page couldn't be loaded; the browser

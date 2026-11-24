@@ -97,6 +97,12 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     for (const id of ["ecash-go-fund", "ecash-go-pay", "ecash-go-receive", "ecash-go-mint"]) $(id).disabled = checking || !!trouble;
     for (const el of $("ecash-limit-form").querySelectorAll("button, select")) el.disabled = checking || limiting || !!trouble;
   };
+  /** The sats no relay has confirmed yet: held in this browser's copy alone (2026-11-24). */
+  const onlyHere = () =>
+    wallet
+      .state()
+      .tokens.filter((token) => token.event.startsWith("local:"))
+      .reduce((sum, token) => sum + token.proofs.reduce((n, proof) => n + proof.amount, 0), 0);
   const home = () => {
     const state = wallet.state();
     if (state.mints.length === 0 && !checking) return show("setup");
@@ -106,11 +112,11 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       ? troubleNote()
       : checking
       ? "Checking with your relays. This is what this browser held last time."
-      : state.offline
-      ? "No relay answered, so this is the copy kept in this browser. It is still yours to spend."
-      : state.unsaved
-        ? "Kept in this browser. Your relays didn't take the latest change yet: it is sent again next time."
-        : "Kept with your account, sealed so only you can read it.";
+      : onlyHere() > 0
+        ? `${sats(onlyHere())} ${onlyHere() === 1 ? "is" : "are"} kept only in this browser so far. No relay has confirmed ${onlyHere() === 1 ? "it" : "them"} yet. ${onlyHere() === 1 ? "It is" : "They are"} sent again each time the wallet opens. Until then, don't clear this site's data in this browser.${state.offline ? " No relay answered just now; this is the copy kept here, still yours to spend." : ""}`
+        : state.offline
+          ? "No relay answered, so this is the copy kept in this browser. It is still yours to spend."
+          : "Kept with your account, sealed so only you can read it.";
     $("ecash-mints").replaceChildren(
       ...wallet.balances().map(({ mint, sats: held }) => {
         const row = document.createElement("li");

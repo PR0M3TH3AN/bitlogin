@@ -307,9 +307,14 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
           await frame().locator("#ecash-note").filter({ hasText: /^Added 1 sats?\. Kept in this browser/u }).waitFor({ timeout: 60_000 });
           await sleep(1000);
         }
-        await wallet("records only in this browser, relays that read and never answer a write");
+        const onlyHere = await wallet("records only in this browser, relays that read and never answer a write");
+        // The sats no relay has yet are counted and said plainly, with what not to do meanwhile.
+        expect(onlyHere).toMatchObject({ screen: "home", balance: "30" });
+        expect(String(onlyHere.note)).toMatch(/^10 sats are kept only in this browser so far\. /u);
+        expect(String(onlyHere.note)).toMatch(/clear/u);
         relays("answer");
-        await wallet("the same records, every relay answering");
+        const saved = await wallet("the same records, every relay answering");
+        expect(String(saved.note)).not.toMatch(/only in this browser/u);
         // ---- Made to fail. The wallet's own code can't be loaded: the screen says why, and opens on "Try again".
         await context.route("**/vendor/bitlogin/bitlogin-ecash.js", (route) => route.abort("failed"));
         const broken = await wallet("the wallet's code couldn't be loaded");

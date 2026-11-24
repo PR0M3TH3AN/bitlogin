@@ -24,7 +24,7 @@ What gets built is his to order.
 | Every relay is gone | The wallet opens from this browser's copy and says so. It can still be spent. |
 | Relays read but don't confirm writes | Was the owner's fault (2026-11-24): every unsaved record was sent again one at a time, and the opening ran out of time. **Mended on beta:** one sending, all at once. |
 | A mint is gone | The sats kept at that mint are gone with it. This is how ecash works. The wallet says so where a mint is chosen. |
-| This browser's storage is cleared | Everything relays hold comes back at the next sign-in. **What was still unsaved on relays is lost.** |
+| This browser's storage is cleared | Everything relays hold comes back at the next sign-in. **What was still unsaved on relays is lost.** The wallet now says how many sats are in that state. |
 | A crash between the mint issuing sats and the save | Lost: a few milliseconds' window (`ecash.md` EC7). |
 | Another device, or the key alone | The wallet record (its mints and its own key) and every saved record are sealed to the account's key on relays, so they come back. But only while relays keep them. |
 | A payment whose answer never came | Nothing is dropped on a guess. The mint is asked which sats are spent, each time the wallet is opened. |
@@ -35,9 +35,10 @@ What gets built is his to order.
   secrets from a seed (NUT-13), so a mint can hand back whatever it still
   owes, with no relay at all. Not built. Today the wallet comes back from
   relays only. This is the one gap that can lose sats to a relay fault.
-- **A warning when records stay unsaved.** If only one of his relays takes
-  wallet records, everything stays "unsaved" for good. A quiet line on the
-  wallet screen is all that says so.
+- **A warning when records stay unsaved:** built on beta (2026-11-24). The
+  wallet now says how many sats are kept only in this browser, and not to
+  clear the site's data there until relays have them. Still missing: a
+  way to see which relays refuse wallet records, and a choice of others.
 - **The browser's copy forgets what relays didn't return.** When the
   relays that answered don't have a saved record and didn't delete it, the
   browser's copy drops it. Relays still hold it, but the copy should keep
