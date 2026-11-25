@@ -6,6 +6,17 @@
 import { labelSalt } from "@bitlogin/core/crypto";
 import { cleanOrigin } from "./policy.js";
 
+/**
+ * Paused (the owner's "Yes, pause it now", 2026-11-25): a world draws everything a headset shows, the code and the
+ * number too, so a hostile one could show the code of a pairing started on its own headset and be handed the key. Until
+ * that is closed, no phone answers a pairing and no headset offers one. The code stays, for when it is.
+ */
+export const PAIRING_PAUSED = true;
+export const PAUSED_WORDS = "Signing in a headset from your phone is paused while we make it safe. Sign in on the headset with the sign-in window instead.";
+export function pairingPaused(): never {
+  throw Object.assign(new Error(PAUSED_WORDS), { code: "paused" });
+}
+
 /** The kind both notes are sent as: ephemeral, passed on by relays and kept by none (the orchestrator's, 2026-11-25). */
 export const PAIR_KIND = 27304;
 /** How long an offer, and so a code, lasts. */

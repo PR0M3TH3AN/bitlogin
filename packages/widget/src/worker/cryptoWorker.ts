@@ -76,7 +76,7 @@ import { loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "
 import { deleteSignerGrant, grantedAt, grantSite, grantsToKeep, keepSecFor, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import { forgetGuest, loadGuest, makeGuest } from "./guestRecord.js";
 import { phonePairing, startHeadsetPairing, type HeadsetPairing, type PhonePairing } from "./pairing.js";
-import type { PairOffer } from "../embedded/pair.js";
+import { PAIRING_PAUSED, pairingPaused, type PairOffer } from "../embedded/pair.js";
 
 /** How long a guest's signer stays unlocked in one page before it takes the guest up again: a day. */
 const GUEST_SESSION_SEC = 24 * 3600;
@@ -1073,6 +1073,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
     // one-time key made here, an offer naming the code by hash, and the phone's notes heard. What arrives is the same
     // sealed hand-off an Allow sends, opened once and taken up as one.
     case "pairBegin": {
+      if (PAIRING_PAUSED) pairingPaused();
       const p = payload as { site?: unknown; device?: unknown };
       const site = grantSite(p.site);
       if (!site) throw new Error("That is not a site.");
@@ -1139,6 +1140,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       return { number };
     }
     case "pairAnswer": {
+      if (PAIRING_PAUSED) pairingPaused();
       const { everydayPrivateKey } = requireUnlocked();
       if (session.signerOnly) throw new Error("A headset is signed in from BitLogin's own page only.");
       const p = payload as { offer?: unknown; number?: unknown; family?: unknown };

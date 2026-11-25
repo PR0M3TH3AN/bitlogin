@@ -1,6 +1,13 @@
 # Signing in a headset from your phone
 
-**Date:** 2026-11-25. **Status:** built. Names given by the orchestrator (kind 27304, tag `nswp:pair`, messages
+**Date:** 2026-11-25. **Status:** built, released in feef753, then **paused** the same day (the owner's "Yes, pause
+it now"). A world draws everything a headset shows, the code and the number too, so a hostile world could show the code
+of a pairing started on its own headset, draw that headset's number as well, and be handed the key. The phone's
+`/pair/` and the worker's `pairAnswer` refuse ("Signing in a headset from your phone is paused while we make it safe.
+Sign in on the headset with the sign-in window instead."), and a headset's `pair` is answered `pairing-expired` with
+`why: "paused"` at once. The code stays (`PAIRING_PAUSED` in `embedded/pair.ts`) until it is made safe.
+
+Built Names given by the orchestrator (kind 27304, tag `nswp:pair`, messages
 `pair`, `pairing`, `paired`, `pairCancel`, `pairing-expired`, the hand-off's `device`, take-back's `{ device, before }`,
 page `/pair`), with number matching, the warning on a code from a link, and what a lost device needs (P4a, P4b, P5a).
 
