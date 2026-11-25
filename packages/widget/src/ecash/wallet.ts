@@ -16,6 +16,9 @@
  */
 import { cleanInvoice, cleanMint, sumProofs, type EcashProof, type EcashToken } from "./nip60.js";
 import type { EcashRoll, EcashState } from "../worker/ecashStore.js";
+import type { SeededOutput } from "../worker/ecashSeed.js";
+import type { LaneState } from "./seedLanes.js";
+import type { Lock } from "./seededMint.js";
 
 export interface EcashStore {
   load(): Promise<EcashState>;
@@ -24,7 +27,18 @@ export interface EcashStore {
   setMints(mints: string[]): Promise<EcashState>;
   /** `sealed`, where the store can say: called once the new proofs are sealed in this browser, before relays. */
   roll(roll: EcashRoll, sealed?: () => void): Promise<EcashState>;
+  /**
+   * The seed's half in the worker (docs/ecash-seed-counter.md). Where a store has none of these, nothing is ever
+   * added by the seed, and every mint stays relay-kept, as before.
+   */
+  outputs?(keysetId: string, amounts: number[], from: number): Promise<{ outputs: SeededOutput[]; next: number }>;
+  lane?(keysetId: string): Promise<LaneState | null>;
+  keepLane?(keysetId: string, state: LaneState): Promise<LaneState | null>;
+  keepTrial?(trial: { mint: string; keysetId: string; outcome: "passed" | "failed" }): Promise<EcashState>;
 }
+
+/** What a trial of a mint came to, as the screen says it. */
+export type MintTrialOutcome = { outcome: "passed" | "failed"; cost: number } | { outcome: "not-tried"; why: string; cost: 0 };
 
 type Cashu = typeof import("@cashu/cashu-ts");
 type CashuWallet = InstanceType<Cashu["Wallet"]>;
@@ -67,7 +81,7 @@ export class EcashError extends Error {
 const plain = (proofs: readonly { id: string; amount: { toNumber(): number } | number; secret: string; C: string }[]): EcashProof[] =>
   proofs.map((p) => ({ id: p.id, amount: typeof p.amount === "number" ? p.amount : p.amount.toNumber(), secret: p.secret, C: p.C }));
 
-export function createEcashWallet(store: EcashStore) {
+export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = {}) {
   let state: EcashState = { mints: [], tokens: [], offline: false, unsaved: false };
   const wallets = new Map<string, Promise<CashuWallet>>();
   const at = (mint: string): Promise<CashuWallet> => {
@@ -88,6 +102,21 @@ export function createEcashWallet(store: EcashStore) {
   const proofsAt = (mint: string): EcashProof[] => tokensAt(mint).flatMap((token) => token.proofs);
   const balanceAt = (mint: string): number => sumProofs(proofsAt(mint));
   const mintError = (err: unknown): EcashError => (err instanceof EcashError ? err : new EcashError("mint", `The mint did not do that: ${(err as Error)?.message ?? "no answer"}`));
+  const seedParts = () => (store.outputs && store.lane && store.keepLane ? { outputs: store.outputs.bind(store), lane: store.lane.bind(store), keepLane: store.keepLane.bind(store) } : null);
+  /** Whether this mint's current keyset has passed the trial (rule 4): only then is anything added there by the seed. */
+  const passed = (mint: string, keysetId: string): boolean => (state.trials ?? []).some((t) => t.mint === mint && t.keysetId === keysetId && t.outcome === "passed");
+  /**
+   * The seeded minter for a mint, or null where the seed isn't used for it: no passed trial for its keyset, no seed
+   * in the store, or a browser that can't keep two tabs apart (rule 3a).
+   */
+  async function seededAt(mint: string, wallet: CashuWallet) {
+    const parts = seedParts();
+    if (!parts || !passed(mint, wallet.keysetId)) return null;
+    const { createSeededMint, browserLock } = await import("./seededMint.js");
+    const lock = options.lock ?? browserLock();
+    if (!lock) return null;
+    return createSeededMint({ wallet, outputs: parts.outputs, load: parts.lane, save: async (id, s) => void (await parts.keepLane(id, s)), lock });
+  }
 
   /**
    * Ask each mint which of the wallet's proofs are spent, and drop those. This is what puts right a payment whose
@@ -182,7 +211,18 @@ export function createEcashWallet(store: EcashStore) {
         const wallet = await at(funding.mint);
         const checked = await wallet.checkMintQuoteBolt11(funding.quote);
         if (checked.state !== MintQuoteState.PAID) return false;
-        const proofs = plain(await wallet.mintProofsBolt11(funding.amount, checked));
+        // By the seed where this mint has passed the trial (rule 4), so the key alone can bring these sats back;
+        // otherwise as before. A mint with every lane in use stays unseeded: nothing was asked of it yet.
+        const seeded = await seededAt(funding.mint, wallet);
+        let minted: Awaited<ReturnType<CashuWallet["mintProofsBolt11"]>> | null = null;
+        if (seeded) {
+          try {
+            minted = await seeded.add(funding.amount, checked);
+          } catch (err) {
+            if ((err as { code?: string })?.code !== "no-lane") throw err;
+          }
+        }
+        const proofs = plain(minted ?? (await wallet.mintProofsBolt11(funding.amount, checked)));
         // Sealed in this browser: shown as held from then on, marked as not on a relay yet, until the roll's answer.
         const sealed = () => {
           state = { ...state, tokens: [...state.tokens, { event: "local:sealed", mint: funding.mint, proofs }], unsaved: true };
@@ -193,6 +233,58 @@ export function createEcashWallet(store: EcashStore) {
       } catch (err) {
         throw mintError(err);
       }
+    },
+
+    /** Whether a mint's current keyset is one the seed is used for (rule 4), as the screen names it. */
+    async seededMint(mint: string): Promise<boolean> {
+      if (!seedParts()) return false;
+      try {
+        return passed(mint, (await at(mint)).keysetId);
+      } catch {
+        return false;
+      }
+    },
+    /**
+     * The trial of a mint, at the person's press only (rule 4): one sat of theirs swapped twice into the same output.
+     * A mint that refuses the second passes, and the sat stays theirs; one that signs it again fails, and that sat is
+     * gone. The outcome is kept with the wallet record, for every device. Never run when the wallet opens.
+     */
+    async tryMint(mint: string): Promise<MintTrialOutcome> {
+      if (!store.outputs || !store.keepTrial) return { outcome: "not-tried", why: "This wallet can't use a seed here.", cost: 0 };
+      if (!state.mints.includes(mint)) throw new EcashError("no-wallet", "That mint is not in this wallet.");
+      if (balanceAt(mint) < 1) throw new EcashError("not-enough", "The trial needs 1 sat at this mint. Add some first.");
+      const { tryMint } = await import("./mintTrial.js");
+      let wallet: CashuWallet;
+      try {
+        wallet = await at(mint);
+        // Charging for a swap would make the trial cost more than a sat: not tried, and nothing split for it.
+        if (Number(wallet.getFeesForKeyset(1, wallet.keysetId)) > 0) return { outcome: "not-tried", why: "This mint charges for each swap, so it can't be tried for one sat.", cost: 0 };
+        // A 1-sat proof to try with: split one off where none is held, and keep the split at once.
+        if (!proofsAt(mint).some((p) => p.amount === 1)) {
+          const before = tokensAt(mint);
+          const split = await wallet.send(1, proofsAt(mint), { includeFees: true });
+          state = await store.roll({ destroy: before.map((t) => t.event), keep: [{ mint, proofs: [...plain(split.keep), ...plain(split.send)] }] });
+        }
+      } catch (err) {
+        throw mintError(err);
+      }
+      const proof = proofsAt(mint).find((p) => p.amount === 1)!;
+      const held = tokensAt(mint);
+      const rest = proofsAt(mint).filter((p) => p.secret !== proof.secret);
+      let result: Awaited<ReturnType<typeof tryMint>>;
+      try {
+        result = await tryMint({ wallet, outputs: store.outputs.bind(store), proof: proof as never });
+      } catch (err) {
+        // Where it stopped is unknown from here: the mint is asked what is spent, and nothing is dropped on a guess.
+        await reconcile();
+        throw mintError(err);
+      }
+      if (result.outcome === "not-tried") return { outcome: "not-tried", why: result.why, cost: 0 };
+      // The sat the trial took: back, as the proof the trial ended with, where it passed; gone where it failed.
+      const keep = result.outcome === "passed" ? [...rest, ...plain([result.kept])] : rest;
+      state = await store.roll({ destroy: held.map((t) => t.event), keep: [{ mint, proofs: keep }], ...(result.cost ? { history: { direction: "out" as const, amount: result.cost } } : {}) });
+      state = await store.keepTrial({ mint, keysetId: result.keysetId, outcome: result.outcome });
+      return { outcome: result.outcome, cost: result.cost };
     },
 
     /** Take in a Cashu token someone gave: it is swapped at its mint for proofs only this wallet knows. */

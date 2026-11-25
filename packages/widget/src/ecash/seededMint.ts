@@ -114,7 +114,7 @@ export function createSeededMint(deps: SeededMintDeps) {
         // Written down first, under the lock: from here, a crash burns these counters and nothing more, and no other
         // tab can be handed them.
         const from = await take(id, amounts.length);
-        if (from === null) throw new Error("Every lane of this mint is in use: the wallet stays unseeded here.");
+        if (from === null) throw Object.assign(new Error("Every lane of this mint is in use: the wallet stays unseeded here."), { code: "no-lane" });
         const made = await deps.outputs(id, amounts, from);
         await forward(id, made.next);
         if (deps.checkFirst !== false) {
