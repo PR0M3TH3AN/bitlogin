@@ -24,6 +24,7 @@ import {
 } from "../capsules/types.js";
 import type { CredentialPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
+import { checkAddressFree, UNCHECKED_WORDS } from "./freeAddress.js";
 import {
   AccountAlreadyExistsError,
   AccountNotFoundError,
@@ -125,31 +126,31 @@ export async function changePassword(
   // exists there (this login name rotated to a password that happens to already be
   // registered under it), publishing would silently destroy that other account exactly
   // like an unchecked registration would.
-  const newLocatorCheckPool = new RelayPool(params.vaultRelayUrls, {
-    authPrivateKey: newKeys.locatorPrivateKey,
+  // As at registration (freeAddress.ts, 2026-11-25): the new password's address is free only where a quorum answered
+  // "nothing here" and no relay that connected was left unfinished; the new capsule goes only to those.
+  const free = await checkAddressFree({
+    urls: params.vaultRelayUrls,
+    timeoutMs: params.timeoutMs,
+    read: async (urls, timeoutMs) => {
+      const newLocatorCheckPool = new RelayPool(urls, { authPrivateKey: newKeys.locatorPrivateKey });
+      try {
+        return await readCredentialCapsule(newLocatorCheckPool, newLocatorPublicKey, newKeys.capsuleKey, timeoutMs);
+      } finally {
+        newLocatorCheckPool.closeAll();
+      }
+    },
   });
-  let existingAtNewLocator;
-  try {
-    existingAtNewLocator = await readCredentialCapsule(
-      newLocatorCheckPool,
-      newLocatorPublicKey,
-      newKeys.capsuleKey,
-      params.timeoutMs,
-    );
-  } finally {
-    newLocatorCheckPool.closeAll();
-  }
-  if (existingAtNewLocator.candidates.length > 0) {
+  if (free.state === "taken") {
     throw new AccountAlreadyExistsError(
       "Another account is already registered with this login name and the new password you chose. Pick a different new password.",
     );
   }
-  // As at registration (2026-11-25): "free" needs every relay asked to have answered to the end with nothing here.
-  if (!existingAtNewLocator.quorumMet || existingAtNewLocator.respondedCount !== existingAtNewLocator.totalCount) {
+  if (free.state === "unchecked") {
     throw new RegistrationFailedError(
-      "Couldn't check that the new password is free under this login name: not every vault relay answered. Your password wasn't changed. Try again in a moment.",
+      `Couldn't check that the new password is free under this login name: ${UNCHECKED_WORDS[free.why]}. Your password wasn't changed. Try again in a moment.`,
     );
   }
+  const newCredentialRelayUrls = free.writeUrls;
 
   const newGeneration = oldPayload.generation + 1;
 
@@ -182,7 +183,8 @@ export async function changePassword(
     payload: newPayload,
   });
 
-  const newPool = new RelayPool(params.vaultRelayUrls, {
+  // Only the relays that answered "nothing here" at the new address.
+  const newPool = new RelayPool(newCredentialRelayUrls, {
     authPrivateKey: newKeys.locatorPrivateKey,
   });
   const newCredentialPublish = await publishAndVerify(
