@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MockRelay } from "../../../core/src/test-support/mockRelay.js";
 import { generatePrivateKey, getPublicKeyHex } from "@bitlogin/core/crypto";
-import { sealHandoff } from "../worker/handoff.js";
+import { openAppHandoff, sealHandoff } from "../worker/handoff.js";
 import { phonePairing, startHeadsetPairing } from "../worker/pairing.js";
 
 const SITE = "https://portal.bitblocks.network";
@@ -55,6 +55,32 @@ describe("pairing a headset from a phone", () => {
       await phone.answer(offers[0]!, sealHandoff(generatePrivateKey(), offers[0]!.key, generatePrivateKey(), undefined, { site: SITE, remember: true }));
       await sleep(600);
       expect(getPublicKeyHex(headset.state().opened!.key)).toBe(getPublicKeyHex(everyday));
+    } finally {
+      headset.cancel();
+    }
+  }, 30_000);
+
+  it("on BitLogin's own page (Way 1): the offer names the world's signer, and the hand-off is kept sealed for it, unopened", async () => {
+    // The world's signer's one-time hand-off key, as its "frame" gives it to the page.
+    const signerKey = generatePrivateKey();
+    const to = getPublicKeyHex(signerKey);
+    const headset = await startHeadsetPairing({ relayUrls: urls, site: SITE, device: "Meta Quest Browser", republishMs: 300, to });
+    try {
+      const phone = phonePairing({ relayUrls: urls });
+      const [offer] = await phone.find(headset.code, { waitMs: 2500, settleMs: 600 });
+      expect(offer).toMatchObject({ site: SITE, to });
+      await phone.found(offer!);
+      expect(await until(() => headset.state().status === "found")).toBe(true);
+      const everyday = generatePrivateKey();
+      const device = "0123456789abcdef0123456789abcdef";
+      // Sealed to the signer, not to the page's own key: the page can't open it, and doesn't try.
+      await phone.answer(offer!, sealHandoff(everyday, to, generatePrivateKey(), undefined, { site: SITE, remember: true, device }));
+      expect(await until(() => headset.state().status === "paired")).toBe(true);
+      const state = headset.state();
+      expect(state.opened).toBeUndefined();
+      expect(() => openAppHandoff(state.sealed!, generatePrivateKey())).toThrow();
+      // Only the signer's key opens it.
+      expect(getPublicKeyHex(openAppHandoff(state.sealed!, signerKey).key)).toBe(getPublicKeyHex(everyday));
     } finally {
       headset.cancel();
     }

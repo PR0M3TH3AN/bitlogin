@@ -8,6 +8,11 @@ would plausibly want. Newest first.
 
 ## 2026-11-25
 
+- **Signing in a headset from your phone is back, on BitLogin's own page**
+  (`docs/pair-a-headset.md`, Way 1): a world opens `<signIn>/headset/` in a
+  window from a press (or calls `client.signInFromPhone()`), and the code,
+  QR and number appear only there. In-world `pair` stays paused.
+
 - **Signing in a headset from your phone is paused** the same day it was
   released: a world draws the code and the number a headset shows, so a
   hostile one could have them answered for its own headset. A headset's

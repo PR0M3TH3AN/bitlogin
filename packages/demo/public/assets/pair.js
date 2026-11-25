@@ -3,7 +3,7 @@
 // number to show, and asks the person to tap the same: only then is "Sign in this headset?" put, and the yes sends
 // the headset what Allow sends a site, sealed to the headset's one-time key, by BitLogin's worker. This page never
 // holds a key. Everything an offer says is written as text, never as markup.
-import { familyDomain, familyOf, knownAppName, knownFamily, normalizeCode, numberChoices, PAIRING_PAUSED, PAUSED_WORDS, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
+import { familyDomain, familyOf, knownAppName, knownFamily, normalizeCode, numberChoices, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -45,14 +45,11 @@ let number = 0;
 let shownCode = "";
 let lockOn = false;
 
-const me = PAIRING_PAUSED ? null : await readCachedSession().catch(() => null);
-// Paused (the owner's "Yes, pause it now", 2026-11-25): nothing is looked for, nothing is asked, and the worker refuses
-// to answer a headset whatever it is given.
-if (PAIRING_PAUSED) {
-  end(PAUSED_WORDS);
-  $("again").hidden = true;
-}
-else if (!me) show("step-out");
+/** The code to look for, once the person says it is on BitLogin's own page on a headset they hold. */
+let asked = fromLink;
+const me = await readCachedSession().catch(() => null);
+// Asked for every code, typed or scanned (Way 1): the danger is the world in front of them, so typing is no check.
+if (!me) show("step-out");
 else if (fromLink) show("step-holding");
 else {
   show("step-code");
@@ -61,7 +58,7 @@ else {
 
 $("holding-yes").addEventListener("click", () => {
   if (!shownLongEnough()) return;
-  void find(fromLink);
+  void find(asked);
 });
 $("holding-no").addEventListener("click", () => {
   if (!shownLongEnough()) return;
@@ -71,7 +68,9 @@ $("step-code").addEventListener("submit", (e) => {
   e.preventDefault();
   const code = normalizeCode($("code").value);
   if (!code) return say("A code is eight letters and digits, like K7QF-3MPX.");
-  void find(code);
+  asked = code;
+  say("");
+  show("step-holding");
 });
 
 const find = async (code) => {
@@ -90,6 +89,8 @@ const find = async (code) => {
     if (offers.length === 0) return end("No headset is showing that code. Check it, or ask for a new one.");
     if (offers.length > 1) return end("Two devices are showing that code. Start again on the headset.");
     offer = offers[0];
+    // Only a code from BitLogin's own headset page, which names the world's signer: one a world drew is never answered.
+    if (!offer.to) return end("That code wasn't made by BitLogin's own page, so it can't be used. In the world, press Sign In using Phone, and use the code on the bitlogin.network page it opens.");
     number = await worker.pairFound(offer.id);
     say("");
     $("numbers").replaceChildren(

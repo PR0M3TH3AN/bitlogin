@@ -23,7 +23,8 @@ export { describePermissions, knownAppName, type AppPermissions, type Permission
 export { declineFamily, describeAllowed, familyDeclined, familyOffer, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
 export { familyDomain, familyOf, inFamily, knownFamily };
 export { SIGN_LIMITS, type Asked } from "./policy.js";
-export { normalizeCode, numberChoices, PAIRING_PAUSED, PAUSED_WORDS, type PairOffer } from "./pair.js";
+export { deviceLabel, normalizeCode, numberChoices, pairUrl, PAIRING_PAUSED, PAUSED_WORDS, type PairOffer } from "./pair.js";
+export { renderQrSvg } from "../qr.js";
 export { describeAsked, type AskedWords } from "./careful.js";
 export { applyChange, keepersOf, readOwnerList, resolveOwnerList, scopeOf, type GuestChange } from "./guests.js";
 export { askLockDevice } from "../lockDevice.js";
@@ -77,6 +78,16 @@ export interface FoundSigner {
    * `have` with no question. Only once it is signed in. They replace what it held.
    */
   hold(receipts: NostrEvent[]): void;
+  /**
+   * The signer's one-time key for this hand-off: what a phone seals to, where BitLogin's own /headset/ page signs the
+   * headset in from a phone (Way 1, docs/pair-a-headset.md). Nothing secret.
+   */
+  readonly recipient: string;
+  /**
+   * Pass on a hand-off sealed elsewhere (by the phone, to `recipient`), as `grant` passes one: the signer opens it, checks
+   * it is for its own site, and keeps it. This page never holds the key. Resolves true once the signer took it up.
+   */
+  passOn(sealed: { senderPublicKey: string; payload: string }): Promise<boolean>;
   /** Whether BitLogin knows this address. A remembered site is kept thirty days if it does, seven if not (§SW11). */
   readonly known: boolean;
   /**
@@ -199,6 +210,17 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
             setTimeout(() => done(false), 8000);
           });
           frame!.postMessage(handoffMessage({ t: "answer", nonce, world, ...(result ?? {}) }), me);
+          const ok = await answered;
+          window.removeEventListener("message", onMessage);
+          return ok;
+        },
+        recipient,
+        async passOn(sealed) {
+          const answered = new Promise<boolean>((done) => {
+            onDone = done;
+            setTimeout(() => done(false), 8000);
+          });
+          frame!.postMessage(handoffMessage({ t: "grant", nonce, world, sealed }), me);
           const ok = await answered;
           window.removeEventListener("message", onMessage);
           return ok;

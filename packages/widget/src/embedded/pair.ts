@@ -62,6 +62,12 @@ export interface PairOffer {
   site: string;
   device: string;
   expires: number;
+  /**
+   * The world's signer's one-time hand-off key, where the offer comes from BitLogin's own headset page (Way 1,
+   * docs/pair-a-headset.md): the phone seals to it. An offer without one is of the paused kind, and is answered by no
+   * phone.
+   */
+  to?: string;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/u;
@@ -79,13 +85,16 @@ export function readOffer(event: unknown, nowSeconds: number): PairOffer | null 
   // In date, and for no more than the five minutes a code lasts (and a little for clocks that differ).
   if (!Number.isSafeInteger(expires) || expires <= nowSeconds || expires > nowSeconds + PAIR_TTL_SEC + 30) return null;
   let device = "a device";
+  let to: string | undefined;
   try {
-    const said = (JSON.parse(String(e.content ?? "")) as { device?: unknown }).device;
+    const content = JSON.parse(String(e.content ?? "")) as { device?: unknown; to?: unknown };
+    const said = content.device;
     if (typeof said === "string" && said.length > 0 && said.length <= 48 && /^[\p{L}\p{N} ._()-]+$/u.test(said)) device = said;
+    if (typeof content.to === "string" && HEX64.test(content.to)) to = content.to;
   } catch {
     /* "a device" */
   }
-  return { id: e.id, key: e.pubkey, hash, site, device, expires };
+  return { id: e.id, key: e.pubkey, hash, site, device, expires, ...(to ? { to } : {}) };
 }
 
 /** What a headset is called on the phone, from its browser's own name for itself. Nothing more is read from it. */

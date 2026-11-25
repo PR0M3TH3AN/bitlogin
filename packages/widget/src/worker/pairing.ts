@@ -58,7 +58,7 @@ export interface HeadsetPairing {
   readonly code: string;
   /** When it stops being offered, in seconds. */
   readonly expires: number;
-  state(): { status: HeadsetStatus; number?: number; opened?: Opened };
+  state(): { status: HeadsetStatus; number?: number; opened?: Opened; sealed?: SealedHandoff };
   /** Stop: the one-time key is dropped, and nothing more is heard. */
   cancel(): void;
 }
@@ -73,6 +73,11 @@ export async function startHeadsetPairing(opts: {
   ttlSec?: number;
   /** For tests only: a code to use, as someone who saw another's would. */
   code?: string;
+  /**
+   * Way 1: the world's signer's one-time hand-off key. The offer names it, the phone seals to it, and what arrives is
+   * kept sealed, unopened, for BitLogin's page to pass to that signer.
+   */
+  to?: string;
 }): Promise<HeadsetPairing> {
   const key = generatePrivateKey();
   const me = getPublicKeyHex(key);
@@ -84,6 +89,7 @@ export async function startHeadsetPairing(opts: {
   let status: HeadsetStatus = "waiting";
   let number: number | undefined;
   let opened: Opened | undefined;
+  let kept: SealedHandoff | undefined;
   /** The phone that found it first: the only one heard after. */
   let phone: string | null = null;
   let stopListening: () => void = () => {};
@@ -106,7 +112,7 @@ export async function startHeadsetPairing(opts: {
       kind: PAIR_KIND,
       created_at: now(),
       tags: [[PAIR_TAG, hash], ["nswp:origin", opts.site], ["expiration", String(expires)]],
-      content: JSON.stringify({ device: opts.device })
+      content: JSON.stringify({ device: opts.device, ...(opts.to ? { to: opts.to } : {}) })
     });
     void pool.publishAll(event, 4000).catch(() => []);
   };
@@ -123,6 +129,12 @@ export async function startHeadsetPairing(opts: {
     }
     if (sealed) {
       if (status !== "found" || event.pubkey !== phone) return;
+      if (opts.to) {
+        // Not this page's to open: kept as it came, for the signer it was sealed to.
+        kept = sealed;
+        stop("paired");
+        return;
+      }
       try {
         opened = openAppHandoff(sealed, key);
       } catch {
@@ -152,7 +164,7 @@ export async function startHeadsetPairing(opts: {
   return {
     code,
     expires,
-    state: () => ({ status, ...(number !== undefined ? { number } : {}), ...(opened ? { opened } : {}) }),
+    state: () => ({ status, ...(number !== undefined ? { number } : {}), ...(opened ? { opened } : {}), ...(kept ? { sealed: kept } : {}) }),
     cancel: () => stop("ended")
   };
 }

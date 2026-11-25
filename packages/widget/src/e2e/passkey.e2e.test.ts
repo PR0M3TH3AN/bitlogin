@@ -90,7 +90,7 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
       }
       // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
       // signer reads it. Each is given the mock relays, as the account page is.
-      if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/pair/index.html" || relative === "/signer/index.html") {
+      if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/pair/index.html" || relative === "/headset/index.html" || relative === "/signer/index.html") {
         body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}"${unlockNamed ? ` data-unlock-service="${unlockNamed}"` : ""}>`);
       }
       res.writeHead(200, {
@@ -4413,7 +4413,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
-    "pairing is paused: a headset's pair is answered at once, /pair/ says so, and the phone's worker answers no headset whatever it is given",
+    "in-world pairing stays paused: a headset's pair is answered at once, and the phone's worker answers no offer it didn't find",
     async () => {
       const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
 <iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
@@ -4448,9 +4448,7 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await completeRecoveryCeremony(widget);
         await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
         const pair = await phone.newPage();
-        await pair.goto(`${origin}/pair/#K7QF-3MPX`);
-        await pair.locator("#said").filter({ hasText: PAUSED_WORDS }).waitFor({ timeout: 30_000 });
-        for (const step of ["#step-out", "#step-holding", "#step-code", "#step-number", "#step-ask", "#again"]) expect(await pair.locator(step).isVisible(), step).toBe(false);
+        await pair.goto(`${origin}/pair/`);
 
         // The worker itself, asked by a script on BitLogin's own page, signed in: refused, whatever it is given.
         // As a string, so the test runner leaves its import() as the browser's own.
@@ -4477,11 +4475,113 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
           s.destroy();
           return out;
         })()`)) as string[];
-        expect(refusals).toEqual(Array(5).fill(PAUSED_WORDS));
+        // An offer it never found is no offer (Way 1 lifts the pause only for offers BitLogin's own page makes), and an
+        // in-world pairBegin stays paused.
+        expect(refusals.slice(0, 4).every((r) => r !== "answered" && r.length > 0)).toBe(true);
+        expect(refusals[4]).toBe(PAUSED_WORDS);
       } finally {
         await browser.close();
       }
     },
     240_000
+  );
+
+  it(
+    "Way 1: a world opens BitLogin's own /headset/ page, the code and number are shown there only, and the phone signs the world in through it (pair-a-headset.md)",
+    async () => {
+      for (const relay of relays) relay.keepsEphemeral = false;
+      const QUEST = "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/35.1 Chrome/126.0 VR Safari/537.36";
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<button id="phone">Sign In using Phone</button>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN) window.heard.push(e.data); });
+  // From the press, as the kit's outOfVr does: a window, with its link back.
+  document.getElementById("phone").onclick = () => { window.opened = window.open(SIGNIN + "/headset/", "bitlogin-headset", "popup"); };
+  window.ask = (message, wait = 4000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        // The phone, signed in.
+        const phone = await browser.newContext();
+        const account = await phone.newPage();
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, `way1-${Date.now().toString(36)}`);
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+        const npub = ((await widget.locator(".pubkey").textContent()) ?? "").trim();
+
+        // The headset: a world, nobody signed in, and its press.
+        const headset = await browser.newContext({ userAgent: QUEST });
+        await headset.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: worldPage }));
+        const world = await headset.newPage();
+        await world.goto("https://w1.bitblocks.network/");
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        expect(await world.evaluate(() => (window as any).ask({ t: "state" }))).toMatchObject({ unlocked: false });
+        const [page] = await Promise.all([headset.waitForEvent("page"), world.locator("#phone").click()]);
+        // BitLogin's own page: the address-bar line first, the site the browser named, and the code.
+        await page.locator("#code").filter({ hasText: /^[0-9A-Z]{4}-[0-9A-Z]{4}$/u }).waitFor({ timeout: 60_000 });
+        expect(new URL(page.url()).origin).toBe(origin);
+        expect(await page.locator("#check").textContent()).toContain("Check that the address bar says bitlogin.network.");
+        expect(await page.locator("#site").textContent()).toBe("https://w1.bitblocks.network");
+        expect(await page.locator("#qr svg").count()).toBe(1);
+        const code = ((await page.locator("#code").textContent()) ?? "").trim();
+        // The world itself was told nothing of it.
+        expect(JSON.stringify(await world.evaluate(() => (window as any).heard))).not.toContain(code);
+
+        // The phone: asked about the address bar first, then the number the BitLogin page shows.
+        const pair = await phone.newPage();
+        await pair.goto(`${origin}/pair/#${code}`);
+        await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await pair.locator("#step-holding").textContent()).toContain("Is the code on a page whose address bar says bitlogin.network, on a headset you are holding?");
+        // No default: two buttons of the same weight, and neither has the focus.
+        expect(await pair.locator("#holding-yes").getAttribute("class")).toBe(await pair.locator("#holding-no").getAttribute("class"));
+        expect(await pair.evaluate(() => document.activeElement?.id ?? "")).not.toMatch(/^holding-/u);
+        await pair.waitForTimeout(1000);
+        await pair.locator("#holding-yes").click();
+        await pair.locator("#step-number").waitFor({ state: "visible", timeout: 60_000 });
+        await page.locator("#number-line").waitFor({ state: "visible", timeout: 30_000 });
+        const number = ((await page.locator("#number").textContent()) ?? "").trim();
+        await pair.waitForTimeout(1000);
+        await pair.locator("#numbers button", { hasText: number }).click();
+        await pair.locator("#step-ask").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await pair.locator("#ask-site").textContent()).toBe("at https://w1.bitblocks.network");
+        expect(await pair.locator("#ask-device").textContent()).toBe("A headset (Meta Quest Browser)");
+        await pair.waitForTimeout(1000);
+        await pair.locator("#ask-site-only").click();
+        await pair.locator("#said").filter({ hasText: "Sent." }).waitFor({ timeout: 60_000 });
+
+        // BitLogin's page passes it to the world's signer, says so, and closes; the world is signed in as the phone's account.
+        await page.waitForEvent("close", { timeout: 60_000 });
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "state" && m.unlocked), null, { timeout: 30_000 });
+        const state = await world.evaluate(() => (window as any).ask({ t: "state" }));
+        expect(state).toMatchObject({ unlocked: true, remembered: true });
+        expect(encodeNpub(state.pubkey)).toBe(npub);
+        expect(await world.evaluate(() => (window as any).ask({ t: "sign", event: { kind: 1, content: "from a headset", tags: [] } }))).toMatchObject({ t: "signed", event: { pubkey: state.pubkey } });
+        // In-world pairing stays refused.
+        expect(await world.evaluate(() => (window as any).ask({ t: "pair" }))).toMatchObject({ t: "pairing-expired", why: "paused" });
+
+        // A typed code is asked about too.
+        await pair.goto(`${origin}/pair/`);
+        await pair.locator("#code").fill("ZZZZ-ZZZZ");
+        await pair.locator("#find").click();
+        await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 });
+      } finally {
+        for (const relay of relays) relay.keepsEphemeral = true;
+        await browser.close();
+      }
+    },
+    300_000
   );
 });
