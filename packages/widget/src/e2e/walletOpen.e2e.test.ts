@@ -496,8 +496,12 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         await sleep(1000);
         await frame().locator("#account-slot bitlogin-auth").locator('input[name="lockPin"]').fill("pin-428517");
         await frame().locator("#account-slot bitlogin-auth").locator('form[data-form="lock-open"] button[type="submit"]').click();
+        // Straight after the PIN, the account page may not yet have read that the lock is on: its button says "Set up
+        // a lock" until it has, and leads to a screen with no "Turn the lock off". Pressed only once it says so.
         for (let i = 0; i < 10 && !(await acct().locator('[data-action="lock-off"]').isVisible()); i++) {
-          await acct().locator('[data-action="goto-lock-settings"]').click({ timeout: 60_000 }).catch(() => {});
+          if (await acct().locator('input[name="newLockPin"]').isVisible()) await acct().locator('[data-action="goto-dashboard"]').first().click().catch(() => {});
+          await acct().locator('[data-action="goto-lock-settings"]').filter({ hasText: "Lock settings" }).waitFor({ timeout: 30_000 }).catch(() => {});
+          await acct().locator('[data-action="goto-lock-settings"]').filter({ hasText: "Lock settings" }).click({ timeout: 30_000 }).catch(() => {});
           await acct().locator('[data-action="lock-off"]').waitFor({ timeout: 20_000 }).catch(() => {});
         }
         await frame().locator("#account-slot bitlogin-auth").locator('[data-action="lock-off"]').click();

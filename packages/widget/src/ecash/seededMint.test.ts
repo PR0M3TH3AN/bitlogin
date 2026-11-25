@@ -7,10 +7,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Wallet, type Proof } from "@cashu/cashu-ts";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { startMockMint, type MockMint } from "./mockMint.js";
-import { createSeededMint, asOutputData, defaultLock, type Lock } from "./seededMint.js";
+import { createSeededMint, asOutputData, NO_SEED_HERE, seedUsableHere, type Lock } from "./seededMint.js";
 import { laneOf, laneStart, type LaneState } from "./seedLanes.js";
 import { ecashSeed, seededOutputs } from "../worker/ecashSeed.js";
 
+/**
+ * A stand-in for the browser's navigator.locks, which Node hasn't: one lock per name, for the minters of this test.
+ * It keeps minters in one process apart, as navigator.locks keeps tabs apart; it is a test's, never the wallet's.
+ */
+const inPage = new Map<string, Promise<unknown>>();
+const standInLock: Lock = (name, fn) => {
+  const run = (inPage.get(name) ?? Promise.resolve()).then(fn, fn);
+  inPage.set(name, run.catch(() => {}));
+  return run;
+};
 const total = (proofs: readonly Proof[]) => proofs.reduce((n, p) => n + Number(p.amount), 0);
 const distinct = (proofs: readonly Proof[]) => new Set(proofs.map((p) => p.secret)).size;
 
@@ -30,6 +40,7 @@ async function browser(mint: MockMint, seed: Uint8Array, opts: { random?: () => 
     outputs: async (keysetId, amounts, from) => seededOutputs(seed, keysetId, amounts, from),
     load: async (id) => kept.get(id) ?? null,
     save: async (id, state) => void kept.set(id, state),
+    lock: standInLock,
     ...opts
   });
   const held: Proof[] = [];
@@ -135,9 +146,13 @@ describe("two browsers of one account, adding sats from one seed", () => {
 
 describe("two tabs of one browser, on one store", () => {
   /** Two tabs: each its own page wallet and minter, the one browser's storage between them, slow as storage is. */
-  async function tabs(mint: MockMint, seed: Uint8Array, lock: Lock) {
+  async function tabs(mint: MockMint, seed: Uint8Array, lock: Lock, together = false) {
     const store = new Map<string, LaneState>();
     const pause = () => new Promise((done) => setTimeout(done, 5));
+    // With no lock, both tabs read before either goes on, whatever the machine's load: the moment the lock is for.
+    // (Only there: under a lock the second read waits for the first tab, as it must.)
+    const waiting: (() => void)[] = [];
+    const meet = () => (together && waiting.length < 2 ? new Promise<void>((done) => (waiting.push(done), waiting.length === 2 && waiting.forEach((go) => go()))) : Promise.resolve());
     const tab = async () => {
       const wallet = new Wallet(mint.url, { unit: "sat" });
       await wallet.loadMint();
@@ -146,9 +161,16 @@ describe("two tabs of one browser, on one store", () => {
       const minter = createSeededMint({
         wallet,
         outputs: async (id, amounts, from) => seededOutputs(seed, id, amounts, from),
-        load: async (id) => (await pause(), store.get(id) ?? null),
+        load: async (id) => {
+          const read = (await pause(), store.get(id) ?? null);
+          await meet();
+          return read;
+        },
         save: async (id, state) => (await pause(), void store.set(id, state)),
-        lock
+        lock,
+        // The lock alone is what these show: with the check first on, a tab that comes second is sometimes saved by
+        // it, and the test would be of the check, not the lock.
+        checkFirst: false
       });
       return {
         async add(sats: number) {
@@ -165,7 +187,7 @@ describe("two tabs of one browser, on one store", () => {
     const mint = await startMockMint({ signsAgain: true });
     mints.push(mint);
     const seed = ecashSeed(generatePrivateKey());
-    const [a, b] = await tabs(mint, seed, (_name, fn) => fn());
+    const [a, b] = await tabs(mint, seed, (_name, fn) => fn(), true);
     const [pa, pb] = await Promise.all([a.add(8), b.add(8)]);
     expect(total(pa) + total(pb)).toBe(16);
     expect(distinct([...pa, ...pb])).toBeLessThan(pa.length + pb.length);
@@ -175,10 +197,25 @@ describe("two tabs of one browser, on one store", () => {
     const mint = await startMockMint({ signsAgain: true });
     mints.push(mint);
     const seed = ecashSeed(generatePrivateKey());
-    const [a, b] = await tabs(mint, seed, defaultLock);
+    const [a, b] = await tabs(mint, seed, standInLock);
     for (let i = 0; i < 3; i++) {
       const [pa, pb] = await Promise.all([a.add(8), b.add(5)]);
       expect(distinct([...pa, ...pb])).toBe(pa.length + pb.length);
     }
+  });
+});
+
+describe("a browser with no navigator.locks", () => {
+  it("doesn't add by the seed at all, and says why", async () => {
+    // Node has no navigator.locks: as such a browser.
+    expect(seedUsableHere()).toBe(false);
+    const mint = await startMockMint();
+    mints.push(mint);
+    const wallet = new Wallet(mint.url, { unit: "sat" });
+    await wallet.loadMint();
+    const seed = ecashSeed(generatePrivateKey());
+    expect(() => createSeededMint({ wallet, outputs: async (id, a, f) => seededOutputs(seed, id, a, f), load: async () => null, save: async () => {} })).toThrow(NO_SEED_HERE);
+    // Nothing was asked of the mint: not even a lane drawn.
+    expect(mint.signedCount()).toBe(0);
   });
 });

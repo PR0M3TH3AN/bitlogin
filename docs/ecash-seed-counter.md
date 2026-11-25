@@ -101,8 +101,13 @@ block. So keeping two browsers apart must not depend on relays at all.
 The panel and a page of bitlogin.network, or two tabs, share this
 browser's storage, and so its lane. Every read and change of a lane's
 state is made under one lock per mint keyset (`navigator.locks`, which
-every tab and worker of the site shares; a lock within the page where a
-browser lacks it). Reserving reads the counter, takes what it needs and
+every tab and worker of the site shares). **Where a browser has no
+`navigator.locks`, the seed isn't used in it at all.** A lock within one
+page would not stop two tabs. That browser stays relay-kept, as a mint
+that hasn't passed the trial does, and the screen says: "This browser
+can't keep two tabs from using the same counters, so the seed isn't used
+in it. Your sats are kept on relays as before." Every current browser has
+`navigator.locks`. Reserving reads the counter, takes what it needs and
 writes it back under the lock. Moving forward never writes a counter lower
 than the one stored. (Tested: two tabs adding at once, without the lock,
 were handed the same counters and lost one set on a signing-again mint.

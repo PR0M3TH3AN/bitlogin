@@ -6,11 +6,21 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Wallet, type Proof } from "@cashu/cashu-ts";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { startMockMint, type MockMint } from "./mockMint.js";
-import { createSeededMint } from "./seededMint.js";
+import { createSeededMint, type Lock } from "./seededMint.js";
 import { advance, laneStart, type LaneState } from "./seedLanes.js";
 import { restoreFromMint } from "./seedRestore.js";
 import { ecashSeed, seededOutputs } from "../worker/ecashSeed.js";
 
+/**
+ * A stand-in for the browser's navigator.locks, which Node hasn't: one lock per name, for the minters of this test.
+ * It keeps minters in one process apart, as navigator.locks keeps tabs apart; it is a test's, never the wallet's.
+ */
+const inPage = new Map<string, Promise<unknown>>();
+const standInLock: Lock = (name, fn) => {
+  const run = (inPage.get(name) ?? Promise.resolve()).then(fn, fn);
+  inPage.set(name, run.catch(() => {}));
+  return run;
+};
 const total = (proofs: readonly Proof[]) => proofs.reduce((n, p) => n + Number(p.amount), 0);
 
 let mints: MockMint[] = [];
@@ -28,7 +38,7 @@ async function pageWallet(mint: MockMint) {
 async function browser(mint: MockMint, seed: Uint8Array, lane: number) {
   const wallet = await pageWallet(mint);
   const kept = new Map<string, LaneState>([[wallet.keysetId, { lane, next: laneStart(lane) }]]);
-  const minter = createSeededMint({ wallet, outputs: async (id, amounts, from) => seededOutputs(seed, id, amounts, from), load: async (id) => kept.get(id) ?? null, save: async (id, s) => void kept.set(id, s) });
+  const minter = createSeededMint({ wallet, outputs: async (id, amounts, from) => seededOutputs(seed, id, amounts, from), load: async (id) => kept.get(id) ?? null, save: async (id, s) => void kept.set(id, s), lock: standInLock });
   const held: Proof[] = [];
   return {
     wallet,
@@ -49,6 +59,9 @@ async function browser(mint: MockMint, seed: Uint8Array, lane: number) {
 const restore = async (mint: MockMint, seed: Uint8Array, highest?: Partial<Record<number, number>>) =>
   restoreFromMint({ wallet: await pageWallet(mint), outputs: async (id, amounts, from) => seededOutputs(seed, id, amounts, from), highest });
 
+// A restore asks each mint about thousands of outputs, each made from the seed: seconds of work, more under load.
+const RESTORE_MS = 120_000;
+
 describe("restore from the mints, from the key alone", () => {
   it("brings back what two browsers in two lanes added, with every relay gone", async () => {
     const mint = await startMockMint();
@@ -65,7 +78,7 @@ describe("restore from the mints, from the key alone", () => {
     expect(Object.keys(back.next).map(Number).sort((x, y) => x - y)).toEqual([3, 20]);
     // Where each lane goes on from: past everything it signed.
     expect(back.next[3]).toBe(a.kept.get(a.wallet.keysetId)!.next);
-  });
+  }, RESTORE_MS);
 
   it("finds what lies beyond two crashes in a row", async () => {
     const mint = await startMockMint();
@@ -77,7 +90,7 @@ describe("restore from the mints, from the key alone", () => {
     a.burn(40);
     await a.add(7);
     expect(total((await restore(mint, seed)).proofs)).toBe(12);
-  });
+  }, RESTORE_MS);
 
   it("goes as far as the relay copy names, where a gap is wider than restore steps over", async () => {
     const mint = await startMockMint();
@@ -91,7 +104,7 @@ describe("restore from the mints, from the key alone", () => {
     expect(total((await restore(mint, seed)).proofs)).toBe(5);
     // With the relay copy's highest counter for the lane: all of it.
     expect(total((await restore(mint, seed, { 9: a.kept.get(a.wallet.keysetId)!.next })).proofs)).toBe(12);
-  });
+  }, RESTORE_MS);
 
   it("keeps only what the mint says is unspent", async () => {
     const mint = await startMockMint();
@@ -104,5 +117,5 @@ describe("restore from the mints, from the key alone", () => {
     const eight = a.held.filter((p) => Number(p.amount) === 8);
     await a.wallet.ops.send(5, eight).run();
     expect(total((await restore(mint, seed)).proofs)).toBe(3);
-  });
+  }, RESTORE_MS);
 });

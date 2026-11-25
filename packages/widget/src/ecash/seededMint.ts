@@ -26,7 +26,7 @@ export interface SeededMintDeps {
   random?: () => number;
   /** Ask the mint about the counters before using them (rule 5). On, unless a test turns it off. */
   checkFirst?: boolean;
-  /** The lock every change to the lane state is made under. `defaultLock` unless a test gives another. */
+  /** The lock every change to the lane state is made under: the browser's own, unless a test stands one in. */
   lock?: Lock;
 }
 
@@ -42,24 +42,29 @@ const split = (sats: number): number[] => {
 const alreadySigned = (err: unknown): boolean => /already signed/iu.test(String((err as Error)?.message ?? "")) || (err as { code?: number })?.code === 10002;
 
 /**
- * One lock per name, across every tab and worker of this site where the browser has `navigator.locks` (2026-11-24):
- * two tabs of one browser share its storage, and must not reserve from the same lane in the same moment. Where it
- * hasn't, a lock within this page alone.
+ * One lock per name, across every tab and worker of this site: `navigator.locks` (2026-11-24). Two tabs of one
+ * browser share its storage, and must not reserve from the same lane in the same moment. A lock within one page would
+ * not stop two tabs, so where a browser has no `navigator.locks` the seed is not used in it at all: that browser stays
+ * relay-kept, as a mint that hasn't passed the trial does, and the screen says so.
  */
 export type Lock = <T>(name: string, fn: () => Promise<T>) => Promise<T>;
-const inPage = new Map<string, Promise<unknown>>();
-export const defaultLock: Lock = (name, fn) => {
-  const locks = (globalThis as { navigator?: { locks?: { request(name: string, fn: () => Promise<unknown>): Promise<unknown> } } }).navigator?.locks;
-  if (locks?.request) return locks.request(name, fn) as Promise<never>;
-  const before = inPage.get(name) ?? Promise.resolve();
-  const run = before.then(fn, fn);
-  inPage.set(name, run.catch(() => {}));
-  return run;
+type Locks = { request(name: string, fn: () => Promise<unknown>): Promise<unknown> };
+const browserLocks = (): Locks | null => (globalThis as { navigator?: { locks?: Locks } }).navigator?.locks ?? null;
+/** Whether this browser can keep two tabs apart, and so may add by the seed. */
+export const seedUsableHere = (): boolean => typeof browserLocks()?.request === "function";
+/** The browser's own lock, shared by every tab and worker of the site. Null where it has none. */
+export const browserLock = (): Lock | null => {
+  const locks = browserLocks();
+  return locks && typeof locks.request === "function" ? ((name, fn) => locks.request(name, fn) as Promise<never>) : null;
 };
+/** What the screen says where the seed isn't used in this browser. */
+export const NO_SEED_HERE = "This browser can't keep two tabs from using the same counters, so the seed isn't used in it. Your sats are kept on relays as before.";
 
 export function createSeededMint(deps: SeededMintDeps) {
   const keysetId = () => deps.wallet.keysetId;
-  const lock = deps.lock ?? defaultLock;
+  // No lock that keeps two tabs apart: nothing is added by the seed in this browser.
+  const lock = deps.lock ?? browserLock();
+  if (!lock) throw Object.assign(new Error(NO_SEED_HERE), { code: "no-seed-here" });
   /** Every read-and-write of a keyset's lane state, under that keyset's lock: nothing in between. */
   const locked = <T>(id: string, fn: () => Promise<T>) => lock(`bitlogin:ecash-seed:${id}`, fn);
   /** The counters among these the mint has signed already: the highest, or null. */
