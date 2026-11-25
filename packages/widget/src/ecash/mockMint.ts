@@ -29,6 +29,8 @@ export interface MockMint {
   requests: string[];
   /** How many outputs it has signed, each once. */
   signedCount(): number;
+  /** How many requests it has refused whole for an output it had signed before, or one given twice. */
+  refusedCount(): number;
   close(): Promise<void>;
 }
 
@@ -59,11 +61,15 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
    * Refused before anything is taken, as standard mints do: an output already signed, or one given twice. A mint
    * that `signsAgain` lets them through.
    */
+  let refused = 0;
   const fresh = (outputs: { B_: string }[] | undefined): void => {
     if (options.signsAgain || !outputs) return;
     const seen = new Set<string>();
     for (const output of outputs) {
-      if (signed.has(output.B_) || seen.has(output.B_)) throw Object.assign(new Error("Blinded message of output already signed"), { code: 10002 });
+      if (signed.has(output.B_) || seen.has(output.B_)) {
+        refused++;
+        throw Object.assign(new Error("Blinded message of output already signed"), { code: 10002 });
+      }
       seen.add(output.B_);
     }
   };
@@ -114,6 +120,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
       for (const q of funding.values()) if (q.state === "UNPAID") q.state = "PAID";
     },
     signedCount: () => signed.size,
+    refusedCount: () => refused,
     close: () => new Promise((resolve) => server.close(() => resolve()))
   };
 
