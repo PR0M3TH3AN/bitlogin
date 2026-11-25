@@ -26,6 +26,19 @@ export interface CapsuleReadResult<TPayload> {
   best: Candidate<TPayload> | null;
   /** True when responsive relays disagree about which event is newest for this address (§16.2 step 8). */
   relayDisagreement: boolean;
+  /**
+   * What each relay did (2026-11-25): answered to the end; connected and didn't finish ("slow"); or never connected,
+   * so was never asked ("not-asked"). Only a relay that answered can say an address is empty.
+   */
+  relays: Array<{ relayUrl: string; state: RelayAnswer; held: number }>;
+}
+
+export type RelayAnswer = "answered" | "slow" | "not-asked";
+/** A relay's failure, read as never connected (so never asked) or as connected and not finished. */
+export function relayAnswer(outcome: { responded: boolean; error?: string }): RelayAnswer {
+  if (outcome.responded) return "answered";
+  if (/connecting to relay|Not connected to relay|Not waited for/u.test(outcome.error ?? "")) return "not-asked";
+  return "slow";
 }
 
 /**
@@ -96,7 +109,8 @@ async function readAddressableCapsule<TPayload>(
     totalCount: quorum.totalCount,
     candidates,
     best,
-    relayDisagreement
+    relayDisagreement,
+    relays: quorum.outcomes.map((outcome) => ({ relayUrl: outcome.relayUrl, state: relayAnswer(outcome), held: dedupeAndSort(outcome.events, authorPubkeyHex, dTag).length }))
   };
 }
 

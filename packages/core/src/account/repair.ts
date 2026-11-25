@@ -6,7 +6,32 @@
  * clobbered with a stale copy.
  */
 import { RelayPool, countAcknowledgements } from "../nostr/pool.js";
-import type { NostrEvent } from "../nostr/event.js";
+import { findTagValue, type NostrEvent } from "../nostr/event.js";
+
+/**
+ * The relays a credential capsule may be re-sent to (2026-11-25): those that answered and hold nothing at its
+ * address, or this same event. A relay holding another event there may hold another account registered under the
+ * same login name and password, where this one was written without it (it wasn't reachable then); re-sending this,
+ * newer, would replace that account's capsule. And a relay that didn't answer may be such a relay.
+ */
+export async function relaysToRepair(relayUrls: string[], event: NostrEvent, timeoutMs?: number): Promise<{ ok: string[]; heldBack: Map<string, string> }> {
+  const d = findTagValue(event, "d") ?? "";
+  const pool = new RelayPool(relayUrls);
+  try {
+    const quorum = await pool.queryQuorum({ kinds: [event.kind], authors: [event.pubkey], "#d": [d], limit: 5 }, timeoutMs);
+    const ok: string[] = [];
+    const heldBack = new Map<string, string>();
+    for (const outcome of quorum.outcomes) {
+      const here = outcome.events.filter((e) => e.kind === event.kind && e.pubkey === event.pubkey && findTagValue(e, "d") === d);
+      if (!outcome.responded) heldBack.set(outcome.relayUrl, "held back: it didn't answer what it holds at this address");
+      else if (here.some((e) => e.id !== event.id)) heldBack.set(outcome.relayUrl, "held back: it holds another record at this address");
+      else ok.push(outcome.relayUrl);
+    }
+    return { ok, heldBack };
+  } finally {
+    pool.closeAll();
+  }
+}
 
 export interface RepairReplicasResult {
   credentialAcknowledgedCount: number;
@@ -20,8 +45,12 @@ export async function repairReplicas(
   recoveryEvent: NostrEvent,
   timeoutMs?: number
 ): Promise<RepairReplicasResult> {
+  // The credential capsule only where it can't replace another record (relaysToRepair); the recovery capsule, whose
+  // address is this account's alone, everywhere.
+  const targets = await relaysToRepair(pool.relayUrls, credentialEvent, timeoutMs);
+  const credentialPool = new RelayPool(targets.ok);
   const [credentialOutcomes, recoveryOutcomes] = await Promise.all([
-    pool.publishAll(credentialEvent, timeoutMs),
+    targets.ok.length ? credentialPool.publishAll(credentialEvent, timeoutMs).finally(() => credentialPool.closeAll()) : Promise.resolve([]),
     pool.publishAll(recoveryEvent, timeoutMs)
   ]);
   return {
@@ -63,8 +92,10 @@ export async function rebroadcastCapsules(params: {
   const relayUrls = [...new Set(params.relayUrls)];
   const publish = async (
     event: NostrEvent,
+    to: string[] = relayUrls,
   ): Promise<Map<string, RelayPublishReply>> => {
-    const pool = new RelayPool(relayUrls);
+    if (to.length === 0) return new Map();
+    const pool = new RelayPool(to);
     try {
       const outcomes = await pool.publishAll(event, params.timeoutMs);
       return new Map(
@@ -77,10 +108,14 @@ export async function rebroadcastCapsules(params: {
       pool.closeAll();
     }
   };
-  const [credential, recovery] = await Promise.all([
-    publish(params.credentialEvent),
+  // The credential capsule only where it can't replace another record (relaysToRepair).
+  const targets = await relaysToRepair(relayUrls, params.credentialEvent, params.timeoutMs);
+  const [credentialSent, recovery] = await Promise.all([
+    publish(params.credentialEvent, targets.ok),
     publish(params.recoveryEvent),
   ]);
+  const credential = new Map(credentialSent);
+  for (const [relayUrl, why] of targets.heldBack) credential.set(relayUrl, { ok: false, message: why });
   const noReply: RelayPublishReply = { ok: false, message: "no reply" };
   const relays = relayUrls.map((relayUrl) => ({
     relayUrl,

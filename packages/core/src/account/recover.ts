@@ -46,6 +46,7 @@ import {
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { parseDmRelayListEvent, parseRelayListEvent } from "./profileEvents.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
+import { checkAddressFree, UNCHECKED_WORDS } from "./freeAddress.js";
 import { AccountNotFoundError, RecoveryFailedError } from "./errors.js";
 import { resetHighWaterMark } from "./highWaterMark.js";
 import type { KeyValueStore } from "../storage/interface.js";
@@ -513,41 +514,45 @@ export async function completeRecoveryWithNewCredentials(
     // §15.6 -- collision refusal is a PRECONDITION for mutating the recovery
     // chain. A failed or occupied locator read must leave the current recovery
     // event untouched so the caller can safely retry with different credentials.
-    const collisionPool = new RelayPool(params.vaultRelayUrls, {
-      authPrivateKey: locatorPrivateKey,
+    // As at registration (freeAddress.ts, 2026-11-25): free only where a quorum answered "nothing here" and no relay
+    // that connected was left unfinished; the new capsule goes only to the relays that answered.
+    const free = await checkAddressFree({
+      urls: params.vaultRelayUrls,
+      timeoutMs: params.timeoutMs,
+      read: async (urls, timeoutMs) => {
+        const collisionPool = new RelayPool(urls, { authPrivateKey: locatorPrivateKey });
+        try {
+          return await readCredentialCapsule(collisionPool, locatorPublicKey, capsuleKey, timeoutMs);
+        } finally {
+          collisionPool.closeAll();
+        }
+      },
     });
-    let existingAtLocator;
-    try {
-      existingAtLocator = await readCredentialCapsule(
-        collisionPool,
-        locatorPublicKey,
-        capsuleKey,
-        params.timeoutMs,
-      );
-    } finally {
-      collisionPool.closeAll();
-    }
-    if (!existingAtLocator.quorumMet) {
+    if (free.state === "unchecked") {
       throw new RecoveryFailedError(
-        "Couldn't verify the new login name and password aren't already registered. Please retry, or add more vault relays.",
+        `Couldn't check that this login name and password are free: ${UNCHECKED_WORDS[free.why]}. Nothing was changed. Try again in a moment.`,
       );
     }
-    const existingPayload = existingAtLocator.best?.payload ?? null;
-    const resumesPartialCredentialWrite =
-      existingPayload !== null &&
-      existingPayload.account_id === recovered.accountId &&
-      existingPayload.operational_public_key === recovered.everydayPublicKey &&
-      existingPayload.recovery_public_key === recovered.recoveryPublicKey &&
-      existingPayload.generation === 0 &&
-      existingPayload.recovery_capsule_event.id ===
-        recovered.currentRecoveryEvent.id;
-    if (
-      existingAtLocator.candidates.length > 0 &&
-      !resumesPartialCredentialWrite
-    ) {
-      throw new RecoveryFailedError(
-        "Another account is already registered with that login name and password. Pick a different one.",
-      );
+    let credentialRelayUrls: string[];
+    if (free.state === "taken") {
+      // What is there may be this same recovery's own earlier write, cut short: that one may be finished.
+      const existingPayload = free.result.best?.payload ?? null;
+      const resumesPartialCredentialWrite =
+        existingPayload !== null &&
+        existingPayload.account_id === recovered.accountId &&
+        existingPayload.operational_public_key === recovered.everydayPublicKey &&
+        existingPayload.recovery_public_key === recovered.recoveryPublicKey &&
+        existingPayload.generation === 0 &&
+        existingPayload.recovery_capsule_event.id ===
+          recovered.currentRecoveryEvent.id;
+      if (!resumesPartialCredentialWrite) {
+        throw new RecoveryFailedError(
+          "Another account is already registered with that login name and password. Pick a different one.",
+        );
+      }
+      credentialRelayUrls = free.answeredUrls;
+    } else {
+      credentialRelayUrls = free.writeUrls;
     }
 
     const nextRecoveryGeneration =
@@ -616,8 +621,8 @@ export async function completeRecoveryWithNewCredentials(
       ...credentialVaultFields,
       // A retry may be repairing a credential that reached only one relay.
       // It must replace that partial event deterministically on every relay.
-      created_at: existingAtLocator.best
-        ? nextCreatedAt(existingAtLocator.best.event.created_at, now)
+      created_at: free.state === "taken" && free.result.best
+        ? nextCreatedAt(free.result.best.event.created_at, now)
         : now,
       vault_relay_hints: vaultRelayHints(params.vaultRelayUrls),
       protocol: {
@@ -632,7 +637,8 @@ export async function completeRecoveryWithNewCredentials(
       capsuleKey,
       payload: credentialPayload,
     });
-    const credentialPool = new RelayPool(params.vaultRelayUrls, {
+    // Only the relays that answered at this address: none that might hold another account is written over.
+    const credentialPool = new RelayPool(credentialRelayUrls, {
       authPrivateKey: locatorPrivateKey,
     });
     let credentialPublish: PublishVerificationResult;

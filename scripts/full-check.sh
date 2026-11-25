@@ -7,6 +7,8 @@
 # Every step must pass; the first that fails ends the run, and its code is the script's. The log has everything.
 set -o pipefail
 log="${1:?give a log file}"
+# A heavy run: it waits its turn for the machine's lock (scripts/heavy.sh), unless the lock is held already.
+if [ -z "$BITBLOCKS_HEAVY_HELD" ]; then exec sh "$(dirname "$0")/heavy.sh" bash "$0" "$@"; fi
 {
   npm run build:demo &&
     npm run typecheck &&
