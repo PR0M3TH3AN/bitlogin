@@ -7,7 +7,7 @@ import { familyOf, publicSuffixOf, registrableDomain } from "./publicSuffix.js";
 import { PUBLIC_SUFFIX_ICANN, PUBLIC_SUFFIX_PRIVATE } from "./publicSuffixList.js";
 import { isTakenBack, readTakenBack, takeBack, writeTakenBack, NOTHING_TAKEN_BACK } from "./takeBack.js";
 import { openAppHandoff, sealHandoff } from "../worker/handoff.js";
-import { deleteSignerGrant, GRANT_LIMITS, grantKey, grantSite, keepSecFor, loadSignerGrant, saveSignerGrant } from "../worker/signerGrant.js";
+import { deleteSignerGrant, GRANT_LIMITS, grantKey, grantSite, grantsToKeep, keepSecFor, loadSignerGrant, saveSignerGrant } from "../worker/signerGrant.js";
 
 const FAMILY = "https://*.bitblocks.network";
 const PORTAL = "https://portal.bitblocks.network";
@@ -238,7 +238,33 @@ describe("a hand-off for a family", () => {
     expect(() => seal({ site: PORTAL, remember: true, visitOnly: true, family: FAMILY })).toThrow(/family/u);
     expect(() => seal({ site: PORTAL, remember: true, family: "https://*.Bitblocks.network" })).toThrow(/family/u);
     expect(() => seal({ remember: true, family: FAMILY })).toThrow(/family/u);
-    expect(() => seal({ site: PORTAL, remember: true, family: FAMILY }, { site: PORTAL, permissions: { name: "App", sign: [1] } })).toThrow(/family/u);
+    // An application asking for a family BitLogin doesn't know: refused whole, as before (SF5a is for known families).
+    const elsewhere = "https://app.worlds-test.example";
+    expect(() => seal({ site: elsewhere, remember: true, family: "https://*.worlds-test.example" }, { site: elsewhere, permissions: { name: "App", sign: [1] } })).toThrow(/family/u);
+  });
+
+  it("carries an application's own set and a family it knows together, the set for its own address only (SF5a)", () => {
+    const app = { site: PORTAL, permissions: { name: "App", sign: [1, 30078], appData: ["bitportal/"], read: [30078] } };
+    const opened = openAppHandoff(seal({ site: PORTAL, remember: true, family: FAMILY }, app), recipient);
+    expect(opened.family).toBe(FAMILY);
+    expect(opened.app).toMatchObject({ site: PORTAL, permissions: { sign: [1, 30078], appData: ["bitportal/"], read: [30078] } });
+    // Still never for one visit, never with the lock on, never a family the site isn't in.
+    expect(() => seal({ site: PORTAL, family: FAMILY }, app)).toThrow(/family/u);
+    expect(() => seal({ site: PORTAL, remember: true, visitOnly: true, family: FAMILY }, app)).toThrow(/family/u);
+    expect(() => seal({ site: "https://portal.example.com", remember: true, family: FAMILY }, { site: "https://portal.example.com", permissions: { name: "App", sign: [1] } })).toThrow(/family/u);
+  });
+
+  it("keeps two grants from one such hand-off: the application's kinds at its own address, the family's note and reaction (SF5a)", () => {
+    const kept = grantsToKeep({ site: PORTAL, app: { site: PORTAL, permissions: { name: "App", sign: [1, 30078], appData: ["bitportal/"], proofs: [], read: [30078], peers: [] } }, family: FAMILY, more: [] });
+    expect(kept).toEqual([
+      { site: PORTAL, permissions: { name: "App", sign: [1, 30078], appData: ["bitportal/"], proofs: [], read: [30078], peers: [] }, memberOf: FAMILY },
+      { site: FAMILY }
+    ]);
+    // An application's kinds never reach the family: the family's record carries no set, and none can be kept for it.
+    expect(kept[1]).not.toHaveProperty("permissions");
+    // A world allowed for its family: the family's grant alone, as before. A world alone: its own.
+    expect(grantsToKeep({ site: PORTAL, app: null, family: FAMILY, more: [] })).toEqual([{ site: FAMILY }]);
+    expect(grantsToKeep({ site: PORTAL, app: null, family: null, more: ["follows"] })).toEqual([{ site: PORTAL, more: ["follows"] }]);
   });
 });
 

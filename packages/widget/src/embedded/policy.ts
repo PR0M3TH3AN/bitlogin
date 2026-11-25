@@ -466,7 +466,7 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
     // A set that does not read as one is no frame at all: the window must not show part of what was asked.
     const wants = d.wants === undefined ? undefined : readPermissions(d.wants);
     if (wants === null) return null;
-    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}), ...(!wants && cleanMore(d.more).length ? { more: cleanMore(d.more) } : {}), ...(!wants && cleanMore(d.has).length ? { has: cleanMore(d.has) } : {}), ...(!wants && d.family === true ? { family: true as const } : {}), ...(readAsked(d.ask, cleanOrigin(d.world)) && hex(d.pubkey) && !(wants && readAsked(d.ask, cleanOrigin(d.world))!.what === "wallet") ? { ask: readAsked(d.ask, cleanOrigin(d.world))!, pubkey: d.pubkey } : {}) };
+    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}), ...(!wants && cleanMore(d.more).length ? { more: cleanMore(d.more) } : {}), ...(!wants && cleanMore(d.has).length ? { has: cleanMore(d.has) } : {}), ...(d.family === true ? { family: true as const } : {}), ...(readAsked(d.ask, cleanOrigin(d.world)) && hex(d.pubkey) && !(wants && readAsked(d.ask, cleanOrigin(d.world))!.what === "wallet") ? { ask: readAsked(d.ask, cleanOrigin(d.world))!, pubkey: d.pubkey } : {}) };
   }
   if (d.t === "answer" && cleanOrigin(d.world)) {
     const wallet = d.wallet === undefined ? "" : cleanWalletUri(d.wallet);

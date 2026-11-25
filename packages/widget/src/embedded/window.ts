@@ -174,8 +174,10 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       const has = wants ? [] : (msg.has ?? []);
       // What is asked now and was not had before: the question is about these.
       const more = wants ? [] : (msg.more ?? []).filter((name) => !has.includes(name));
-      // More than a note and a reaction is for this one site: no family is offered beside it.
-      const family = wants || more.length || has.length ? "" : familyOf(world);
+      // More than a note and a reaction is for this one site: no family is offered beside it. An application may have
+      // its family offered beside its own set only where it asked, for a family BitLogin knows (SF5a).
+      const own = familyOf(world);
+      const family = wants ? (msg.family === true && !!own && knownFamily(own) ? own : "") : more.length || has.length ? "" : own;
       resolve({
         site: world,
         wants,

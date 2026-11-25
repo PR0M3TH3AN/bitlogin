@@ -438,7 +438,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
       lastWindow = asking;
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}), ...(!wanted && familyAsked && !wantedMore.length ? { family: true as const } : {}), ...(pubkey && pending ? { ask: pending.ask, pubkey } : {}) });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}), ...(familyAsked && !wantedMore.length ? { family: true as const } : {}), ...(pubkey && pending ? { ask: pending.ask, pubkey } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }
@@ -517,7 +517,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       // for this visit: it lasts as long as the page does, and nothing is written down. So does one that can't
       // be kept (a browser that gives an embedded page no storage), and every site while the lock is on.
       // A family is kept by the family's own name: thirty days for one BitLogin knows, seven for any other.
-      const known = got.family ? knownFamily(got.family) : knownAppName(site) !== null;
+      // An application allowed with its family too (SF5a) is kept as itself: by its own address.
+      const known = got.family && !got.app ? knownFamily(got.family) : knownAppName(site) !== null;
       // A site let read private messages is asked again after seven days, however well BitLogin knows it: what
       // was read can't be unread, so the say is not left standing for a month.
       const longest = known && !more.includes("messages") ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec;

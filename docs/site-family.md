@@ -148,7 +148,7 @@ Less than a site's own grant, where the two differ:
 | Who the person is (`state`, §SW16) | Yes | Yes |
 | A room pass (§SW16) | Yes, for this origin | Yes, `nswp:origin` is always the exact origin that asked |
 | A note and a reaction | Yes | Yes |
-| An application's declared kinds (§SW9) | As approved | **No.** An application that declares kinds still gets its own Allow, at its own origin, with its own list |
+| An application's declared kinds (§SW9) | As approved | **No.** An application that declares kinds still gets its own Allow, at its own origin, with its own list. An application may ask for its family as well; the family still gets only SF5's (SF5a) |
 | Reserved kinds (§SW9) | Only at the named address | Only at the named address, through that address's own grant |
 | How long | 30 days known, 7 unknown | 30 days for a known family (`bitblocks.network`, SF9.3), otherwise 7 |
 
@@ -163,6 +163,34 @@ Less than a site's own grant, where the two differ:
   sealed in the one store (SF2). It signs nothing a site's own grant could
   not.
 
+
+# SF5a. An application that asks for its family as well
+
+Added 2026-11-25, at the owner's word through the BitPortal session: the
+portal is an application (it declares kinds), and "these logins should
+carry".
+
+- **The ask.** An application's client (`createBitLoginClient`) may pass
+  `family: "https://*.bitblocks.network"`. It is sent to the embedded signer
+  as its own `want`, before the application's set, and taken only as SF4a
+  takes a world's: its own family, by the browser's address, and one
+  BitLogin knows. The client's state says `familyTaken`; a signer too old
+  to answer counts as "not offered".
+- **The screen.** The application's own Allow screen, as today, with the
+  family line beside it, and two presses, neither the default:
+  **[ Stay signed in at every bitblocks.network site ]**
+  **[ Just this one ]** (the application's plain Allow).
+- **One press, two grants.** "Stay signed in…" hands over one sealed
+  hand-off carrying the application's set and the family. The signer keeps
+  two records: the application's own (its kinds, its address only, as long
+  as its own grant is kept, and the family it was allowed with), and the
+  family's, with no set at all: a note, a reaction and a pass, as above. A
+  family's record can never hold a set (`saveSignerGrant` refuses one).
+- **A sign-out at the application ends the family too,** as a sign-out at
+  any site of it does.
+- **Unchanged:** never with the lock on; not within thirty days of
+  "Just this one" for that family; never for a family BitLogin doesn't
+  know.
 # SF6. Seeing it, and taking it back
 
 - **The sites list (§SW18)** shows the family as one row, "Every site at

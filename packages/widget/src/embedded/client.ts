@@ -44,6 +44,14 @@ export interface BitLoginClientOptions {
    * Ignored unless `at` is an address on this machine or a private network.
    */
   localUnlockService?: string;
+  /**
+   * The family of sites this application is one of, written as BitLogin writes a family:
+   * `https://*.bitblocks.network` (docs/site-family.md SF5a). Asked for before the first sign-in, as a world asks;
+   * BitLogin takes it only where it is this page's own family, by the browser's address for it, and one it knows.
+   * Where taken, BitLogin's window offers, beside this application's own set, to keep the person signed in at every
+   * site of the family: for a note and a reaction there, never this application's kinds. Read `familyTaken`.
+   */
+  family?: string;
 }
 
 export interface BitLoginClientState {
@@ -64,6 +72,12 @@ export interface BitLoginClientState {
    * to say. Fall back, or say so, before opening the window.
    */
   canAsk?: boolean;
+  /**
+   * Whether BitLogin will offer the family asked for in `family` beside this application's set. False where it won't
+   * (not this page's family, or one it doesn't know), and false where the signer is too old to say: then nothing is
+   * offered. Absent where no family was asked for. Known once `ready()` has resolved.
+   */
+  familyTaken?: boolean;
 }
 
 export interface UnsignedEvent {
@@ -174,6 +188,9 @@ const covers = (granted: AppPermissions | undefined, wanted: AppPermissions): bo
   wanted.proofs.every((o) => granted.proofs.includes(o)) &&
   wanted.peers.every((k) => granted.peers.includes(k));
 
+/** How long an older signer's silence about a family is waited for before it counts as "not offered". */
+const FAMILY_WAIT_MS = 3000;
+
 export function createBitLoginClient(options: BitLoginClientOptions): BitLoginClient {
   const at = cleanOrigin(options.at);
   if (!at) throw new Error("`at` must be the sign-in address's origin, such as https://bitlogin.network");
@@ -196,6 +213,9 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
   let raw: { unlocked: boolean; pubkey?: string } = { unlocked: false };
   /** Whether the signer said this set may be shown here. Undefined until it has, or where it is too old to. */
   let canAsk: boolean | undefined;
+  /** Whether the signer took the family asked for. Undefined where none was asked. */
+  let familyTaken: boolean | undefined;
+  const family = typeof options.family === "string" ? options.family : undefined;
   const listeners = new Set<(state: BitLoginClientState) => void>();
   const waiting = new Map<string, { resolve(value: Record<string, unknown>): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   let stopped = false;
@@ -205,6 +225,7 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
   const take = (d: Record<string, unknown>) => {
     const unlocked = d.unlocked === true && typeof d.pubkey === "string";
     if (typeof d.taken === "boolean") canAsk = d.taken;
+    if (family !== undefined && typeof d.familyTaken === "boolean") familyTaken = d.familyTaken;
     const granted = unlocked ? (readPermissions(d.permissions) ?? undefined) : undefined;
     const enough = unlocked && covers(granted, wanted);
     raw = { unlocked, ...(unlocked ? { pubkey: d.pubkey as string } : {}) };
@@ -214,7 +235,8 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
       ...(enough && typeof d.name === "string" ? { name: d.name } : {}),
       ...(enough && typeof d.until === "number" ? { until: d.until } : {}),
       ...(unlocked && !enough ? { needsMore: true } : {}),
-      ...(canAsk !== undefined ? { canAsk } : {})
+      ...(canAsk !== undefined ? { canAsk } : {}),
+      ...(familyTaken !== undefined ? { familyTaken } : {})
     };
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     current = next;
@@ -266,6 +288,12 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
   const introduce = (): Promise<BitLoginClientState> =>
     (introduced ??= (async () => {
       await frameUp;
+      // The family first, on its own, as a world asks for it. A signer too old to know the question says nothing:
+      // after a short wait that is "not offered", and the application's own question goes on as before.
+      if (family !== undefined) {
+        const answered = await Promise.race([request({ t: "want", family }).then(() => true, () => false), new Promise<boolean>((done) => setTimeout(() => done(false), FAMILY_WAIT_MS))]);
+        if (!answered || familyTaken === undefined) familyTaken = false;
+      }
       await request({ t: "want", permissions: wanted });
       return current;
     })().catch((error: unknown) => {

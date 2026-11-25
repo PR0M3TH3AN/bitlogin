@@ -1559,6 +1559,163 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   );
 
   it(
+    "an application that asks for its family through the client is offered both at once: its own set, and the family's note and reaction (site-family.md SF5a)",
+    async () => {
+      const FAMILY = "https://*.bitblocks.network";
+      // An application's page: BitLogin's own client library, asking for its set and for its family.
+      const appPage = `<!doctype html><meta charset="utf-8"><title>an application</title><button id="open">Sign in</button>
+<script type="module">
+  import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
+  window.bl = createBitLoginClient({ at: "${origin}", family: "${FAMILY}", permissions: { name: "Portal test", sign: [1, 30078], appData: ["portaltest/"], read: [30078] } });
+  window.attempt = async (method, ...args) => {
+    try { return { ok: true, value: await window.bl[method](...args) }; } catch (err) { return { ok: false, name: err.name }; }
+  };
+  document.getElementById("open").onclick = () => { window.signedIn = window.bl.signIn(); };
+  window.isReady = window.bl.ready();
+</script>`;
+      // A world's page of the same family, with BitLogin's signer in it.
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const browser = await playwright!.chromium.launch();
+      /** A browser with its own account; pages under bitlogin's known family answered here, nothing asked of the real ones. */
+      const newBrowser = async () => {
+        const context = await browser.newContext();
+        await context.route(/^https:\/\/ff(app|w)[0-9]\.bitblocks\.network\//u, async (route) => {
+          const url = new URL(route.request().url());
+          if (url.pathname.startsWith("/vendor/")) {
+            const file = join(DIST, normalize(url.pathname).replace(/^(\.\.[/\\])+/u, ""));
+            return route.fulfill({ status: 200, contentType: "text/javascript; charset=utf-8", body: await readFile(file) });
+          }
+          return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: url.hostname.startsWith("ffapp") ? appPage : worldPage });
+        });
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+        return { context, widget, me };
+      };
+      const app = async (context: Awaited<ReturnType<typeof newBrowser>>["context"], n: number) => {
+        const page = await context.newPage();
+        await page.goto(`https://ffapp${n}.bitblocks.network/`);
+        const state = (await page.evaluate(() => (window as any).isReady)) as Record<string, unknown>;
+        const attempt = (method: string, ...args: unknown[]) => page.evaluate(([m, a]) => (window as any).attempt(m, ...(a as unknown[])), [method, args] as const) as Promise<{ ok: boolean; value?: any; name?: string }>;
+        const window_ = async () => {
+          const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+          return popup;
+        };
+        return { page, state, attempt, window: window_ };
+      };
+      const world = async (context: Awaited<ReturnType<typeof newBrowser>>["context"], n: number) => {
+        const page = await context.newPage();
+        await page.goto(`https://ffw${n}.bitblocks.network/`);
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+        return { page, ask };
+      };
+      try {
+        const { context, me } = await newBrowser();
+
+        // The client asked for its family, and the signer took it: said in the client's state before any window.
+        const one = await app(context, 1);
+        expect(one.state).toMatchObject({ signedIn: false, canAsk: true, familyTaken: true });
+        const first = await one.window();
+        await first.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        // Its own set, as today, and the family line beside it.
+        expect(await first.locator("#app-site").textContent()).toBe("https://ffapp1.bitblocks.network");
+        expect(await first.locator("#app-family").isVisible()).toBe(true);
+        expect(await first.locator("#app-family-domain").textContent()).toBe("bitblocks.network");
+        expect(await first.locator("#allow-app-family").textContent()).toBe("Stay signed in at every bitblocks.network site");
+        expect(await first.locator("#allow-app").textContent()).toBe("Just this one");
+        await first.waitForTimeout(1000);
+        await first.locator("#allow-app-family").click();
+        expect(await one.page.evaluate(() => (window as any).signedIn)).toBe(true);
+        // The application has what it asked for, at its own address.
+        const kept = await one.attempt("signEvent", { kind: 30078, content: "{}", tags: [["d", "portaltest/x"]] });
+        expect(kept.ok).toBe(true);
+        expect(kept.value).toMatchObject({ kind: 30078, pubkey: me });
+
+        // Another world of the family: signed in with nothing pressed, for a note and a reaction, and nothing of the
+        // application's set: its kinds never reach the family.
+        const w = await world(context, 1);
+        await w.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        expect(await w.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me });
+        expect((await w.ask({ t: "sign", event: { kind: 1, content: "from a world", tags: [] } })).t).toBe("signed");
+        for (const kind of [0, 3, 30078]) expect((await w.ask({ t: "sign", event: { kind, content: "{}", tags: [["d", "portaltest/x"]] } })).t, String(kind)).toBe("refused");
+
+        // Signing out at the application signs out of the family too.
+        await one.attempt("signOut");
+        await w.page.reload();
+        await w.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await w.ask({ t: "state" })).toMatchObject({ unlocked: false });
+
+        // "Just this one" at another application of the family: its own set alone; the line isn't shown at the next.
+        const two = await app(context, 2);
+        const second = await two.window();
+        await second.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await second.locator("#app-family").isVisible()).toBe(true);
+        await second.waitForTimeout(1000);
+        await second.locator("#allow-app").click();
+        expect(await two.page.evaluate(() => (window as any).signedIn)).toBe(true);
+        const w2 = await world(context, 2);
+        expect(await w2.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        const three = await app(context, 3);
+        const third = await three.window();
+        await third.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await third.locator("#app-family").isVisible()).toBe(false);
+        expect(await third.locator("#allow-app-family").isVisible()).toBe(false);
+        expect(await third.locator("#allow-app").textContent()).toBe("Allow");
+        await third.close();
+
+        // With the lock on (another browser, nothing declined there): no family line, only the application's Allow.
+        const locked = await newBrowser();
+        await locked.widget.locator('[data-action="goto-lock-settings"]').click();
+        await locked.widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill("246810");
+        await locked.widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill("246810");
+        await locked.widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        await locked.widget.locator('[data-action="lock-off"]').waitFor({ timeout: 60_000 });
+        const four = await app(locked.context, 4);
+        const fourth = await four.window();
+        await fourth.locator("#unlock").waitFor({ state: "visible", timeout: 30_000 });
+        await fourth.locator("#unlock-pin").fill("246810");
+        await fourth.locator("#unlock-go").click();
+        await fourth.locator("#allow-app").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await fourth.locator("#app-family").isVisible()).toBe(false);
+        expect(await fourth.locator("#allow-app-family").isVisible()).toBe(false);
+        expect(await fourth.locator("#allow-app").textContent()).toBe("Allow");
+      } finally {
+        await browser.close();
+      }
+    },
+    600_000
+  );
+
+  it(
     "a world that asks for its family at its first sign-in is offered it there, for a family BitLogin knows (site-family.md SF4a)",
     async () => {
       // Sites under bitblocks.network, a family BitLogin knows. Nothing is asked of the real addresses: the browser's
