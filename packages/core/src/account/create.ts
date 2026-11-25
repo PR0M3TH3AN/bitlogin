@@ -36,6 +36,7 @@ import {
 } from "../capsules/types.js";
 import type { CredentialPayload, RecoveryPayload } from "../capsules/types.js";
 import { publishAndVerify, type PublishVerificationResult } from "./publish.js";
+import { checkAddressFree, UNCHECKED_WORDS } from "./freeAddress.js";
 import { readCredentialCapsule } from "./capsuleReader.js";
 import {
   RegistrationFailedError,
@@ -100,34 +101,32 @@ export async function registerAccount(
     await derivePasswordKeys(params.password, normalizedLoginName);
   try {
     const locatorPublicKey = getPublicKeyHex(locatorPrivateKey);
-    const checkPool = new RelayPool(params.vaultRelayUrls, {
-      authPrivateKey: locatorPrivateKey,
+    // Free only where a quorum answered "nothing here" and no relay that connected was left unfinished; and the
+    // capsule is then written only to those that answered (freeAddress.ts, 2026-11-25).
+    const free = await checkAddressFree({
+      urls: params.vaultRelayUrls,
+      timeoutMs: params.timeoutMs,
+      read: async (urls, timeoutMs) => {
+        const checkPool = new RelayPool(urls, { authPrivateKey: locatorPrivateKey });
+        try {
+          return await readCredentialCapsule(checkPool, locatorPublicKey, credentialCapsuleKey, timeoutMs);
+        } finally {
+          checkPool.closeAll();
+        }
+      },
     });
-    let existingCapsule;
-    try {
-      existingCapsule = await readCredentialCapsule(
-        checkPool,
-        locatorPublicKey,
-        credentialCapsuleKey,
-        params.timeoutMs,
-      );
-    } finally {
-      checkPool.closeAll();
-    }
     // Any validly signed event at this address (decryptable by us or not) required
     // knowing this exact locator private key to publish -- which requires this exact
     // login name + password -- so its mere presence means an account already exists here.
-    if (existingCapsule.candidates.length > 0) {
+    if (free.state === "taken") {
       throw new AccountAlreadyExistsError();
     }
-    // "Free" needs EVERY relay asked to have answered to the end with nothing here (2026-11-25). A quorum of answers
-    // is not enough: the relays holding an existing account may be the ones that were slow, and registering over it
-    // would destroy that account. A relay that timed out or failed means "couldn't check", and nothing is written.
-    if (!existingCapsule.quorumMet || existingCapsule.respondedCount !== existingCapsule.totalCount) {
+    if (free.state === "unchecked") {
       throw new RegistrationFailedError(
-        "Couldn't check that this login name and password are free: not every vault relay answered. Nothing was registered. Try again in a moment.",
+        `Couldn't check that this login name and password are free: ${UNCHECKED_WORDS[free.why]}. Nothing was registered. Try again in a moment.`,
       );
     }
+    const credentialRelayUrls = free.writeUrls;
 
     // §15.3 — validate an imported identity before minting any other account secrets.
     const imported = params.everydayPrivateKey !== undefined;
@@ -240,7 +239,8 @@ export async function registerAccount(
         payload: credentialPayload,
       });
 
-      const credentialPool = new RelayPool(params.vaultRelayUrls, {
+      // Only the relays that answered "nothing here": none that might hold an existing account is written over.
+      const credentialPool = new RelayPool(credentialRelayUrls, {
         authPrivateKey: locatorPrivateKey,
       });
       let credentialPublish: PublishVerificationResult;

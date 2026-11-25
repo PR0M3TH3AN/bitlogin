@@ -49,6 +49,10 @@ export class MockRelay {
    *  reject recovery writes while still accepting credential writes (or vice
    *  versa), independently of the signing identity. */
   public refusePublishDTags: Set<string> = new Set();
+  /** When true, every connection is refused at the handshake: a relay that is down, or unreachable. */
+  public refuseConnections = false;
+  /** Milliseconds before EOSE is sent: a relay that connects and answers slowly. */
+  public eoseDelayMs = 0;
 
   private constructor(wss: WebSocketServer, port: number) {
     this.wss = wss;
@@ -59,11 +63,13 @@ export class MockRelay {
 
   static async start(): Promise<MockRelay> {
     return new Promise((resolve) => {
-      const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      let relay: MockRelay | null = null;
+      const wss = new WebSocketServer({ port: 0, host: "127.0.0.1", verifyClient: (_info, done) => done(!relay?.refuseConnections, 503) });
       wss.on("listening", () => {
         const address = wss.address();
         const port = typeof address === "object" && address ? address.port : 0;
-        resolve(new MockRelay(wss, port));
+        relay = new MockRelay(wss, port);
+        resolve(relay);
       });
     });
   }
@@ -105,7 +111,10 @@ export class MockRelay {
         const matches = this.query(filters[0] ?? {});
         for (const event of this.unsolicitedQueryEvents) socket.send(JSON.stringify(["EVENT", subId, event]));
         for (const event of matches) socket.send(JSON.stringify(["EVENT", subId, event]));
-        if (!this.suppressEose) socket.send(JSON.stringify(["EOSE", subId]));
+        if (!this.suppressEose) {
+          if (this.eoseDelayMs > 0) setTimeout(() => socket.readyState === socket.OPEN && socket.send(JSON.stringify(["EOSE", subId])), this.eoseDelayMs);
+          else socket.send(JSON.stringify(["EOSE", subId]));
+        }
         let subsForSocket = this.liveSubs.get(socket);
         if (!subsForSocket) {
           subsForSocket = new Map();
