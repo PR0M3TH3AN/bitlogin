@@ -53,9 +53,18 @@ export interface AllowedSite {
   refused?: true;
   /** For a refused one: the data names it had been allowed, as kept, so the person can see what they were. */
   hadNames?: string[];
+  /**
+   * A headset signed in from this phone (docs/pair-a-headset.md): the id its grant carries, which "Sign out this
+   * headset" names in a take-back, and the label its browser gave, as the phone showed it.
+   */
+  device?: string;
+  deviceLabel?: string;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/u;
+const DEVICE = /^[0-9a-f]{32}$/u;
+/** The same grant: one site, one account, and one headset or none. */
+const same = (a: AllowedSite, b: AllowedSite): boolean => a.site === b.site && a.pubkey === b.pubkey && (a.device ?? "") === (b.device ?? "");
 
 function readEntry(input: unknown): AllowedSite | null {
   if (!input || typeof input !== "object") return null;
@@ -72,7 +81,10 @@ function readEntry(input: unknown): AllowedSite | null {
   const had = (e.wants as { appData?: unknown } | undefined)?.appData;
   const hadNames = refused && Array.isArray(had) ? had.filter((n): n is string => typeof n === "string").map((n) => cleanName(n)).filter(Boolean).slice(0, 8) : [];
   const members = family && Array.isArray(e.members) ? [...new Set(e.members.filter((m): m is string => inFamily(m, family)))].slice(0, ALLOWED_LIMITS.members) : [];
-  return { site, ...(members.length ? { members } : {}), pubkey: e.pubkey, at: Math.floor(e.at), until: Math.floor(e.until), remembered: e.remembered === true, ...(wants && !refused ? { wants } : {}), ...(refused ? { refused: true as const, ...(hadNames.length ? { hadNames } : {}) } : {}) };
+  const device = typeof e.device === "string" && DEVICE.test(e.device) ? e.device : undefined;
+  if (e.device !== undefined && !device) return null;
+  const label = device && typeof e.deviceLabel === "string" && e.deviceLabel.length <= 48 && /^[\p{L}\p{N} ._()-]+$/u.test(e.deviceLabel) ? e.deviceLabel : undefined;
+  return { site, ...(members.length ? { members } : {}), pubkey: e.pubkey, at: Math.floor(e.at), until: Math.floor(e.until), remembered: e.remembered === true, ...(wants && !refused ? { wants } : {}), ...(refused ? { refused: true as const, ...(hadNames.length ? { hadNames } : {}) } : {}), ...(device ? { device, ...(label ? { deviceLabel: label } : {}) } : {}) };
 }
 
 /** The record as it was stored, read again: anything that is not an entry is dropped, and so is one long ended. Newest first. */
@@ -101,10 +113,10 @@ export function readAllowed(raw: string | null | undefined, nowSeconds: number):
 export function addAllowed(list: readonly AllowedSite[], entry: AllowedSite): AllowedSite[] {
   const clean = readEntry(entry);
   if (!clean) return [...list];
-  const before = list.find((other) => other.site === clean.site && other.pubkey === clean.pubkey);
+  const before = list.find((other) => same(other, clean));
   const merged =
     readFamily(clean.site) && before?.members ? (readEntry({ ...clean, members: [...(clean.members ?? []), ...before.members] }) ?? clean) : clean;
-  return [merged, ...list.filter((other) => !(other.site === clean.site && other.pubkey === clean.pubkey))].slice(0, ALLOWED_LIMITS.entries);
+  return [merged, ...list.filter((other) => !same(other, clean))].slice(0, ALLOWED_LIMITS.entries);
 }
 
 /**
@@ -115,11 +127,11 @@ export function addAllowed(list: readonly AllowedSite[], entry: AllowedSite): Al
  */
 export function familyOffer(list: readonly AllowedSite[], site: string, family: string, pubkey: string): AllowedSite | null {
   if (!readFamily(family) || !inFamily(site, family)) return null;
-  return list.find((entry) => entry.pubkey === pubkey && entry.remembered && entry.site !== site && inFamily(entry.site, family)) ?? null;
+  return list.find((entry) => entry.pubkey === pubkey && entry.remembered && !entry.device && entry.site !== site && inFamily(entry.site, family)) ?? null;
 }
 
-export function removeAllowed(list: readonly AllowedSite[], site: string, pubkey: string): AllowedSite[] {
-  return list.filter((entry) => !(entry.site === site && entry.pubkey === pubkey));
+export function removeAllowed(list: readonly AllowedSite[], site: string, pubkey: string, device?: string): AllowedSite[] {
+  return list.filter((entry) => !(entry.site === site && entry.pubkey === pubkey && (entry.device ?? "") === (device ?? "")));
 }
 
 /** What an entry is, in words, for the list. `family` is the domain, for a family's entry. */

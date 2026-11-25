@@ -75,6 +75,8 @@ import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
 import { deleteSignerGrant, grantedAt, grantSite, grantsToKeep, keepSecFor, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import { forgetGuest, loadGuest, makeGuest } from "./guestRecord.js";
+import { phonePairing, startHeadsetPairing, type HeadsetPairing, type PhonePairing } from "./pairing.js";
+import type { PairOffer } from "../embedded/pair.js";
 
 /** How long a guest's signer stays unlocked in one page before it takes the guest up again: a day. */
 const GUEST_SESSION_SEC = 24 * 3600;
@@ -194,6 +196,8 @@ interface SessionState {
   memberOf: string | null;
   /** For a signer-only session: the family whose guest account this is (docs/guest-accounts.md), or null. */
   guest: string | null;
+  /** For a signer-only session: the device a phone paired, by its random id (docs/pair-a-headset.md), or null. */
+  device: string | null;
   /** For a signer-only session serving a world: what the user let it do beyond a note and a reaction, by name. */
   more: readonly string[];
 }
@@ -220,12 +224,18 @@ const session: SessionState = {
   family: null,
   memberOf: null,
   guest: null,
+  device: null,
   more: []
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
  *  handoffAccept. One at a time, used once. */
 let pendingHandoff: Uint8Array | null = null;
+/** A headset waiting to be signed in from a phone (docs/pair-a-headset.md): one at a time. */
+let headsetPairing: HeadsetPairing | null = null;
+/** On the phone: the pairing under way, by the offers it found, and the throwaway key that speaks for it. */
+/** The phone's side: the offers found for the code it was given, and the number it sent each to show. */
+let phonePaired: { phone: PhonePairing; offers: Map<string, PairOffer>; numbers: Map<string, number> } | null = null;
 
 
 let vaultRelayUrls: string[] = [...BUILTIN_VAULT_RELAYS];
@@ -390,6 +400,7 @@ function clearSession(): void {
   session.family = null;
   session.memberOf = null;
   session.guest = null;
+  session.device = null;
   session.more = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
@@ -920,6 +931,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
               signed: [],
               ...(g.more ? { more: g.more } : {}),
               ...(g.memberOf ? { memberOf: g.memberOf } : {}),
+              ...(session.device ? { device: session.device } : {}),
               ...(g.permissions ? { permissions: g.permissions, signedSensitive: [] } : {})
             },
             now
@@ -973,6 +985,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       session.site = family ? p.site : grant.site;
       session.family = family;
       session.memberOf = !family && grant.memberOf ? grant.memberOf : null;
+      session.device = grant.device ?? null;
       session.profile = grant.profile ?? null;
       session.remember = true;
       session.grantAt = grantedAt(grant);
@@ -1056,6 +1069,112 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       }
     }
 
+    // ---- A headset signed in from a phone (docs/pair-a-headset.md). The headset's side, in its signer frame: a
+    // one-time key made here, an offer naming the code by hash, and the phone's notes heard. What arrives is the same
+    // sealed hand-off an Allow sends, opened once and taken up as one.
+    case "pairBegin": {
+      const p = payload as { site?: unknown; device?: unknown };
+      const site = grantSite(p.site);
+      if (!site) throw new Error("That is not a site.");
+      headsetPairing?.cancel();
+      headsetPairing = await startHeadsetPairing({ relayUrls: vaultRelayUrls, site, device: typeof p.device === "string" ? p.device.slice(0, 48) : "a device" });
+      return { code: headsetPairing.code, expires: headsetPairing.expires };
+    }
+    case "pairPoll": {
+      if (!headsetPairing) return { status: "ended" };
+      const state = headsetPairing.state();
+      if (state.status !== "paired" || !state.opened) return { status: state.status, ...(state.number !== undefined ? { number: state.number } : {}) };
+      headsetPairing = null;
+      const opened = state.opened;
+      clearSession();
+      session.signer = new NostrSigner(opened.key);
+      session.everydayPrivateKey = opened.key;
+      session.signerOnly = true;
+      session.app = null;
+      session.site = opened.site;
+      session.profile = opened.profile;
+      session.remember = opened.remember;
+      session.grantAt = opened.at;
+      session.relays = opened.relays;
+      session.family = opened.family;
+      session.more = [];
+      session.device = opened.device ?? null;
+      return {
+        status: "paired",
+        everydayPublicKey: session.signer.getPublicKey(),
+        ...(opened.site ? { site: opened.site } : {}),
+        ...(opened.profile ? { profile: opened.profile } : {}),
+        ...(opened.remember ? { remember: true } : {}),
+        ...(opened.family ? { family: opened.family } : {})
+      };
+    }
+    case "pairCancel": {
+      headsetPairing?.cancel();
+      headsetPairing = null;
+      return {};
+    }
+
+    // The phone's side, at BitLogin's own /pair, signed in: find the offer by its code, the number to match, and the
+    // answer: the hand-off an Allow would send that site, sealed to the headset's one-time key, with a device id.
+    case "pairFind": {
+      phonePaired = { phone: phonePairing({ relayUrls: vaultRelayUrls }), offers: new Map(), numbers: new Map() };
+      const offers = await phonePaired.phone.find(String((payload as { code?: unknown }).code ?? ""));
+      for (const offer of offers) phonePaired.offers.set(offer.id, offer);
+      return { offers };
+    }
+    case "pairFound":
+    case "pairEnd": {
+      const offer = phonePaired?.offers.get(String((payload as { offer?: unknown }).offer ?? ""));
+      if (!phonePaired || !offer) throw new Error("That headset isn't being paired here.");
+      if (action === "pairEnd") {
+        await phonePaired.phone.end(offer);
+        phonePaired = null;
+        return {};
+      }
+      // One number to an offer: asked again, the one sent is said again, so it can't be tried until one matches.
+      const sent = phonePaired.numbers.get(offer.id);
+      if (sent !== undefined) return { number: sent };
+      const number = await phonePaired.phone.found(offer);
+      phonePaired.numbers.set(offer.id, number);
+      return { number };
+    }
+    case "pairAnswer": {
+      const { everydayPrivateKey } = requireUnlocked();
+      if (session.signerOnly) throw new Error("A headset is signed in from BitLogin's own page only.");
+      const p = payload as { offer?: unknown; number?: unknown; family?: unknown };
+      const offer = phonePaired?.offers.get(String(p.offer ?? ""));
+      if (!phonePaired || !offer) throw new Error("That headset isn't being paired here.");
+      // Only once the person tapped the number the headset shows (docs/pair-a-headset.md P4a). Another, and it ends.
+      const sent = phonePaired.numbers.get(offer.id);
+      if (sent === undefined || p.number !== sent) {
+        const { phone } = phonePaired;
+        phonePaired = null;
+        await phone.end(offer).catch(() => {});
+        throw new Error("Not the number the headset shows.");
+      }
+      // A family only where it is the headset site's own, and one BitLogin knows, as the window offers it.
+      if (p.family !== undefined && (typeof p.family !== "string" || !readFamily(p.family) || !inFamily(offer.site, p.family) || !knownFamily(p.family))) throw new Error("Not that site's family.");
+      const device = bytesToHex(randomBytes(16));
+      const sender = generatePrivateKey();
+      try {
+        const sealed = sealHandoff(everydayPrivateKey, offer.key, sender, undefined, {
+          site: offer.site,
+          ...(session.profile ? { profile: session.profile } : {}),
+          remember: true,
+          ...(typeof p.family === "string" ? { family: p.family } : {}),
+          ...(lockKey ? { visitOnly: true } : {}),
+          at: Date.now() / 1000,
+          relays: session.relays,
+          device
+        });
+        await phonePaired.phone.answer(offer, sealed);
+      } finally {
+        wipe(sender);
+      }
+      phonePaired = null;
+      return { device };
+    }
+
     case "handoffAccept": {
       if (!pendingHandoff) throw new Error("No hand-off was begun here.");
       const mine = pendingHandoff;
@@ -1080,6 +1199,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       // was allowed with, kept beside it and ended with it, never what its signatures are counted or checked under.
       session.family = opened.app ? null : opened.family;
       session.memberOf = opened.app ? opened.family : null;
+      session.device = opened.device ?? null;
       session.more = opened.more;
       return {
         everydayPublicKey: session.signer.getPublicKey(),
@@ -1133,7 +1253,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const p = payload as TakeBackPayload;
       const me = signer.getPublicKey();
       const now = Date.now() / 1000;
-      const what = p.all === true ? ({ all: true } as const) : { site: String(p.site ?? "") };
+      const what = p.all === true ? ({ all: true } as const) : typeof p.device === "string" ? { device: p.device } : { site: String(p.site ?? "") };
       const finder = readPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
       let mine: string[];
       try {
@@ -1202,7 +1322,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const newest = newestTakeBackEvent(records.outcomes.flatMap((o) => o.events), me, now);
       const record = newest ? openTakenBack(signer, newest.content) : null;
       // Whatever else is true of this round, a record that ends the grant ends it.
-      if (record && isTakenBack(record, site, at)) {
+      if (record && isTakenBack(record, site, at, grant.device)) {
         await deleteSignerGrant(store, site);
         clearSession();
         return { state: "ended" };
@@ -2408,7 +2528,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
-  "handoffBegin", "handoffExport", "handoffAccept",
+  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "pairFind", "pairFound", "pairEnd", "pairAnswer",
   "signerKeep", "signerRestore", "guestStatus", "signerTouch", "signerForget", "signerHold", "signerHeld",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",

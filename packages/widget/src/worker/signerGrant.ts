@@ -67,6 +67,8 @@ export interface SignerGrant {
    * at the application signs out of the family too. Only a family; never more than that is read from it.
    */
   memberOf?: string;
+  /** The device a phone paired, by its random id (docs/pair-a-headset.md): a take-back may name it alone. */
+  device?: string;
   /** The user's own write relays, where a signer looks for their take-back record. */
   relays?: string[];
   /** When their relays were last asked, and answered, whether this site was taken back. In seconds. */
@@ -143,6 +145,7 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       ...(!grant.permissions && !readFamily(site) && cleanMore(grant.more).length ? { more: cleanMore(grant.more) } : {}),
       ...(typeof grant.at === "number" ? { at: Math.floor(grant.at) } : {}),
       ...(!readFamily(site) && readFamily(grant.memberOf) ? { memberOf: readFamily(grant.memberOf) } : {}),
+      ...(typeof grant.device === "string" && /^[0-9a-f]{32}$/u.test(grant.device) ? { device: grant.device } : {}),
       ...(cleanRelays(grant.relays).length ? { relays: cleanRelays(grant.relays) } : {}),
       ...(typeof grant.checkedAt === "number" ? { checkedAt: Math.floor(grant.checkedAt) } : {}),
       ...(typeof grant.seenAt === "number" ? { seenAt: Math.floor(grant.seenAt) } : {}),
@@ -171,7 +174,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; more?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown; memberOf?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; more?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown; memberOf?: unknown; device?: unknown };
     const when = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
     const profile = readProfile(p.profile);
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
@@ -199,6 +202,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       ...(!permissions && !readFamily(site) && cleanMore(p.more).length ? { more: cleanMore(p.more) } : {}),
       ...(when(p.at) ? { at: when(p.at)! } : {}),
       ...(!readFamily(site) && readFamily(p.memberOf) ? { memberOf: readFamily(p.memberOf) } : {}),
+      ...(typeof p.device === "string" && /^[0-9a-f]{32}$/u.test(p.device) ? { device: p.device } : {}),
       ...(cleanRelays(p.relays).length ? { relays: cleanRelays(p.relays) } : {}),
       ...(when(p.checkedAt) ? { checkedAt: when(p.checkedAt)! } : {}),
       ...(when(p.seenAt) ? { seenAt: when(p.seenAt)! } : {}),
