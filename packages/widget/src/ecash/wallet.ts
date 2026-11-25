@@ -235,6 +235,46 @@ export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = 
       }
     },
 
+    /**
+     * Whether this wallet can use the seed at all, here: "yes"; "no-seed" where the store has none (nothing is ever
+     * added by the seed, and every mint stays relay-kept); "no-locks" where this browser can't keep two tabs apart
+     * (rule 3a). Says nothing about any one mint: that is `seededMint`.
+     */
+    seedHere(): "yes" | "no-seed" | "no-locks" {
+      if (!seedParts()) return "no-seed";
+      if (options.lock) return "yes";
+      const locks = (globalThis as { navigator?: { locks?: { request?: unknown } } }).navigator?.locks;
+      return typeof locks?.request === "function" ? "yes" : "no-locks";
+    },
+    /**
+     * Restore from the mints, at the person's press (rule 3): each of the wallet's mints is asked, with outputs made
+     * from the seed in every lane, for what it signed and still owes. What it hands back that this wallet doesn't hold
+     * is kept with the wallet, and this browser's lane moves forward past what was found in it. Nothing is spent.
+     * A mint that can't be reached, or can't restore, is named and left as it is.
+     */
+    async restore(): Promise<{ found: number; mints: { mint: string; sats: number; trouble?: string }[] }> {
+      const parts = seedParts();
+      if (!parts) throw new EcashError("no-wallet", "This wallet can't use a seed here.");
+      const { restoreFromMint } = await import("./seedRestore.js");
+      const mints: { mint: string; sats: number; trouble?: string }[] = [];
+      for (const mint of state.mints) {
+        try {
+          const wallet = await at(mint);
+          const restored = await restoreFromMint({ wallet, outputs: parts.outputs });
+          const held = new Set(proofsAt(mint).map((p) => p.secret));
+          const fresh = plain(restored.proofs).filter((p) => !held.has(p.secret));
+          if (fresh.length) state = await store.roll({ destroy: [], keep: [{ mint, proofs: fresh }], history: { direction: "in", amount: sumProofs(fresh) } });
+          // This browser's own lane, past what the mint has signed in it: never back, never another lane.
+          const mine = await parts.lane(wallet.keysetId);
+          const past = mine ? restored.next[mine.lane] : undefined;
+          if (mine && past !== undefined && past > mine.next) await parts.keepLane(wallet.keysetId, { lane: mine.lane, next: past });
+          mints.push({ mint, sats: sumProofs(fresh) });
+        } catch (err) {
+          mints.push({ mint, sats: 0, trouble: (err as Error)?.message || "no answer" });
+        }
+      }
+      return { found: mints.reduce((n, m) => n + m.sats, 0), mints };
+    },
     /** Whether a mint's current keyset is one the seed is used for (rule 4), as the screen names it. */
     async seededMint(mint: string): Promise<boolean> {
       if (!seedParts()) return false;

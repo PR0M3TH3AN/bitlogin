@@ -67,3 +67,9 @@ export async function drawLane(signedIn: (lane: number) => Promise<boolean>, ran
   }
   return null;
 }
+
+/** What the screen says where the seed isn't used in this browser (rule 3a). */
+export const NO_SEED_HERE = "This browser can't keep two tabs from using the same counters, so the seed isn't used in it. Your sats are kept on relays as before.";
+/** What the screen says beside restore (rule 3), plainly. */
+export const RESTORE_GAP =
+  "If a crash left a long gap in a lane and BitLogin's record of the counter is gone from every relay too, restore can miss what came after the gap. Those sats are still at the mint, but this wallet can't find them.";

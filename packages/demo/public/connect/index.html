@@ -205,6 +205,8 @@
       <h2 class="ecash-sub">Where it is kept</h2>
       <ul id="ecash-mints" class="ecash-mints"></ul>
       <button id="ecash-go-mint" class="connect-link" type="button">Add another mint</button>
+      <p id="ecash-seed-note" class="ecash-quiet" hidden></p>
+      <button id="ecash-go-restore" class="connect-link" type="button" hidden>Restore from your mints</button>
       <h2 class="ecash-sub">Payments that leave no receipt</h2>
       <form id="ecash-limit-form" class="ecash-form">
         <label for="ecash-limit">The most a site can ask you to pay at once when nothing is recorded as yours: a tip, or an invoice it made.</label>
@@ -279,6 +281,22 @@
         <button id="ecash-pay-fund" class="btn secondary" type="button" hidden>Add sats first</button>
       </div>
       <p class="connect-small">A Lightning payment can't be taken back. What the mint doesn't use for routing comes back to your wallet.</p>
+    </div>
+
+    <div data-ecash="trial" hidden>
+      <h1>Try this mint</h1>
+      <p id="ecash-trial-mint" class="connect-key"></p>
+      <p class="ecash-plain">Once a mint has passed this, the sats you add there can be brought back from your key alone, even if every relay loses your wallet. It checks that the mint refuses to sign the same thing twice.</p>
+      <p class="ecash-plain">It uses 1 sat of yours there. It may cost that 1 sat, and only if the mint turns out to be one that can't be trusted with your key this way. Otherwise nothing is spent.</p>
+      <div class="cta-row"><button id="ecash-trial-yes" class="btn primary" type="button">Try it</button></div>
+    </div>
+
+    <div data-ecash="restore" hidden>
+      <h1>Restore from your mints</h1>
+      <p class="ecash-plain">Each of your mints is asked, with your key, for the sats it still owes you that this wallet doesn't hold. Nothing is spent. It takes a few seconds for each mint.</p>
+      <p id="ecash-restore-gap" class="ecash-quiet"></p>
+      <p id="ecash-restore-status" class="ecash-waiting" role="status" hidden></p>
+      <div class="cta-row"><button id="ecash-restore-yes" class="btn primary" type="button">Restore</button></div>
     </div>
 
     <div data-ecash="done" hidden>

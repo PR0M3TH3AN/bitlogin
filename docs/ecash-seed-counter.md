@@ -1,9 +1,12 @@
 # The Wallet's Seed Counter: Its Rules, Before Its Code
 
 **Date:** 2026-11-24 (third draft: agreed, "go" on these rules)
-**Status:** Agreed rules, to be built in the order below. The owner ordered
-it built ("yes": the small fix first, then restore from the mint).
-Nothing here exists yet.
+**Status:** Agreed rules. The owner ordered it built ("yes": the small fix
+first, then restore from the mint). Built on beta, against mock mints only,
+through step 3 (2026-11-25): the wallet adds by the seed at a mint whose
+keyset passed the trial (`ecash/wallet.ts`), and its screen names each
+mint, offers the trial at a press, and restores from the mints
+(`assets/ecash-ui.js`). Not yet on any site.
 
 ## What it is, and what a counter used twice costs
 

@@ -32,9 +32,9 @@ afterEach(async () => {
 });
 
 /** One account's wallet in one browser: the worker's store, its seed, and its lanes kept in this browser. */
-function account(opts: { seed?: boolean } = {}) {
+function account(opts: { seed?: boolean; from?: Uint8Array } = {}) {
   const signer = new NostrSigner(generatePrivateKey());
-  const seed = ecashSeed(generatePrivateKey());
+  const seed = opts.from ?? ecashSeed(generatePrivateKey());
   const events = new Map<string, NostrEvent>();
   const relays = {
     relayUrls: ["wss://a.example", "wss://b.example"],
@@ -170,6 +170,40 @@ describe("the wallet adds by the seed only at a mint that passed the trial", () 
     expect(wallet.balance()).toBe(8);
     expect(lanes.size).toBe(0);
     expect(await restorable(mint, seed)).toBe(0);
+  });
+
+  it("restores from the mints with the key alone, every relay emptied, and never twice", async () => {
+    const mint = await mintWith();
+    const first = account();
+    const wallet = createEcashWallet(first.store, { lock: standInLock });
+    await wallet.open();
+    await wallet.addMint(mint.url);
+    await add(wallet, mint, 1);
+    expect(await wallet.tryMint(mint.url)).toEqual({ outcome: "passed", cost: 0 });
+    await add(wallet, mint, 13);
+    await add(wallet, mint, 8);
+    // Restore where everything is held already: nothing new, nothing doubled.
+    expect(await wallet.restore()).toEqual({ found: 0, mints: [{ mint: mint.url, sats: 0 }] });
+    expect(wallet.balance()).toBe(22);
+    // The same key in a new browser whose relays hold nothing of the wallet: its record is made anew, with the mint.
+    const fresh = account({ from: first.seed });
+    const again = createEcashWallet(fresh.store, { lock: standInLock });
+    await again.open();
+    await again.addMint(mint.url);
+    expect(again.balance()).toBe(0);
+    expect(again.seedHere()).toBe("yes");
+    expect(await again.restore()).toEqual({ found: 21, mints: [{ mint: mint.url, sats: 21 }] });
+    expect(again.balance()).toBe(21);
+    expect(await again.restore()).toMatchObject({ found: 0 });
+    // What came back is spendable.
+    await again.pay(await again.quote(mint.invoice(10)));
+    expect(again.balance()).toBe(10);
+  }, 60_000);
+
+  it("says why the seed isn't used here", async () => {
+    expect(createEcashWallet(account().store).seedHere()).toBe("no-locks");
+    expect(createEcashWallet(account({ seed: false }).store, { lock: standInLock }).seedHere()).toBe("no-seed");
+    expect(createEcashWallet(account().store, { lock: standInLock }).seedHere()).toBe("yes");
   });
 
   it("never seeds where the store has no seed", async () => {

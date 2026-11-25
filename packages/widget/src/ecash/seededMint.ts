@@ -11,7 +11,7 @@
  * are not here yet. Tested against the mock mints only.
  */
 import { Amount, OutputData, type Proof, type Wallet } from "@cashu/cashu-ts";
-import { advance, cleanState, drawLane, LANE_PROBE, laneStart, reserve, type LaneState } from "./seedLanes.js";
+import { advance, cleanState, drawLane, LANE_PROBE, laneStart, NO_SEED_HERE, reserve, type LaneState } from "./seedLanes.js";
 import type { SeededOutput } from "../worker/ecashSeed.js";
 
 export interface SeededMintDeps {
@@ -58,7 +58,7 @@ export const browserLock = (): Lock | null => {
   return locks && typeof locks.request === "function" ? ((name, fn) => locks.request(name, fn) as Promise<never>) : null;
 };
 /** What the screen says where the seed isn't used in this browser. */
-export const NO_SEED_HERE = "This browser can't keep two tabs from using the same counters, so the seed isn't used in it. Your sats are kept on relays as before.";
+export { NO_SEED_HERE } from "./seedLanes.js";
 
 export function createSeededMint(deps: SeededMintDeps) {
   const keysetId = () => deps.wallet.keysetId;
