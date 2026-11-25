@@ -47,6 +47,9 @@ describe("a pairing code", () => {
     expect(readOffer(offer({ kind: 1 }), now)).toBeNull();
     // A device label that is too long, or not text, is said as "a device".
     expect(readOffer(offer({ content: JSON.stringify({ device: "x".repeat(200) }) }), now)?.device).toBe("a device");
+    // Way 1: an offer may name the world's signer's hand-off key, as \`to\`; one that isn't a key is left out.
+    expect(readOffer(offer({ content: JSON.stringify({ device: "Meta Quest Browser", to: "dd".repeat(32) }) }), now)?.to).toBe("dd".repeat(32));
+    expect(readOffer(offer({ content: JSON.stringify({ device: "Meta Quest Browser", to: "nope" }) }), now)?.to).toBeUndefined();
     // An offer that lasts more than five minutes is not one.
     expect(readOffer(offer({ tags: [["nswp:pair", codeHash("K7QF-3MPX")], ["nswp:origin", SITE], ["expiration", String(now + 3600)]] }), now)).toBeNull();
   });
@@ -120,9 +123,14 @@ describe("pairing, paused (the owner's \"Yes, pause it now\", 2026-11-25)", () =
     }
   });
 
-  it("refuses in the worker before anything else is read: pairAnswer and pairBegin begin with the pause", () => {
+  it("refuses in the worker: an in-world pairBegin before anything else is read, and pairAnswer for any offer not from BitLogin's own page", () => {
     const worker = readFileSync(new URL("../worker/cryptoWorker.ts", import.meta.url), "utf8");
-    for (const action of ["pairAnswer", "pairBegin"]) {
+    // Way 1: the phone answers only an offer naming the world's signer (from /headset/), and seals to that signer.
+    const answer = worker.slice(worker.indexOf('case "pairAnswer": {'), worker.indexOf('case "handoffAccept": {'));
+    expect(answer.indexOf("if (PAIRING_PAUSED && !offer.to) pairingPaused();")).toBeGreaterThan(-1);
+    expect(answer.indexOf("if (PAIRING_PAUSED && !offer.to) pairingPaused();")).toBeLessThan(answer.indexOf("sealHandoff("));
+    expect(answer).toContain("sealHandoff(everydayPrivateKey, offer.to ?? offer.key,");
+    for (const action of ["pairBegin"]) {
       const start = worker.indexOf(`case "${action}": {`);
       expect(start, action).toBeGreaterThan(-1);
       const first = worker.slice(start, worker.indexOf("\n", worker.indexOf("\n", start) + 1));

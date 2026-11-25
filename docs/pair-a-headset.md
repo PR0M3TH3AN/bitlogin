@@ -7,6 +7,18 @@ of a pairing started on its own headset, draw that headset's number as well, and
 Sign in on the headset with the sign-in window instead."), and a headset's `pair` is answered `pairing-expired` with
 `why: "paused"` at once. The code stays (`PAIRING_PAUSED` in `embedded/pair.ts`) until it is made safe.
 
+**Way 1 (the owner's "Can we do Way 1 for now and explore Way 2 as a possibility?"):** the code, its QR and the number
+are shown only on BitLogin's own top-level page, `/headset/`, in the headset's 2D browser, whose address bar a world
+can't draw over. Its first line: "Check that the address bar says bitlogin.network." A world opens it from a press,
+as a window with its link back (`window.open("<signIn>/headset/", "bitlogin-headset", "popup")`, or
+`client.signInFromPhone()`); the page finds the world's signer through its opener, as the sign-in window does, so the
+site is the browser's word and the phone seals the hand-off to that signer's one-time key (the offer's `to`). The page
+passes it on sealed (`grant`), says "Signed in. Go back to the world." and closes; the world hears `state`. The phone
+asks of every code, typed or scanned: "Is the code on a page whose address bar says bitlogin.network, on a headset
+you are holding?", and answers only an offer that names `to`. In-world `pair` stays paused. A hostile world gets what
+its own Allow would, for its own origin, in that browser; it can move the window it opened to a look-alike page,
+which only the address bar shows, so the words say to check it.
+
 Built Names given by the orchestrator (kind 27304, tag `nswp:pair`, messages
 `pair`, `pairing`, `paired`, `pairCancel`, `pairing-expired`, the hand-off's `device`, take-back's `{ device, before }`,
 page `/pair`), with number matching, the warning on a code from a link, and what a lost device needs (P4a, P4b, P5a).

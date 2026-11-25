@@ -235,6 +235,8 @@ let pendingHandoff: Uint8Array | null = null;
 let headsetPairing: HeadsetPairing | null = null;
 /** On the phone: the pairing under way, by the offers it found, and the throwaway key that speaks for it. */
 /** The phone's side: the offers found for the code it was given, and the number it sent each to show. */
+/** Way 1: the offer BitLogin's own /headset/ page makes, for the world's signer. */
+let pageOffer: HeadsetPairing | null = null;
 let phonePaired: { phone: PhonePairing; offers: Map<string, PairOffer>; numbers: Map<string, number> } | null = null;
 
 
@@ -1115,6 +1117,31 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       return {};
     }
 
+    // Way 1 (docs/pair-a-headset.md): BitLogin's own /headset/ page, top-level in the headset's 2D browser, where the
+    // world can't draw. It offers the code for the world's signer, named by that signer's one-time hand-off key, and
+    // keeps what the phone sends sealed, as it came: only that signer can open it. No session is needed or touched.
+    // Not on the list a handed-over session may ask: no signer frame offers a code.
+    case "headsetBegin": {
+      const p = payload as { site?: unknown; device?: unknown; to?: unknown };
+      const site = grantSite(p.site);
+      if (!site) throw new Error("That is not a site.");
+      if (typeof p.to !== "string" || !/^[0-9a-f]{64}$/u.test(p.to)) throw new Error("That is not a signer's key.");
+      pageOffer?.cancel();
+      pageOffer = await startHeadsetPairing({ relayUrls: vaultRelayUrls, site, device: typeof p.device === "string" ? p.device.slice(0, 48) : "a device", to: p.to });
+      return { code: pageOffer.code, expires: pageOffer.expires };
+    }
+    case "headsetPoll": {
+      if (!pageOffer) return { status: "ended" };
+      const state = pageOffer.state();
+      if (state.status === "paired") pageOffer = null;
+      return { status: state.status, ...(state.number !== undefined ? { number: state.number } : {}), ...(state.sealed ? { sealed: state.sealed } : {}) };
+    }
+    case "headsetCancel": {
+      pageOffer?.cancel();
+      pageOffer = null;
+      return {};
+    }
+
     // The phone's side, at BitLogin's own /pair, signed in: find the offer by its code, the number to match, and the
     // answer: the hand-off an Allow would send that site, sealed to the headset's one-time key, with a device id.
     case "pairFind": {
@@ -1140,12 +1167,14 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       return { number };
     }
     case "pairAnswer": {
-      if (PAIRING_PAUSED) pairingPaused();
       const { everydayPrivateKey } = requireUnlocked();
       if (session.signerOnly) throw new Error("A headset is signed in from BitLogin's own page only.");
       const p = payload as { offer?: unknown; number?: unknown; family?: unknown };
       const offer = phonePaired?.offers.get(String(p.offer ?? ""));
       if (!phonePaired || !offer) throw new Error("That headset isn't being paired here.");
+      // Only an offer from BitLogin's own headset page, naming the world's signer (Way 1). One drawn in a world, of the
+      // paused kind, is answered by no phone: a hostile world could show the code of its own headset's pairing.
+      if (PAIRING_PAUSED && !offer.to) pairingPaused();
       // Only once the person tapped the number the headset shows (docs/pair-a-headset.md P4a). Another, and it ends.
       const sent = phonePaired.numbers.get(offer.id);
       if (sent === undefined || p.number !== sent) {
@@ -1159,7 +1188,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const device = bytesToHex(randomBytes(16));
       const sender = generatePrivateKey();
       try {
-        const sealed = sealHandoff(everydayPrivateKey, offer.key, sender, undefined, {
+        const sealed = sealHandoff(everydayPrivateKey, offer.to ?? offer.key, sender, undefined, {
           site: offer.site,
           ...(session.profile ? { profile: session.profile } : {}),
           remember: true,
@@ -2530,7 +2559,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
-  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "pairFind", "pairFound", "pairEnd", "pairAnswer",
+  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "headsetBegin", "headsetPoll", "headsetCancel", "pairFind", "pairFound", "pairEnd", "pairAnswer",
   "signerKeep", "signerRestore", "guestStatus", "signerTouch", "signerForget", "signerHold", "signerHeld",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",

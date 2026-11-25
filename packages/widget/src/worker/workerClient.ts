@@ -372,6 +372,15 @@ export class WorkerClient {
   pairCancel() {
     return this.call("pairCancel", {});
   }
+  headsetBegin(site: string, device: string, to: string) {
+    return this.call("headsetBegin", { site, device, to });
+  }
+  headsetPoll() {
+    return this.call("headsetPoll", {});
+  }
+  headsetCancel() {
+    return this.call("headsetCancel", {});
+  }
   pairFind(code: string) {
     return this.call("pairFind", { code });
   }

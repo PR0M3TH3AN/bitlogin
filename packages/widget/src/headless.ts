@@ -259,6 +259,13 @@ export interface HeadlessSigner {
   pairBegin(site: string, device: string): Promise<{ code: string; expires: number }>;
   pairPoll(): Promise<{ status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; got?: Awaited<ReturnType<HeadlessSigner["acceptHandoff"]>> }>;
   pairCancel(): Promise<void>;
+  /**
+   * Way 1, on BitLogin's own /headset/ page: offer a code for the world's signer (`to`, its one-time hand-off key, from
+   * its "frame"), and ask how it stands. What a phone sends is handed back sealed, for that signer: never opened here.
+   */
+  headsetBegin(site: string, device: string, to: string): Promise<{ code: string; expires: number }>;
+  headsetPoll(): Promise<{ status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; sealed?: { senderPublicKey: string; payload: string } }>;
+  headsetCancel(): Promise<void>;
   pairFind(code: string): Promise<PairOffer[]>;
   pairFound(offer: string): Promise<number>;
   pairEnd(offer: string): Promise<void>;
@@ -561,6 +568,15 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async pairCancel() {
       await client.pairCancel();
+    },
+    async headsetBegin(site, device, to) {
+      return client.headsetBegin(site, device, to);
+    },
+    async headsetPoll() {
+      return client.headsetPoll();
+    },
+    async headsetCancel() {
+      await client.headsetCancel();
     },
     async pairFind(code) {
       await requirePubkey();

@@ -586,6 +586,10 @@ export type WorkerActionMap = {
   pairBegin: [{ site: string; device: string }, { code: string; expires: number }];
   pairPoll: [Record<string, never>, { status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; everydayPublicKey?: string; site?: string; profile?: Profile; remember?: boolean; family?: string }];
   pairCancel: [Record<string, never>, Record<string, never>];
+  /** Way 1: BitLogin's own /headset/ page offers the code for the world's signer, and keeps the answer sealed for it. */
+  headsetBegin: [{ site: string; device: string; to: string }, { code: string; expires: number }];
+  headsetPoll: [Record<string, never>, { status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; sealed?: { senderPublicKey: string; payload: string } }];
+  headsetCancel: [Record<string, never>, Record<string, never>];
   /** And the phone's, at BitLogin's own /pair. */
   pairFind: [{ code: string }, { offers: PairOffer[] }];
   pairFound: [{ offer: string }, { number: number }];

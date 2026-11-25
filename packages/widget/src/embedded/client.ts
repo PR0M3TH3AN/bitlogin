@@ -135,6 +135,13 @@ export interface BitLoginClient {
    * the phone said no, or `cancel()` was called. Only where nobody is signed in here, or it is a guest.
    */
   pair(onCode: (shown: BitLoginPairing) => void): { done: Promise<boolean>; cancel(): void };
+  /**
+   * Sign in from the person's phone, for a headset (docs/pair-a-headset.md, Way 1). Call it from the user's own press,
+   * after leaving immersive VR: it opens BitLogin's own /headset/ page in a window, where the code, its QR and the
+   * number to match are shown, never in the site. Resolves true once the window has closed and someone is signed in
+   * here, false otherwise. The site is told nothing else.
+   */
+  signInFromPhone(): Promise<boolean>;
   getPublicKey(): Promise<string>;
   signEvent(event: UnsignedEvent): Promise<NostrEvent>;
   nip44: { encrypt(peer: string, plaintext: string): Promise<string>; decrypt(peer: string, ciphertext: string): Promise<string> };
@@ -389,6 +396,21 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
               stop();
               resolve(current.signedIn);
             });
+        }, 400);
+      });
+    },
+    async signInFromPhone() {
+      await introduce();
+      // Without `noopener`: the page finds this page's frame through its link back, as the sign-in window does.
+      const opened = window.open(`${at}/headset/`, "bitlogin-headset", "popup");
+      if (!opened) return false;
+      return new Promise<boolean>((resolve) => {
+        const watch = setInterval(() => {
+          if (!opened.closed) return;
+          clearInterval(watch);
+          void request({ t: "state" })
+            .catch(() => undefined)
+            .then(() => resolve(current.signedIn));
         }, 400);
       });
     },
