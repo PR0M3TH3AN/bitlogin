@@ -640,6 +640,8 @@ export type WorkerActionMap = {
   /** This browser's lane for a keyset, and keeping it: only ever forward. */
   ecashLaneGet: [{ keysetId: string }, { state: LaneState | null }];
   ecashLaneSet: [{ keysetId: string; state: LaneState }, { state: LaneState | null }];
+  /** Keep a mint keyset's trial with the wallet record (docs/ecash-seed-counter.md, rule 4). */
+  ecashKeepTrial: [{ trial: { mint: string; keysetId: string; outcome: "passed" | "failed" } }, EcashState];
   ecashRoll: [EcashRoll, EcashState];
   /** The mints people recommend (NIP-87), the user's own follows first. */
   ecashMints: [Record<string, never>, { mints: RankedMint[] }];

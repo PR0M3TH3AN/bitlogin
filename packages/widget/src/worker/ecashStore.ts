@@ -27,7 +27,9 @@ import {
   writeHistory,
   writeToken,
   writeWallet,
+  withTrial,
   type EcashProof,
+  type EcashTrial,
   type EcashToken,
   type EcashWallet
 } from "../ecash/nip60.js";
@@ -48,6 +50,8 @@ export interface EcashState {
   offline: boolean;
   /** Something here is not on any relay yet. It is sent again when the wallet is next opened. */
   unsaved: boolean;
+  /** Mints' keysets tried for the seed (docs/ecash-seed-counter.md, rule 4). Only one that "passed" is seeded. */
+  trials?: EcashTrial[];
 }
 
 const LOCAL_KEY = "bitlogin:ecash:v1:";
@@ -91,7 +95,13 @@ function signToken(signer: NostrSigner, token: { mint: string; proofs: readonly 
   return signer.signEvent({ kind: TOKEN_KIND, created_at: Math.floor(now), tags: [], content: signer.nip44Encrypt(me, writeToken(token)) });
 }
 
-const state = (copy: LocalCopy, offline: boolean): EcashState => ({ mints: copy.wallet?.mints ?? [], tokens: copy.tokens, offline, unsaved: copy.tokens.some((token) => isLocal(token.event)) });
+const state = (copy: LocalCopy, offline: boolean): EcashState => ({
+  mints: copy.wallet?.mints ?? [],
+  tokens: copy.tokens,
+  offline,
+  unsaved: copy.tokens.some((token) => isLocal(token.event)),
+  ...(copy.wallet?.trials?.length ? { trials: copy.wallet.trials } : {})
+});
 
 /**
  * Open the wallet: what relays hold, joined with what this browser holds that
@@ -175,7 +185,9 @@ export async function setEcashMints(deps: { signer: NostrSigner; store: KeyValue
   const clean = [...new Set((Array.isArray(mints) ? mints : []).map(cleanMint).filter(Boolean))];
   if (clean.length === 0 || clean.length > ECASH_LIMITS.mints) throw new Error("Name between one and five mints, each an https address.");
   const local = await readLocal(store, signer);
-  const wallet: EcashWallet = { privkey: local.wallet?.privkey ?? deps.newKey(), mints: clean };
+  // The mints change; the trials made of them stay, for whichever of them are still named.
+  const trials = (local.wallet?.trials ?? []).filter((t) => clean.includes(t.mint));
+  const wallet: EcashWallet = { privkey: local.wallet?.privkey ?? deps.newKey(), mints: clean, ...(trials.length ? { trials } : {}) };
   const next: LocalCopy = { wallet, tokens: local.tokens };
   await writeLocal(store, signer, next);
   const event = signer.signEvent({ kind: WALLET_KIND, created_at: Math.floor(deps.now ?? Date.now() / 1000), tags: [], content: signer.nip44Encrypt(me, writeWallet(wallet)) });
@@ -250,4 +262,25 @@ export async function rollEcash(
     await relays.publishAll(deletion, 6000).catch(() => []);
   }
   return state(next, false);
+}
+
+/**
+ * Keep a mint keyset's trial with the wallet record (docs/ecash-seed-counter.md, rule 4): in this browser first, then
+ * on relays, so every device knows whether that mint is used with the seed. Newest wins for a mint and keyset.
+ */
+export async function keepEcashTrial(deps: { signer: NostrSigner; store: KeyValueStore; relays: EcashRelays; now?: number }, trial: unknown): Promise<EcashState> {
+  const { signer, store, relays } = deps;
+  const me = signer.getPublicKey();
+  const t = trial as Partial<EcashTrial> | null;
+  const mint = cleanMint(t?.mint);
+  if (!mint || typeof t?.keysetId !== "string" || !/^[0-9a-f]{16}$|^[0-9a-f]{66}$/u.test(t.keysetId) || (t.outcome !== "passed" && t.outcome !== "failed")) throw new Error("That is not a trial of a mint.");
+  const local = await readLocal(store, signer);
+  if (!local.wallet || !local.wallet.mints.includes(mint)) throw new Error("That mint is not in this wallet.");
+  const now = Math.floor(deps.now ?? Date.now() / 1000);
+  const wallet: EcashWallet = { ...local.wallet, trials: withTrial(local.wallet.trials, { mint, keysetId: t.keysetId, outcome: t.outcome, at: now }) };
+  const next: LocalCopy = { wallet, tokens: local.tokens };
+  await writeLocal(store, signer, next);
+  const event = signer.signEvent({ kind: WALLET_KIND, created_at: now, tags: [], content: signer.nip44Encrypt(me, writeWallet(wallet)) });
+  const took = accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length);
+  return { ...state(next, false), unsaved: state(next, false).unsaved || !took };
 }

@@ -173,6 +173,8 @@ export interface HeadlessSigner {
     /** This browser's lane for a keyset, and keeping it, only ever forward. */
     lane(keysetId: string): Promise<LaneState | null>;
     keepLane(keysetId: string, state: LaneState): Promise<LaneState | null>;
+    /** Keep a mint keyset's trial with the wallet record, for every device. */
+    keepTrial(trial: { mint: string; keysetId: string; outcome: "passed" | "failed" }): Promise<EcashState>;
   };
   /**
    * In the embedded signer: ask the user's relays whether this site was
@@ -460,6 +462,10 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       async keepLane(keysetId, state) {
         await requirePubkey();
         return (await client.ecashLaneSet(keysetId, state)).state;
+      },
+      async keepTrial(trial) {
+        await requirePubkey();
+        return client.ecashKeepTrial(trial);
       }
     },
     async takeBack(what) {

@@ -72,7 +72,7 @@ import { lightningAddressOfProfile } from "../pay/lightning.js";
 import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
 import { blossomAuth, loadDrive, peekDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
-import { loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
+import { keepEcashTrial, loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
 import { ecashSeed, seededOutputs } from "./ecashSeed.js";
 import { keepLane, readLane } from "./ecashLanes.js";
 import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
@@ -242,7 +242,7 @@ const requestQueue = new LaneQueue();
  * switching accounts wait for every line, and hold every line until they are done.
  */
 const LANE: Record<string, string> = {
-  ecashLoad: "ecash", ecashSetMints: "ecash", ecashRoll: "ecash",
+  ecashLoad: "ecash", ecashSetMints: "ecash", ecashRoll: "ecash", ecashKeepTrial: "ecash",
   // The seed's outputs and this browser's lanes (docs/ecash-seed-counter.md): no relay, no wait behind a wallet read.
   ecashOutputs: "seed", ecashLaneGet: "seed", ecashLaneSet: "seed",
   // Asks relays which mints people recommend, and writes nothing: a line of its own, so it holds up no wallet work.
@@ -2169,6 +2169,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
 
     case "ecashLoad":
     case "ecashSetMints":
+    case "ecashKeepTrial":
     case "ecashRoll": {
       const { signer } = requireUnlocked();
       const me = signer.getPublicKey();
@@ -2199,6 +2200,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
         const deps = { signer, store, relays: pool };
         if (action === "ecashLoad") return await loadEcash(deps);
         if (action === "ecashSetMints") return await setEcashMints({ ...deps, newKey: () => bytesToHex(generatePrivateKey()) }, (payload as { mints?: unknown }).mints);
+        if (action === "ecashKeepTrial") return await keepEcashTrial(deps, (payload as { trial?: unknown }).trial);
         // The page is told once the new proofs are sealed here, for that call alone: "Added" is true from then on.
         return await rollEcash(deps, payload as EcashRoll, () => (self as unknown as Worker).postMessage({ notify: "ecash-sealed", id } satisfies WorkerNotification));
       } finally {
@@ -2372,7 +2374,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
-  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent", "ecashOutputs", "ecashLaneGet", "ecashLaneSet",
+  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent", "ecashOutputs", "ecashLaneGet", "ecashLaneSet", "ecashKeepTrial",
   "ecashPeek", "drivePeek", "receiptsPeek", "payProfile", "payListing", "unlockAuth", "guestListFind", "guestListSign", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
   "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",

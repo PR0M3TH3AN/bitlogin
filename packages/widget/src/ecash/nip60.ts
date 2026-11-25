@@ -89,14 +89,50 @@ export const sumProofs = (proofs: readonly Pick<EcashProof, "amount">[]): number
 
 // ---- The wallet record (kind 17375): which mints, and a key of the wallet's own.
 
+/**
+ * A mint keyset's trial (docs/ecash-seed-counter.md, rule 4): whether it refused an output it had signed before. Kept
+ * in the wallet record as a row of BitLogin's own, which another NIP-60 wallet leaves alone, so one press decides it
+ * for every device. Only a keyset that "passed" is used with the seed.
+ */
+export interface EcashTrial {
+  mint: string;
+  keysetId: string;
+  outcome: "passed" | "failed";
+  /** When, in seconds since 1970. */
+  at: number;
+}
+const TRIAL_ROW = "bitlogin-trial";
+const KEYSET = /^[0-9a-f]{16}$|^[0-9a-f]{66}$/u;
+
 export interface EcashWallet {
   /** A key used only to unlock ecash locked to this wallet (NIP-61). Never the account's key. */
   privkey: string;
   mints: string[];
+  /** Trials of mints' keysets, newest kept for each. Absent where none was made. */
+  trials?: EcashTrial[];
 }
 
 export function writeWallet(wallet: EcashWallet): string {
-  return JSON.stringify([["privkey", wallet.privkey], ...wallet.mints.map((mint) => ["mint", mint])]);
+  return JSON.stringify([
+    ["privkey", wallet.privkey],
+    ...wallet.mints.map((mint) => ["mint", mint]),
+    ...(wallet.trials ?? []).map((t) => [TRIAL_ROW, t.mint, t.keysetId, t.outcome, String(t.at)])
+  ]);
+}
+
+/** A trial as a row says it, or null. */
+function readTrial(row: unknown[]): EcashTrial | null {
+  const [, mint, keysetId, outcome, at] = row;
+  const clean = cleanMint(mint);
+  const when = Number(at);
+  if (!clean || typeof keysetId !== "string" || !KEYSET.test(keysetId) || (outcome !== "passed" && outcome !== "failed") || !Number.isSafeInteger(when) || when <= 0) return null;
+  return { mint: clean, keysetId, outcome, at: when };
+}
+
+/** Add a trial, replacing an older one for the same mint and keyset. */
+export function withTrial(trials: readonly EcashTrial[] | undefined, trial: EcashTrial): EcashTrial[] {
+  const others = (trials ?? []).filter((t) => !(t.mint === trial.mint && t.keysetId === trial.keysetId));
+  return [...others, trial].slice(-50);
 }
 
 export function readWallet(text: string): EcashWallet | null {
@@ -109,12 +145,20 @@ export function readWallet(text: string): EcashWallet | null {
   if (!Array.isArray(rows)) return null;
   let privkey = "";
   const mints: string[] = [];
+  let trials: EcashTrial[] = [];
   for (const row of rows) {
     if (!Array.isArray(row) || typeof row[0] !== "string") continue;
     if (row[0] === "privkey" && typeof row[1] === "string" && HEX64.test(row[1])) privkey ||= row[1];
     if (row[0] === "mint" && cleanMint(row[1]) && !mints.includes(cleanMint(row[1])) && mints.length < ECASH_LIMITS.mints) mints.push(cleanMint(row[1]));
+    if (row[0] === TRIAL_ROW) {
+      const trial = readTrial(row);
+      if (trial) {
+        const older = trials.find((t) => t.mint === trial.mint && t.keysetId === trial.keysetId);
+        if (!older || older.at < trial.at) trials = withTrial(trials, trial);
+      }
+    }
   }
-  return privkey ? { privkey, mints } : null;
+  return privkey ? { privkey, mints, ...(trials.length ? { trials } : {}) } : null;
 }
 
 // ---- A token record (kind 7375): proofs at one mint, and the records it replaced.

@@ -3,7 +3,7 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import type { NostrEvent, NostrFilter, RelayPublishOutcome } from "@bitlogin/core/nostr";
-import { loadEcash, rollEcash, setEcashMints, type EcashRelays } from "./ecashStore.js";
+import { keepEcashTrial, loadEcash, rollEcash, setEcashMints, type EcashRelays } from "./ecashStore.js";
 import { balances, readToken, TOKEN_KIND, WALLET_KIND } from "../ecash/nip60.js";
 
 const MINT = "https://mint.example";
@@ -216,5 +216,34 @@ describe("where an ecash wallet is kept (docs/ecash.md)", () => {
     const after = await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof("a", 64)] }], history: { direction: "in", amount: 64 } });
     expect(after.unsaved).toBe(true);
     expect([...deps.relays.events.values()].filter((e) => e.kind === 7376)).toEqual([]);
+  });
+});
+
+describe("a mint's trial, kept with the wallet record (docs/ecash-seed-counter.md, rule 4)", () => {
+  const KEYSET = "00ad268c4d1f5826";
+  it("is kept here and on relays, read back on another device, and survives a change of mints", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    // Pressed a while after the mint was named: a record of the same second would tie with the one it replaces.
+    const kept = await keepEcashTrial({ ...deps, now: Date.now() / 1000 + 5 }, { mint: MINT, keysetId: KEYSET, outcome: "passed" });
+    expect(kept.trials).toMatchObject([{ mint: MINT, keysetId: KEYSET, outcome: "passed" }]);
+    // Another device, the same key, nothing kept locally.
+    const elsewhere = await loadEcash({ ...deps, store: new InMemoryKeyValueStore() });
+    expect(elsewhere.trials).toMatchObject([{ mint: MINT, keysetId: KEYSET, outcome: "passed" }]);
+    // A newer trial of the same keyset replaces it.
+    const again = await keepEcashTrial({ ...deps, now: Date.now() / 1000 + 15 }, { mint: MINT, keysetId: KEYSET, outcome: "failed" });
+    expect(again.trials).toHaveLength(1);
+    expect(again.trials![0]!.outcome).toBe("failed");
+    // Another mint added: the trial stays. The mint removed: its trial goes with it.
+    expect((await setEcashMints(deps, [MINT, "https://other.example"])).trials).toHaveLength(1);
+    expect((await setEcashMints(deps, ["https://other.example"])).trials).toBeUndefined();
+  });
+
+  it("refuses what isn't a trial, or a mint not in the wallet", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    await expect(keepEcashTrial(deps, { mint: "https://elsewhere.example", keysetId: KEYSET, outcome: "passed" })).rejects.toThrow();
+    await expect(keepEcashTrial(deps, { mint: MINT, keysetId: "x", outcome: "passed" })).rejects.toThrow();
+    await expect(keepEcashTrial(deps, { mint: MINT, keysetId: KEYSET, outcome: "maybe" })).rejects.toThrow();
   });
 });

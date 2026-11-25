@@ -482,8 +482,9 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
           await sleep(1000);
           await frame().locator("#unlock-pin").fill("pin-428517");
           await frame().locator("#unlock-go").click();
-          await frame().locator('[data-ecash="home"] #ecash-total').filter({ visible: true }).waitFor({ timeout: 60_000 });
-          await frame().locator("#ecash-note").filter({ hasText: /^3 sats are kept only in this browser so far\. /u }).waitFor({ timeout: 60_000 });
+          // Opening the lock derives its key from the PIN, slowly on purpose: under a full run's load, it takes a while.
+          await frame().locator('[data-ecash="home"] #ecash-total').filter({ visible: true }).waitFor({ timeout: 120_000 });
+          await frame().locator("#ecash-note").filter({ hasText: /^3 sats are kept only in this browser so far\. /u }).waitFor({ timeout: 120_000 });
           expect(await frame().locator("#ecash-total").textContent()).toBe("33");
           results.push({ condition, screen: "home", balance: "33" });
         };

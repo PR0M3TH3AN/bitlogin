@@ -453,6 +453,9 @@ export class WorkerClient {
   ecashOutputs(keysetId: string, amounts: number[], from: number) {
     return this.call("ecashOutputs", { keysetId, amounts, from });
   }
+  ecashKeepTrial(trial: WorkerActionMap["ecashKeepTrial"][0]["trial"]) {
+    return this.call("ecashKeepTrial", { trial });
+  }
   ecashLaneGet(keysetId: string) {
     return this.call("ecashLaneGet", { keysetId });
   }
