@@ -106,6 +106,39 @@ in place of Allow:
   family for thirty days. Asked at every new world, it would be the
   prompt this design is meant to remove.
 
+# SF4a. Offered at the first sign-in, where the world asks for it
+
+Added 2026-11-25 at the owner's word, through the BitPortal session: "These
+logins should carry. especialy when on the same domain." It changes SF4's
+"at the first site, nothing is said about a family" for a world that asks.
+
+- **The world asks, before its first sign-in.** It sends its embedded
+  signer `{ t: "want", family: "https://*.bitblocks.network" }`, written
+  exactly as BitLogin writes a family. The signer takes it only where that
+  is its own family, worked out from the browser's address for it by the
+  Public Suffix List, and BitLogin knows the family (`KNOWN_FAMILIES`). It
+  answers `familyTaken: true` or `false`, and approves nothing.
+- **The window works it out again** (its own family, known, nothing beyond a
+  note and a reaction asked) and, at the first sign-in, puts the family in
+  place of Allow, as SF4 does at the second, without naming an earlier site:
+
+  > Every site whose address ends in bitblocks.network can know who you are
+  > and ask you to sign notes, without asking you first. Choose this only if
+  > one person or team runs all of them.
+  >
+  > **[ Stay signed in at every bitblocks.network site ]**   **[ Just this one ]**
+
+- **Choosing the family is itself the remembering**: it is offered whether
+  or not "Remember" is ticked, and granted as SF4's family grant is (thirty
+  days for a known family, signed out of everywhere by a sign-out at any of
+  them). "Just this one" is the plain Allow, with the box as the person left
+  it, and turns the family down for thirty days, as in SF4.
+- **Unchanged:** never with the lock on; not where "Just this one" was
+  pressed for the family in the last thirty days; never for a family
+  BitLogin doesn't know, or one that isn't the asking site's own; never with
+  more than a note and a reaction. A world that doesn't ask sees SF4 as
+  before.
+
 # SF5. What a family grant allows
 
 Less than a site's own grant, where the two differ:

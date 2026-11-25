@@ -19,6 +19,7 @@ import { GUEST_CHANGES, isListSubject, type GuestChange } from "./guests.js";
 import { cleanCoordinate, readReceipt, type UnlockService } from "../pay/listing.js";
 import { cleanFileName } from "../drive/tree.js";
 import { cleanMore, type WorldMore } from "./follows.js";
+import { readFamily } from "./family.js";
 export { WORLD_MORE } from "./follows.js";
 import { cleanMessage, type ReadMessage, type WrittenMessage } from "./messages.js";
 import { cleanBoard, cleanBoardTitle, cleanScore, worldCoordinate } from "./scores.js";
@@ -230,6 +231,12 @@ export type SignerRequest =
   // From a world that would be let do more than a note and a reaction (NSWP-10, "Asking for more"; follows.ts).
   /** By name, from a short closed list. It approves nothing: the window shows it, in BitLogin's words. */
   | { t: "wantMore"; id: string; more: WorldMore[] }
+  /**
+   * A world asking, before its first sign-in, to be offered its whole family (docs/site-family.md SF4a): every site
+   * under its domain. Written as BitLogin writes a family, or "" where it isn't one. It approves nothing: the signer
+   * takes it only for its own family, one BitLogin knows, and the window offers it beside "Just this one".
+   */
+  | { t: "wantFamily"; id: string; family: string }
   /** Follow or unfollow one person: the visitor's newest follow list as the world found it (or null), and the one change. */
   | { t: "follow"; id: string; list: unknown; add?: string; remove?: string }
   /** A score on one of a world's boards (NSWP-15; scores.ts). For any world its visitor allowed: less than a note. */
@@ -267,6 +274,8 @@ export type SignerReply =
       /** In answer to `want` only: whether that set may be shown to the user at this address. False approves
        *  nothing and true approves nothing: it says whether asking is worth it. */
       taken?: boolean;
+      /** In answer to a `want` for a family only: whether the window will offer it. Approves nothing. */
+      familyTaken?: boolean;
     }
   | { t: "signed"; id: string; event: NostrEvent }
   /** Answers `propose` and `wallet` at once: the question is waiting for the person. Show BitLogin's panel or window. */
@@ -328,6 +337,8 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.t === "open" && d.event && typeof d.event === "object") return { t: "open", id: d.id, event: d.event };
   // A world asking for more, by name. A message that carries a permission set is an application's, below.
   if (d.t === "want" && d.permissions === undefined && Array.isArray(d.more)) return { t: "wantMore", id: d.id, more: cleanMore(d.more) };
+  // A world asking for its family, and nothing else with it.
+  if (d.t === "want" && d.permissions === undefined && d.more === undefined && d.family !== undefined) return { t: "wantFamily", id: d.id, family: readFamily(d.family) };
   if (d.t === "follow" && (d.list === null || (!!d.list && typeof d.list === "object"))) {
     const add = typeof d.add === "string" && HEX64.test(d.add);
     const remove = typeof d.remove === "string" && HEX64.test(d.remove);
@@ -360,7 +371,7 @@ export type HandoffMessage =
   | { t: "hello"; nonce: string }
   /** Signer to window: which site embeds it (as the browser says), a throwaway key to seal the hand-off to, and
    *  what that site said it wants, if it is an application (§SW9). */
-  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean; /** A world asked to be let do more, by name. */ more?: WorldMore[]; /** What it was already let do, by name: kept when the user allows it again. */ has?: WorldMore[]; /** Something the site put to the person (§SW20), and who it is signed in as. */ ask?: Asked; pubkey?: string }
+  | { t: "frame"; nonce: string; world: string; recipient: string; wants?: AppPermissions; /** The site asked for a set it may not hold here. */ turnedDown?: boolean; /** A world asked to be let do more, by name. */ more?: WorldMore[]; /** What it was already let do, by name: kept when the user allows it again. */ has?: WorldMore[]; /** The world asked for its family (SF4a), and the signer took it. */ family?: true; /** Something the site put to the person (§SW20), and who it is signed in as. */ ask?: Asked; pubkey?: string }
   /** Window to signer: what the person answered to `ask`. Neither field: they said no. */
   | { t: "answer"; nonce: string; world: string; event?: NostrEvent; wallet?: string; /** It was paid: the invoice that was, and the proof where there is one. */ paid?: { invoice: string; preimage?: string }; /** A file was saved. */ saved?: { name: string; size: number; private: boolean; url?: string }; /** The file the person chose. */ file?: OfferedFile & { url?: string }; /** A tip was paid: how much, and the proof where there is one. */ tipped?: { sats: number; preimage?: string }; /** It was bought, or was held already: the receipt, and what it delivers. */ bought?: { receipt: NostrEvent; delivery?: string }; /** A world's list, signed on BitLogin's page with the one change made. */ listed?: NostrEvent }
   /** Window to signer: the person's receipts for this site's own listings, so `have` can be answered with no question. They replace what it held. */
@@ -455,7 +466,7 @@ export function readHandoffMessage(data: unknown): HandoffMessage | null {
     // A set that does not read as one is no frame at all: the window must not show part of what was asked.
     const wants = d.wants === undefined ? undefined : readPermissions(d.wants);
     if (wants === null) return null;
-    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}), ...(!wants && cleanMore(d.more).length ? { more: cleanMore(d.more) } : {}), ...(!wants && cleanMore(d.has).length ? { has: cleanMore(d.has) } : {}), ...(readAsked(d.ask, cleanOrigin(d.world)) && hex(d.pubkey) && !(wants && readAsked(d.ask, cleanOrigin(d.world))!.what === "wallet") ? { ask: readAsked(d.ask, cleanOrigin(d.world))!, pubkey: d.pubkey } : {}) };
+    return { t: "frame", nonce: d.nonce, world: cleanOrigin(d.world), recipient: d.recipient, ...(wants ? { wants } : {}), ...(d.turnedDown === true ? { turnedDown: true } : {}), ...(!wants && cleanMore(d.more).length ? { more: cleanMore(d.more) } : {}), ...(!wants && cleanMore(d.has).length ? { has: cleanMore(d.has) } : {}), ...(!wants && d.family === true ? { family: true as const } : {}), ...(readAsked(d.ask, cleanOrigin(d.world)) && hex(d.pubkey) && !(wants && readAsked(d.ask, cleanOrigin(d.world))!.what === "wallet") ? { ask: readAsked(d.ask, cleanOrigin(d.world))!, pubkey: d.pubkey } : {}) };
   }
   if (d.t === "answer" && cleanOrigin(d.world)) {
     const wallet = d.wallet === undefined ? "" : cleanWalletUri(d.wallet);

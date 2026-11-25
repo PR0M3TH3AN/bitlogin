@@ -112,6 +112,19 @@ describe("the messages", () => {
     expect(signerMessage({ t: "refused", id: "a2" })).toEqual({ nswp: "nswp-signer", v: 1, t: "refused", id: "a2" });
   });
 
+  it("a world's ask for its family is read as that, and only a family written as BitLogin writes one", () => {
+    const wrap = (m: Record<string, unknown>) => ({ nswp: "nswp-signer", v: 1, ...m });
+    expect(readSignerRequest(wrap({ t: "want", id: "f1", family: "https://*.bitblocks.network" }))).toEqual({ t: "wantFamily", id: "f1", family: "https://*.bitblocks.network" });
+    // Misshapen: asked, and read as asking for nothing the signer could take.
+    expect(readSignerRequest(wrap({ t: "want", id: "f2", family: "bitblocks.network" }))).toEqual({ t: "wantFamily", id: "f2", family: "" });
+    expect(readSignerRequest(wrap({ t: "want", id: "f3", family: "https://*.BITBLOCKS.network" }))).toEqual({ t: "wantFamily", id: "f3", family: "" });
+    // Asking for more by name stays that: a family is never asked with more.
+    expect(readSignerRequest(wrap({ t: "want", id: "f4", more: ["follows"], family: "https://*.bitblocks.network" }))).toEqual({ t: "wantMore", id: "f4", more: ["follows"] });
+    // The signer tells the window the world asked, as a flag; nothing else of it is carried.
+    expect(readHandoffMessage(handoffMessage({ t: "frame", nonce: "n1", world: SITE, recipient: key, family: true }))).toEqual({ t: "frame", nonce: "n1", world: SITE, recipient: key, family: true });
+    expect(readHandoffMessage({ ...handoffMessage({ t: "frame", nonce: "n1", world: SITE, recipient: key }), family: "yes" })).toEqual({ t: "frame", nonce: "n1", world: SITE, recipient: key });
+  });
+
   it("the window's and the signer's are read back as sent, and nothing misshapen is read", () => {
     expect(readHandoffMessage(handoffMessage({ t: "hello", nonce: "n1" }))).toEqual({ t: "hello", nonce: "n1" });
     expect(readHandoffMessage(handoffMessage({ t: "frame", nonce: "n1", world: `${SITE}/x`, recipient: key }))).toEqual({ t: "frame", nonce: "n1", world: SITE, recipient: key });
