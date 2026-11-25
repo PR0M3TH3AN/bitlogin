@@ -87,6 +87,11 @@ export interface FoundSigner {
   /** Whether BitLogin knows that family: then it is kept thirty days, and otherwise seven. */
   readonly knownFamily: boolean;
   /**
+   * The world asked for its family before its first sign-in (site-family.md SF4a), and it is one BitLogin knows: offer
+   * it here even with no earlier site of it allowed, unless the lock is on or it was turned down lately.
+   */
+  readonly familyAsked: boolean;
+  /**
    * The site asked for more than a note and a reaction, and may not have it
    * at this address: so `wants` is null, and what Allow gives is the plain
    * grant. Say so on the page, or the user is shown a smaller question than
@@ -169,14 +174,18 @@ export function findEmbeddedSigner(opts: FindSignerOptions = {}): Promise<FoundS
       const has = wants ? [] : (msg.has ?? []);
       // What is asked now and was not had before: the question is about these.
       const more = wants ? [] : (msg.more ?? []).filter((name) => !has.includes(name));
-      // More than a note and a reaction is for this one site: no family is offered beside it.
-      const family = wants || more.length || has.length ? "" : familyOf(world);
+      // More than a note and a reaction is for this one site: no family is offered beside it. An application may have
+      // its family offered beside its own set only where it asked, for a family BitLogin knows (SF5a).
+      const own = familyOf(world);
+      const family = wants ? (msg.family === true && !!own && knownFamily(own) ? own : "") : more.length || has.length ? "" : own;
       resolve({
         site: world,
         wants,
         known: knownAppName(world) !== null,
         family,
         knownFamily: family ? knownFamily(family) : false,
+        // Worked out again on this page: its own family, by the browser's address for it, and one BitLogin knows.
+        familyAsked: msg.family === true && !!family && knownFamily(family),
         turnedDown,
         more,
         has,

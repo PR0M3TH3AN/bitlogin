@@ -51,7 +51,7 @@
     </div>
     <label id="remember-row" class="connect-remember" hidden><input id="remember" type="checkbox" checked /> <span id="remember-label">Remember this site on this device</span></label>
     <div id="family" class="connect-known" hidden>
-      <p>You allowed <strong id="family-earlier"></strong> <span id="family-when"></span>.</p>
+      <p id="family-before">You allowed <strong id="family-earlier"></strong> <span id="family-when"></span>.</p>
       <p>Every site whose address ends in <strong id="family-domain"></strong> can know who you are and ask you to sign notes, without asking you first. Choose this only if one person or team runs all of them.</p>
       <p id="family-lasts" class="connect-small"></p>
     </div>
@@ -100,7 +100,12 @@
       <button id="switch-app" class="connect-link" type="button">Use a different account</button>
     </div>
     <label id="remember-app-row" class="connect-remember" hidden><input id="remember-app" type="checkbox" checked /> <span id="remember-app-label">Remember this application on this device</span></label>
+    <div id="app-family" class="connect-known" hidden>
+      <p>Every site whose address ends in <strong id="app-family-domain"></strong> can know who you are and ask you to sign notes, without asking you first. Only this application gets what it asks for below. Choose this only if one person or team runs all of them.</p>
+      <p id="app-family-lasts" class="connect-small"></p>
+    </div>
     <div class="cta-row">
+      <button id="allow-app-family" class="btn primary" type="button" hidden>Stay signed in at every site</button>
       <button id="allow-app" class="btn primary" type="button">Allow</button>
       <button id="deny-app" class="btn secondary" type="button">Don't allow</button>
     </div>

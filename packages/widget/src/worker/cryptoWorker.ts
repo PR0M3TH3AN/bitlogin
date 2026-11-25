@@ -73,7 +73,7 @@ import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
 import { blossomAuth, loadDrive, peekDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
-import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import { deleteSignerGrant, grantedAt, grantSite, grantsToKeep, keepSecFor, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
   checkDue,
   checkLearned,
@@ -186,6 +186,8 @@ interface SessionState {
    *  allowed every site under one domain. Null for a grant kept for its site alone. `site` is still the exact
    *  site it serves: a room pass names that, never the family. */
   family: string | null;
+  /** The family an application's own grant was allowed with in the same press (SF5a): a sign-out here ends it too. */
+  memberOf: string | null;
   /** For a signer-only session serving a world: what the user let it do beyond a note and a reaction, by name. */
   more: readonly string[];
 }
@@ -210,6 +212,7 @@ const session: SessionState = {
   grantAt: null,
   relays: [],
   family: null,
+  memberOf: null,
   more: []
 };
 
@@ -378,6 +381,7 @@ function clearSession(): void {
   session.grantAt = null;
   session.relays = [];
   session.family = null;
+  session.memberOf = null;
   session.more = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
@@ -884,30 +888,36 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       if (!session.remember) return { kept: false };
       // An application's grant is for the site its hand-off was sealed for, and no other.
       if ((session.app && session.app.site !== p.site) || (session.site && session.site !== p.site)) throw new Error("This hand-off was for another site.");
-      // Allowed for every site of a family: kept once, under the family, and this site's own grant (an older
-      // choice) is forgotten, so what the user chose last is what applies.
-      if (session.family) {
-        if (!inFamily(p.site, session.family)) throw new Error("This hand-off was for another site.");
-        await deleteSignerGrant(store, p.site);
+      // Allowed for every site of a family: kept once, under the family. A world's own grant (an older choice) is
+      // forgotten, so what the user chose last is what applies. An application allowed with its family keeps two
+      // (docs/site-family.md SF5a): its own set at its own address, and the family's, which holds no set.
+      const family = session.family ?? session.memberOf;
+      if (family && !inFamily(p.site, family)) throw new Error("This hand-off was for another site.");
+      if (session.family) await deleteSignerGrant(store, p.site);
+      const grants = grantsToKeep({ site: p.site, app: session.app, family, more: cleanMore(session.more) });
+      let kept = true;
+      for (const g of grants) {
+        kept =
+          (await saveSignerGrant(
+            store,
+            {
+              site: g.site,
+              everydayPrivateKey,
+              // The application's own grant for as long as the signer worked out for it; the family's by its own name.
+              until: session.app && family && g.site === family ? Math.floor(now) + keepSecFor(family) : p.until,
+              ...(p.name ? { name: p.name } : {}),
+              ...(session.profile && !session.app ? { profile: session.profile } : {}),
+              at: session.grantAt ?? Math.floor(now),
+              ...(session.relays.length ? { relays: session.relays } : {}),
+              signed: [],
+              ...(g.more ? { more: g.more } : {}),
+              ...(g.memberOf ? { memberOf: g.memberOf } : {}),
+              ...(g.permissions ? { permissions: g.permissions, signedSensitive: [] } : {})
+            },
+            now
+          )) && kept;
       }
-      return {
-        kept: await saveSignerGrant(
-          store,
-          {
-            site: session.family ?? p.site,
-            everydayPrivateKey,
-            until: p.until,
-            ...(p.name ? { name: p.name } : {}),
-            ...(session.profile ? { profile: session.profile } : {}),
-            at: session.grantAt ?? Math.floor(now),
-            ...(session.relays.length ? { relays: session.relays } : {}),
-            signed: [],
-            ...(!session.app && !session.family && session.more.length ? { more: cleanMore(session.more) } : {}),
-            ...(session.app ? { permissions: session.app.permissions, signedSensitive: [] } : {})
-          },
-          now
-        )
-      };
+      return { kept };
     }
 
     // The site's page was loaded again: what was kept for that site, if it is still in date, becomes a
@@ -928,6 +938,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       // The site it serves is the one asking, whichever grant it was kept under.
       session.site = family ? p.site : grant.site;
       session.family = family;
+      session.memberOf = !family && grant.memberOf ? grant.memberOf : null;
       session.profile = grant.profile ?? null;
       session.remember = true;
       session.grantAt = grantedAt(grant);
@@ -973,7 +984,9 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
     case "signerForget": {
       const site = (payload as SignerSitePayload).site;
       await deleteSignerGrant(store, site);
-      if (session.family && inFamily(site, session.family)) await deleteSignerGrant(store, session.family);
+      // Its family too, where it was signed in by it, or allowed with it in the same press (SF5a).
+      const family = session.family ?? session.memberOf;
+      if (family && inFamily(site, family)) await deleteSignerGrant(store, family);
       await store.delete(HELD_RECEIPTS + site).catch(() => {});
       // Its counts go with it: nothing is left here that says the site was ever used.
       for (const what of ["save", "follow", "seal", "unwrap", "reach", "score", "achieve"]) {
@@ -1029,7 +1042,10 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       session.remember = opened.remember;
       session.grantAt = opened.at;
       session.relays = opened.relays;
-      session.family = opened.family;
+      // An application allowed with its family (SF5a) serves as itself, under its own grant: the family is what it
+      // was allowed with, kept beside it and ended with it, never what its signatures are counted or checked under.
+      session.family = opened.app ? null : opened.family;
+      session.memberOf = opened.app ? opened.family : null;
       session.more = opened.more;
       return {
         everydayPublicKey: session.signer.getPublicKey(),

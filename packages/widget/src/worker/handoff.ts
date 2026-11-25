@@ -25,7 +25,7 @@ import { getPublicKeyHex } from "@bitlogin/core/crypto";
 import { mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
 import { cleanRelays } from "../embedded/takeBack.js";
-import { inFamily, readFamily } from "../embedded/family.js";
+import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
 import { grantSite } from "./signerGrant.js";
 import { cleanMore, type WorldMore } from "../embedded/follows.js";
 
@@ -133,10 +133,11 @@ export function sealHandoff(
   // Remembered across page loads (§SW11) only where the user left "remember" ticked in the window, and never
   // while the lock is on. How long is decided where it is kept, from the site's address (signerGrant.ts).
   const remember = !!forSite && also.visitOnly !== true && also.remember === true;
-  // A family is for a site that declared nothing, remembered, and in that family. Anything else is refused whole,
+  // A family is for a site, remembered, and in that family; for an application too where the family is one BitLogin
+  // knows (docs/site-family.md SF5a), carried beside its own set, which stays its own. Anything else is refused whole,
   // never sealed as the narrower "this site only": the user chose the family, and would not get what they chose.
   const family = also.family === undefined ? "" : readFamily(also.family);
-  if (also.family !== undefined && (!family || sealedApp || !remember || !inFamily(forSite, family))) throw new Error("That is not a family this site may be allowed as.");
+  if (also.family !== undefined && (!family || (sealedApp && !knownFamily(family)) || !remember || !inFamily(forSite, family))) throw new Error("That is not a family this site may be allowed as.");
   // More than a note and a reaction is for one world, by its own address: never for an application (held to its
   // set), and never for a family (sites the user has not seen). Refused whole, never sealed as less.
   const more = cleanMore(also.more);
@@ -211,7 +212,7 @@ export function openAppHandoff(
   const relays = cleanRelays(parsed.relays);
   // A family that does not read as one, is not remembered, is for an application, or does not hold the site: refused whole.
   const family = parsed.family === undefined ? null : readFamily(parsed.family);
-  if (family === "" || (family && (parsed.app !== undefined || !remember || !inFamily(named, family)))) {
+  if (family === "" || (family && ((parsed.app !== undefined && !knownFamily(family)) || !remember || !inFamily(named, family)))) {
     key.fill(0);
     throw new Error("The hand-off names a family it cannot be kept for.");
   }
@@ -229,5 +230,5 @@ export function openAppHandoff(
     key.fill(0);
     throw new Error("The hand-off carried a permission set that cannot be read.");
   }
-  return { key, app: { site, permissions }, site, profile, remember, at, relays, family: null, more: [] };
+  return { key, app: { site, permissions }, site, profile, remember, at, relays, family, more: [] };
 }

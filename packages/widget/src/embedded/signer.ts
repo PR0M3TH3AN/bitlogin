@@ -100,6 +100,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
   /** What a world was let do beyond a note and a reaction, and what it has asked to be, by name (follows.ts). */
   let more: WorldMore[] = [];
   let wantedMore: WorldMore[] = [];
+  /** The world asked for its own family, one BitLogin knows (site-family.md SF4a): the window offers it. */
+  let familyAsked = false;
   /** An application's counts, apart from a world's (§SW9.6). Only the public and the sensitive are kept across
    *  page loads: they are what a reload could be used to get round. */
   let gates = { quiet: createSignGate(APP_LIMITS.quiet), public: createSignGate(APP_LIMITS.public), sensitive: createSignGate(APP_LIMITS.sensitive), read: createSignGate(APP_LIMITS.read) };
@@ -270,6 +272,11 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       lock();
       return say(state(ask.id));
     }
+    if (ask.t === "wantFamily") {
+      // Only its own family, as the browser's address for it says, and one BitLogin knows. It approves nothing.
+      familyAsked = !!ask.family && ask.family === familyOf(site) && knownFamily(ask.family);
+      return say({ ...(state(ask.id) as Extract<SignerReply, { t: "state" }>), familyTaken: familyAsked });
+    }
     if (ask.t === "wantMore") {
       // Remembered for the window to show, in BitLogin's own words. It approves nothing.
       wantedMore = ask.more;
@@ -431,7 +438,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
         const recipient = await (await load()).beginHandoff();
         asking = { nonce: msg.nonce, from: e.source };
       lastWindow = asking;
-        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}), ...(pubkey && pending ? { ask: pending.ask, pubkey } : {}) });
+        back({ t: "frame", nonce: msg.nonce, world: site, recipient, ...(wanted ? { wants: wanted } : {}), ...(turnedDown ? { turnedDown: true } : {}), ...(!wanted && wantedMore.length ? { more: wantedMore } : {}), ...(!wanted && pubkey && !app && more.length ? { has: more } : {}), ...(familyAsked && !wantedMore.length ? { family: true as const } : {}), ...(pubkey && pending ? { ask: pending.ask, pubkey } : {}) });
       } catch {
         /* no worker: the window finds no signer, and offers nothing */
       }
@@ -510,7 +517,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       // for this visit: it lasts as long as the page does, and nothing is written down. So does one that can't
       // be kept (a browser that gives an embedded page no storage), and every site while the lock is on.
       // A family is kept by the family's own name: thirty days for one BitLogin knows, seven for any other.
-      const known = got.family ? knownFamily(got.family) : knownAppName(site) !== null;
+      // An application allowed with its family too (SF5a) is kept as itself: by its own address.
+      const known = got.family && !got.app ? knownFamily(got.family) : knownAppName(site) !== null;
       // A site let read private messages is asked again after seven days, however well BitLogin knows it: what
       // was read can't be unread, so the say is not left standing for a month.
       const longest = known && !more.includes("messages") ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec;

@@ -62,6 +62,11 @@ export interface SignerGrant {
   more?: WorldMore[];
   /** When it was allowed, in seconds (docs/take-back.md). Absent in a grant kept before this was recorded. */
   at?: number;
+  /**
+   * The family an application's own grant was allowed with, in the same press (docs/site-family.md SF5a): so a sign-out
+   * at the application signs out of the family too. Only a family; never more than that is read from it.
+   */
+  memberOf?: string;
   /** The user's own write relays, where a signer looks for their take-back record. */
   relays?: string[];
   /** When their relays were last asked, and answered, whether this site was taken back. In seconds. */
@@ -137,6 +142,7 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       ...(grant.permissions ? { permissions: grant.permissions } : {}),
       ...(!grant.permissions && !readFamily(site) && cleanMore(grant.more).length ? { more: cleanMore(grant.more) } : {}),
       ...(typeof grant.at === "number" ? { at: Math.floor(grant.at) } : {}),
+      ...(!readFamily(site) && readFamily(grant.memberOf) ? { memberOf: readFamily(grant.memberOf) } : {}),
       ...(cleanRelays(grant.relays).length ? { relays: cleanRelays(grant.relays) } : {}),
       ...(typeof grant.checkedAt === "number" ? { checkedAt: Math.floor(grant.checkedAt) } : {}),
       ...(typeof grant.seenAt === "number" ? { seenAt: Math.floor(grant.seenAt) } : {}),
@@ -165,7 +171,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; more?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; more?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown; memberOf?: unknown };
     const when = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
     const profile = readProfile(p.profile);
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
@@ -192,6 +198,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       ...(times(p.signedPass, GRANT_LIMITS.passKept).length ? { signedPass: times(p.signedPass, GRANT_LIMITS.passKept) } : {}),
       ...(!permissions && !readFamily(site) && cleanMore(p.more).length ? { more: cleanMore(p.more) } : {}),
       ...(when(p.at) ? { at: when(p.at)! } : {}),
+      ...(!readFamily(site) && readFamily(p.memberOf) ? { memberOf: readFamily(p.memberOf) } : {}),
       ...(cleanRelays(p.relays).length ? { relays: cleanRelays(p.relays) } : {}),
       ...(when(p.checkedAt) ? { checkedAt: when(p.checkedAt)! } : {}),
       ...(when(p.seenAt) ? { seenAt: when(p.seenAt)! } : {}),
@@ -201,6 +208,19 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     // Unreadable is "nothing kept", never an error: the user is simply asked again.
     return null;
   }
+}
+
+/**
+ * What one hand-off is kept as (docs/site-family.md SF5a): for an application allowed with its family, two grants,
+ * its own set at its own address (and the family it was allowed with, so a sign-out there ends both) and the
+ * family's, with no set at all; for a world allowed with its family, the family's alone; otherwise the site's own.
+ * An application's kinds never reach the family: the family's record carries none, and saveSignerGrant refuses one.
+ */
+export function grantsToKeep(session: { site: string; app: { site: string; permissions: AppPermissions } | null; family: string | null; more: readonly WorldMore[] }): { site: string; permissions?: AppPermissions; memberOf?: string; more?: WorldMore[] }[] {
+  if (session.app && session.family) return [{ site: session.site, permissions: session.app.permissions, memberOf: session.family }, { site: session.family }];
+  if (session.family) return [{ site: session.family }];
+  if (session.app) return [{ site: session.site, permissions: session.app.permissions }];
+  return [{ site: session.site, ...(session.more.length ? { more: cleanMore(session.more) } : {}) }];
 }
 
 /** Forget a site, or a family. */
