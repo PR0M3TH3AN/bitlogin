@@ -1,0 +1,120 @@
+/**
+ * Seed review 4's second run against a public test mint (agreed by the orchestrator, 2026-11-25, route (a)):
+ * testnut.cashu.space only, its fake sats only, a throwaway seed, stand-in storage in memory, and no relay at all (the
+ * seed pieces need none). Run from beta at 7230657. Prints what happened, never a key, a secret or a proof.
+ *
+ * **The trial gate is bypassed in this script.** testnut's sat keyset charges input_fee_ppk 100, so the wallet's trial
+ * answers "not tried (fees)" (shown first, through the shipped `tryMint`), and the wallet would never add by the seed
+ * there. To meet a real mint anyway, the seeded add and the restore are called directly here through the shipped
+ * pieces (`createSeededMint`, `restoreFromMint`, the stand-in worker over the shipped worker code), as the wallet calls
+ * them after a passed trial. Nothing in the product was changed for this.
+ */
+import { it } from "vitest";
+import { MintQuoteState, Wallet, type Proof } from "@cashu/cashu-ts";
+import { NostrSigner } from "@bitlogin/core/account";
+import { generatePrivateKey } from "@bitlogin/core/crypto";
+import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
+import { ecashSeed } from "../worker/ecashSeed.js";
+import { readLane } from "../worker/ecashLanes.js";
+import { laneStart } from "./seedLanes.js";
+import { createSeededMint } from "./seededMint.js";
+import { restoreFromMint } from "./seedRestore.js";
+import { tryMint } from "./mintTrial.js";
+import { standInLock, standInSeedWorker } from "./seedWorkerStandIn.js";
+
+const MINT = "https://testnut.cashu.space";
+const lock = standInLock();
+const say = (what: string, data?: unknown) => console.log(JSON.stringify({ at: new Date().toISOString(), what, ...(data !== undefined ? { data } : {}) }));
+const total = (proofs: readonly Proof[]) => proofs.reduce((n, p) => n + Number(p.amount), 0);
+/** The page's wallet, with every signature the mint hands back counted, and whether each carried its proof (NUT-12). */
+async function pageWallet(seen: { signatures: number; withDleq: number }) {
+  const wallet = new Wallet(MINT, { unit: "sat" });
+  await wallet.loadMint();
+  const count = (sigs: { dleq?: unknown }[]) => {
+    seen.signatures += sigs.length;
+    seen.withDleq += sigs.filter((s) => !!s.dleq).length;
+  };
+  const mintBolt11 = wallet.mint.mintBolt11.bind(wallet.mint);
+  wallet.mint.mintBolt11 = (async (...a: Parameters<typeof mintBolt11>) => {
+    const r = await mintBolt11(...a);
+    count(r.signatures as never);
+    return r;
+  }) as typeof mintBolt11;
+  const restore = wallet.mint.restore.bind(wallet.mint);
+  wallet.mint.restore = (async (...a: Parameters<typeof restore>) => {
+    const r = await restore(...a);
+    count(r.signatures as never);
+    return r;
+  }) as typeof restore;
+  return wallet;
+}
+async function paid(wallet: Wallet, sats: number) {
+  const quote = await wallet.createMintQuoteBolt11(sats);
+  // The test mint pays its own fake invoices: asked until it says so.
+  for (let i = 0; i < 30; i++) {
+    if ((await wallet.checkMintQuoteBolt11(quote.quote)).state === MintQuoteState.PAID) return quote;
+    await new Promise((done) => setTimeout(done, 1000));
+  }
+  throw new Error("The test mint didn't pay its own invoice.");
+}
+
+it("testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device", async () => {
+  const seed = ecashSeed(generatePrivateKey());
+  const minting = { signatures: 0, withDleq: 0 };
+  const wallet = await pageWallet(minting);
+  const keyset = wallet.keyChain.getKeyset(wallet.keysetId);
+  say("mint", { keysetId: wallet.keysetId, unit: keyset.unit, fee: keyset.fee });
+
+  // 1. The trial, through the shipped tryMint, with a 1-sat proof minted plainly (no seed): it stops before any swap.
+  const one = (await wallet.ops.mintBolt11(1, await paid(wallet, 1)).run()).find((p) => Number(p.amount) === 1)!;
+  const browser = { signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore() };
+  const worker = standInSeedWorker({ ...browser, seed, lock });
+  const trial = await tryMint({ wallet, seed: worker, proof: one, keep: async () => {} });
+  say("1. trial (shipped tryMint)", trial);
+  const [oneState] = await wallet.checkProofsStates([one]);
+  say("   the 1-sat proof after the trial", { state: oneState?.state });
+
+  // 2. A seeded add: the trial gate bypassed here, the rest as the wallet runs it.
+  say("   TRIAL GATE BYPASSED IN THIS SCRIPT from here on: the wallet itself would stay relay-kept at this mint.");
+  const minter = createSeededMint({ wallet, seed: worker });
+  minting.signatures = 0;
+  minting.withDleq = 0;
+  const added = await minter.add(21, await paid(wallet, 21));
+  const lane = await readLane(browser, wallet.keysetId);
+  say("2. seeded add of 21 (shipped createSeededMint)", { proofs: added.length, sats: total(added), lane: lane?.lane, countersUsed: lane ? lane.next - laneStart(lane.lane) : null, signatures: minting.signatures, withDleq: minting.withDleq });
+  const states = await wallet.checkProofsStates(added);
+  say("   their state at the mint", { unspent: states.filter((s) => s.state === "UNSPENT").length, of: added.length });
+
+  // 3. Rule 5: an output at a counter the mint has signed already, offered again for a new paid quote: refused whole.
+  const [again] = await worker.blinded(wallet.keysetId, laneStart(lane!.lane), 1);
+  const quote = await paid(wallet, 1);
+  let refused: string;
+  try {
+    await wallet.mint.mintBolt11({ quote: quote.quote, outputs: [{ amount: 1, id: again!.id, B_: again!.B_ }] } as never);
+    refused = "SIGNED AGAIN";
+  } catch (err) {
+    refused = `refused: ${String((err as Error).message).slice(0, 120)}${(err as { code?: number }).code ? ` (code ${(err as { code?: number }).code})` : ""}`;
+  }
+  say("3. rule 5: an already-signed output offered again", { result: refused, quoteAfter: (await wallet.checkMintQuoteBolt11(quote.quote)).state });
+  // The control: the same quote, with an output at a counter nobody has signed (far up the same lane). Taken, it
+  // shows the quote was good and it was the signed output that was refused; refused too, the run shows only that
+  // the quote was refused, and rule 5 is not shown here.
+  const [unsigned] = await worker.blinded(wallet.keysetId, laneStart(lane!.lane) + 2000, 1);
+  let control: string;
+  try {
+    const r = await wallet.mint.mintBolt11({ quote: quote.quote, outputs: [{ amount: 1, id: unsigned!.id, B_: unsigned!.B_ }] } as never);
+    control = `signed (${r.signatures.length})`;
+  } catch (err) {
+    control = `refused: ${String((err as Error).message).slice(0, 120)}${(err as { code?: number }).code ? ` (code ${(err as { code?: number }).code})` : ""}`;
+  }
+  say("   control: the same quote with an output nobody has signed", { result: control, quoteAfter: (await wallet.checkMintQuoteBolt11(quote.quote)).state });
+  // And what the shipped check before use sees (rule 5's other half): the mint's restore says the first is signed.
+  const { signedAmong } = await import("./seededMint.js");
+  say("   restore asked about the already-signed output", { signedCounter: await signedAmong(wallet, [again!]), lane: lane!.lane, laneStart: laneStart(lane!.lane) });
+
+  // 4. A fresh device: a new browser's storage, the same seed, no wallet record, no relay. Restore from the key alone.
+  const restoring = { signatures: 0, withDleq: 0 };
+  const fresh = standInSeedWorker({ signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore(), seed, lock });
+  const back = await restoreFromMint({ wallet: await pageWallet(restoring), seed: fresh });
+  say("4. restore from the key on a fresh device (shipped restoreFromMint)", { proofs: back.proofs.length, sats: total(back.proofs), skipped: back.skipped, asked: back.asked, signatures: restoring.signatures, withDleq: restoring.withDleq, sameAsAdded: back.proofs.map((p) => p.secret).sort().join() === added.map((p) => p.secret).sort().join() });
+}, 600_000);

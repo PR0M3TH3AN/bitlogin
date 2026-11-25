@@ -1,0 +1,23 @@
+
+ RUN  v5.1.0 /home/user/Documents/GitHub/bitlogin/packages/widget
+
+stdout | src/ecash/testnut.run.test.ts > testnut.cashu.space: the trial, a seeded add, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:20:11.950Z","what":"mint added","data":{"canSeed":false}}
+
+stdout | src/ecash/testnut.run.test.ts > testnut.cashu.space: the trial, a seeded add, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:20:15.098Z","what":"fund 8 fake sats, relay-kept","data":{"claimed":true,"balance":8}}
+
+stdout | src/ecash/testnut.run.test.ts > testnut.cashu.space: the trial, a seeded add, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:20:15.319Z","what":"trial","data":{"result":{"outcome":"not-tried","why":"This mint doesn't say it can restore what it signed and prove it, so it can't be restored from.","cost":0},"balance":8}}
+
+stdout | src/ecash/testnut.run.test.ts > testnut.cashu.space: the trial, a seeded add, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:20:15.320Z","what":"seeded here after the trial","data":{"seeded":false}}
+{"at":"2026-11-25T22:20:15.320Z","what":"stopped: nothing is added by the seed at a mint that hasn't passed the trial"}
+
+ ✓ src/ecash/testnut.run.test.ts > testnut.cashu.space: the trial, a seeded add, and a restore from the key on a fresh device 4461ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  17:20:09
+   Duration  5.94s (tests 80%, import 12%, transform 8%)
+
