@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Wallet, type Proof } from "@cashu/cashu-ts";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { startMockMint, type MockMint } from "./mockMint.js";
-import { createSeededMint, asOutputData } from "./seededMint.js";
+import { createSeededMint, asOutputData, defaultLock, type Lock } from "./seededMint.js";
 import { laneOf, laneStart, type LaneState } from "./seedLanes.js";
 import { ecashSeed, seededOutputs } from "../worker/ecashSeed.js";
 
@@ -130,5 +130,55 @@ describe("two browsers of one account, adding sats from one seed", () => {
     expect(total(pa) + total(pb)).toBe(16);
     expect(distinct([...pa, ...pb])).toBe(pa.length);
     expect(new Set([...pa, ...pb].map((p) => p.secret)).size).toBe(1);
+  });
+});
+
+describe("two tabs of one browser, on one store", () => {
+  /** Two tabs: each its own page wallet and minter, the one browser's storage between them, slow as storage is. */
+  async function tabs(mint: MockMint, seed: Uint8Array, lock: Lock) {
+    const store = new Map<string, LaneState>();
+    const pause = () => new Promise((done) => setTimeout(done, 5));
+    const tab = async () => {
+      const wallet = new Wallet(mint.url, { unit: "sat" });
+      await wallet.loadMint();
+      // The browser has used this mint before: its lane is chosen and stored, and both tabs read it.
+      if (!store.has(wallet.keysetId)) store.set(wallet.keysetId, { lane: 7, next: laneStart(7) });
+      const minter = createSeededMint({
+        wallet,
+        outputs: async (id, amounts, from) => seededOutputs(seed, id, amounts, from),
+        load: async (id) => (await pause(), store.get(id) ?? null),
+        save: async (id, state) => (await pause(), void store.set(id, state)),
+        lock
+      });
+      return {
+        async add(sats: number) {
+          const quote = await wallet.createMintQuoteBolt11(sats);
+          mint.payAllFunding();
+          return minter.add(sats, quote);
+        }
+      };
+    };
+    return [await tab(), await tab()] as const;
+  }
+
+  it("with no lock, adding at once on a mint that signs again, hand both tabs the same counters: the loss the lock is for", async () => {
+    const mint = await startMockMint({ signsAgain: true });
+    mints.push(mint);
+    const seed = ecashSeed(generatePrivateKey());
+    const [a, b] = await tabs(mint, seed, (_name, fn) => fn());
+    const [pa, pb] = await Promise.all([a.add(8), b.add(8)]);
+    expect(total(pa) + total(pb)).toBe(16);
+    expect(distinct([...pa, ...pb])).toBeLessThan(pa.length + pb.length);
+  });
+
+  it("under the lock, adding at once, even on a mint that signs again, are handed different counters: nothing lost", async () => {
+    const mint = await startMockMint({ signsAgain: true });
+    mints.push(mint);
+    const seed = ecashSeed(generatePrivateKey());
+    const [a, b] = await tabs(mint, seed, defaultLock);
+    for (let i = 0; i < 3; i++) {
+      const [pa, pb] = await Promise.all([a.add(8), b.add(5)]);
+      expect(distinct([...pa, ...pb])).toBe(pa.length + pb.length);
+    }
   });
 });

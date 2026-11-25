@@ -87,9 +87,26 @@ block. So keeping two browsers apart must not depend on relays at all.
     row with nothing signed between, well beyond what rule 1 leaves.
   - **Where the relay copy names a highest counter for the lane,** restore
     goes at least that far, whatever gaps it meets on the way.
+- **What a wider gap costs, said plainly on the screen:** "If a crash left
+  a long gap in a lane and BitLogin's record of the counter is gone from
+  every relay too, restore can miss what came after the gap. Those sats
+  are still at the mint, but this wallet can't find them." (Tested: 5 of
+  12 found without the relay copy, all 12 with it.)
 - **What that costs:** an empty lane is about 100 outputs asked about, so
   all 32 empty is about 3,200, a few requests to each mint. A lane in use
   costs what it holds, plus 300.
+
+### 3a. Two tabs of one browser share its lane
+
+The panel and a page of bitlogin.network, or two tabs, share this
+browser's storage, and so its lane. Every read and change of a lane's
+state is made under one lock per mint keyset (`navigator.locks`, which
+every tab and worker of the site shares; a lock within the page where a
+browser lacks it). Reserving reads the counter, takes what it needs and
+writes it back under the lock. Moving forward never writes a counter lower
+than the one stored. (Tested: two tabs adding at once, without the lock,
+were handed the same counters and lost one set on a signing-again mint.
+Under the lock, nothing was lost.)
 
 ### 4. A mint is used with the seed only once it is shown to refuse outputs it has signed before
 
