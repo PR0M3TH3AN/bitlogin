@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { MockRelay } from "../test-support/mockRelay.js";
+import { describe, expect, it, beforeEach, afterEach, onTestFailed } from "vitest";
+import { MockRelay, clearRelayTrace, dumpRelayTrace } from "../test-support/mockRelay.js";
 import { generatePassphrase } from "./passphrase.js";
 import {
   registerAccount,
@@ -44,7 +44,10 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
   let relays: MockRelay[] = [];
   let vaultRelayUrls: string[] = [];
 
-  beforeEach(async () => {
+  beforeEach(async (ctx) => {
+    // TEMPORARY trace (2026-11-25): what the relays saw, written out only if this test fails.
+    clearRelayTrace();
+    onTestFailed(() => dumpRelayTrace(ctx.task.name));
     relays = await Promise.all([
       MockRelay.start(),
       MockRelay.start(),

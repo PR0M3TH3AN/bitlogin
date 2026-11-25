@@ -5,6 +5,7 @@
  * "clean device" -> recover) are exercised against this mock instead.
  * Not shipped in the published package.
  */
+import { appendFileSync } from "node:fs";
 import { WebSocketServer, type WebSocket } from "ws";
 import { compareNip01ReplacementOrder, verifyNostrEvent, findTagValue, type NostrEvent } from "../nostr/event.js";
 import { matchesNostrFilter, type NostrFilter } from "../nostr/relay.js";
@@ -22,6 +23,24 @@ function storageKey(event: NostrEvent): string {
 function isIndexedKind(kind: number): boolean {
   return (kind >= 30000 && kind < 40000) || kind === 0 || kind === 3 || (kind >= 10000 && kind < 20000);
 }
+
+/** A line for the trace file named by BITLOGIN_RELAY_TRACE, where a test asks for one: vitest hides passing tests' console. */
+const traced: string[] = [];
+export function traceRelay(line: string): void {
+  if (process.env.BITLOGIN_RELAY_TRACE) traced.push(`${new Date().toISOString()} ${line}`);
+}
+/** Write what was traced since the last call to the trace file, and forget it. Called when a test fails. */
+export function dumpRelayTrace(title: string): void {
+  const file = process.env.BITLOGIN_RELAY_TRACE;
+  if (file) appendFileSync(file, `=== FAILED: ${title}\n${traced.join("\n")}\n`);
+  traced.length = 0;
+}
+/** Forget what was traced: at the start of each test. */
+export function clearRelayTrace(): void {
+  traced.length = 0;
+}
+// The pool's side of the trace, through a hook it calls only where set: here, and only while tracing.
+if (process.env.BITLOGIN_RELAY_TRACE) (globalThis as { __bitloginRelayTrace?: (line: string) => void }).__bitloginRelayTrace = traceRelay;
 
 export class MockRelay {
   readonly port: number;
@@ -102,6 +121,7 @@ export class MockRelay {
           return;
         }
         this.store(event);
+        traceRelay(`${this.port} EVENT k${event.kind} ${event.pubkey.slice(0, 8)} d=${(findTagValue(event, "d") ?? "").slice(0, 12)} at=${event.created_at} id=${event.id.slice(0, 8)} held=${this.query({ kinds: [event.kind], authors: [event.pubkey], ...(findTagValue(event, "d") !== undefined ? { "#d": [findTagValue(event, "d")] } : {}) }).map((e) => e.id.slice(0, 8)).join(",")}`);
         socket.send(JSON.stringify(["OK", event.id, true, ""]));
         this.broadcast(event);
         return;
@@ -109,6 +129,8 @@ export class MockRelay {
       if (type === "REQ") {
         const [subId, ...filters] = rest as [string, Record<string, unknown>];
         const matches = this.query(filters[0] ?? {});
+        const f = (filters[0] ?? {}) as { kinds?: number[]; authors?: string[]; "#d"?: string[] };
+        traceRelay(`${this.port} REQ k${(f.kinds ?? []).join("/")} ${(f.authors ?? []).map((a) => a.slice(0, 8)).join(",")} d=${(f["#d"] ?? []).map((d) => d.slice(0, 12)).join(",")} -> ${matches.length} ${matches.map((e) => e.id.slice(0, 8)).join(",")}${this.suppressEose ? " (no EOSE)" : ""}`);
         for (const event of this.unsolicitedQueryEvents) socket.send(JSON.stringify(["EVENT", subId, event]));
         for (const event of matches) socket.send(JSON.stringify(["EVENT", subId, event]));
         if (!this.suppressEose) {
@@ -156,7 +178,12 @@ export class MockRelay {
       this.events.set(key, event);
       return;
     }
-    if (compareNip01ReplacementOrder(event, existing) > 0) {
+    const order = compareNip01ReplacementOrder(event, existing);
+    // On a test's word, every same-second choice between two versions of one record is said (2026-11-25: tracing the
+    // "record not found" fault).
+    if (event.created_at === existing.created_at && event.id !== existing.id)
+      traceRelay(`${this.port} same-second ${key.slice(0, 40)} kept=${order > 0 ? "new" : "old"} new=${event.id.slice(0, 8)} old=${existing.id.slice(0, 8)} at=${event.created_at}`);
+    if (order > 0) {
       this.events.set(key, event);
     }
     // else: existing event wins, replacement discarded (NIP-01 replacement rule)
