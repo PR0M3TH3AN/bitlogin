@@ -8,6 +8,7 @@ import { MockRelay } from "../test-support/mockRelay.js";
 import { registerAccount } from "./create.js";
 import { changePassword } from "./changePassword.js";
 import { loginWithPassword } from "./login.js";
+import { completeRecoveryWithNewCredentials, recoverWithPhrase } from "./recover.js";
 import { generatePassphrase } from "./passphrase.js";
 import { AccountAlreadyExistsError } from "./errors.js";
 
@@ -86,6 +87,28 @@ describe("an account address is free only when every relay asked says so", () =>
       relays[0]!.suppressEose = false;
       // The other account is untouched.
       const still = await loginWithPassword({ loginName, password: takenPassword, vaultRelayUrls: [urls[0]!] });
+      expect(still.everydayPublicKey).toBe(other.everydayPublicKey);
+    },
+    ARGON2_TIMEOUT
+  );
+
+  it(
+    "refuses a recovery onto a login name and password another account holds on the slow relay",
+    async () => {
+      const takenName = "taken-at-recovery";
+      const takenPassword = generatePassphrase().secret;
+      const other = await registerAccount({ loginName: takenName, password: takenPassword, vaultRelayUrls: urls });
+      const mine = await registerAccount({ loginName: "mine-recovering", password: generatePassphrase().secret, vaultRelayUrls: urls });
+      const recovered = await recoverWithPhrase({ phrase: mine.recoveryPhrase, vaultRelayUrls: urls, discoveryRelayUrls: [] });
+      // The other account now only on the first relay, which never finishes answering; the others hold nothing of it.
+      relays[1]!.wipeAllData();
+      relays[2]!.wipeAllData();
+      relays[0]!.suppressEose = true;
+      await expect(
+        completeRecoveryWithNewCredentials({ recovered, newLoginName: takenName, newPassword: takenPassword, vaultRelayUrls: urls, timeoutMs: QUICK })
+      ).rejects.toThrow(/not every vault relay answered/u);
+      relays[0]!.suppressEose = false;
+      const still = await loginWithPassword({ loginName: takenName, password: takenPassword, vaultRelayUrls: [urls[0]!] });
       expect(still.everydayPublicKey).toBe(other.everydayPublicKey);
     },
     ARGON2_TIMEOUT
