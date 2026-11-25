@@ -43,6 +43,8 @@ export interface MockMintOptions {
   signsAgain?: boolean;
   /** Not say it supports restore or deterministic secrets (NUT-09, NUT-13), and not restore. */
   noRestore?: boolean;
+  /** List NUT-09 and NUT-12 but not NUT-13, as cdk does (testnut, 2026-11-25): 13 is the wallet's own, not the mint's. */
+  unlistedNut13?: boolean;
   /**
    * What happens to the n-th swap (from 1): answered as usual, refused with a server error before anything is done
    * ("fail-before"), or done and then answered with a server error, as an answer lost on the way ("act-then-fail").
@@ -156,7 +158,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
 
   const handle = (method: string, path: string, body: any): unknown => {
     if (method === "GET" && path === "/v1/info") {
-      return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true }, ...(options.noRestore ? {} : { 9: { supported: true }, 13: { supported: true } }), ...(options.noDleq ? {} : { 12: { supported: true } }) } };
+      return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true }, ...(options.noRestore ? {} : { 9: { supported: true }, ...(options.unlistedNut13 ? {} : { 13: { supported: true } }) }), ...(options.noDleq ? {} : { 12: { supported: true } }) } };
     }
     const listed = (k: (typeof keysets)[number]) => ({ id: k.id, unit: "sat", active: k === active(), input_fee_ppk: 0 });
     if (method === "GET" && path === "/v1/keysets") return { keysets: keysets.map(listed) };

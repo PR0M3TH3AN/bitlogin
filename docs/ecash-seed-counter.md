@@ -140,9 +140,13 @@ Under the lock, nothing was lost.)
 wallet names it as a mint whose sats can't be restored from the key
 alone. How a mint is shown to refuse:
 
-- **What it says of itself (NUT-06):** it must list restore (NUT-09),
-  deterministic secrets (NUT-13) and proofs of what it signs (NUT-12).
-  That is needed, but not enough.
+- **What it says of itself (NUT-06):** it must list restore (NUT-09) and
+  proofs of what it signs (NUT-12). That is needed, but not enough. It
+  needn't list deterministic secrets (NUT-13): those are the wallet's own
+  way of making its outputs, and nothing a mint does. The first run
+  against a public test mint (testnut.cashu.space, cdk-mintd 0.18.1,
+  2026-11-25) showed real mints don't list it, so requiring it kept the
+  seed off them (`docs/reviews/seed-testnut-2026-11-25/`).
 - **A trial that can cost one sat** (built in `ecash/mintTrial.ts`,
   2026-11-24). One 1-sat proof of the person's is swapped into an output
   made from a counter kept for trials: the last 4,096 below 2³¹, which a
@@ -151,7 +155,10 @@ alone. How a mint is shown to refuse:
   The proof that comes back is kept in the wallet at once, in place of the
   one it took, and is then swapped into that same output again.
   - A mint that charges for each swap isn't tried. The trial would cost
-    more than a sat, and nothing is spent.
+    more than a sat, and nothing is spent. It stays relay-kept.
+    **Open, for the owner:** whether such a mint is tried at a press that
+    names the cost. At testnut's 100 ppk, each swap of a 1-sat proof costs
+    a sat, so up to about 3 sats.
   - If the mint refuses the second request and the proof is still
     unspent, it passes. A mint that spends the input before refusing does
     not pass: it would lose a whole invoice on a retried claim.

@@ -11,7 +11,8 @@
  * still theirs. A mint that signs it again, or spends the proof before refusing, has taken it: it fails, at the cost
  * of that proof.
  *
- * A mint that doesn't say it supports restore (NUT-09) and deterministic secrets (NUT-13) isn't tried at all.
+ * A mint that doesn't say it supports restore (NUT-09) and proofs (NUT-12) isn't tried at all. NUT-13, deterministic
+ * secrets, is the wallet's own: mints needn't list it.
  */
 import { CheckStateEnum, type Proof, type Wallet } from "@cashu/cashu-ts";
 import { keysetGiven, signedFor, type SeedWorker } from "./seededMint.js";
@@ -48,7 +49,9 @@ export async function tryMint(deps: TrialDeps): Promise<TrialResult> {
   const { wallet } = deps;
   const keysetId = wallet.keysetId;
   const info = (await wallet.mint.getInfo()) as unknown as { nuts?: Record<string, { supported?: boolean; disabled?: boolean }> };
-  if (!supports(info, 9) || !supports(info, 13)) return { keysetId, outcome: "not-tried", why: "This mint doesn't say it can restore what it signed.", cost: 0 };
+  // NUT-13 is the wallet's own way of making secrets, not something a mint does: cdk doesn't list it (the testnut run,
+  // 2026-11-25). What the seed needs of a mint is restore (NUT-09) and proofs (NUT-12).
+  if (!supports(info, 9)) return { keysetId, outcome: "not-tried", why: "This mint doesn't say it can restore what it signed.", cost: 0 };
   // Restore unblinds only what a mint proves it signed (NUT-12): a mint that doesn't could never be restored from.
   if (!supports(info, 12)) return { keysetId, outcome: "not-tried", why: "This mint doesn't prove what it signs, so it can't be restored from.", cost: 0 };
   const keyset = wallet.keyChain.getKeyset(keysetId);

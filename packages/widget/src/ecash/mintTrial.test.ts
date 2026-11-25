@@ -61,6 +61,11 @@ describe("the trial of a mint, at a press", () => {
     expect((result as { why?: string }).why).toMatch(/didn't prove/u);
   });
 
+  it("is tried at a mint that lists NUT-09 and NUT-12 but not NUT-13, as cdk does: 13 is the wallet's own (testnut run, 2026-11-25)", async () => {
+    const { wallet, proofs } = await holding({ unlistedNut13: true });
+    expect(await trial(wallet, seed(), one(proofs))).toMatchObject({ outcome: "passed", cost: 0 });
+  });
+
   it("is failed by a mint that signs again, at the cost of exactly one sat", async () => {
     const { wallet, proofs } = await holding({ signsAgain: true });
     const result = await trial(wallet, seed(), one(proofs));

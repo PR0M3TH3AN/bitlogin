@@ -359,4 +359,15 @@ describe("the third review's findings, each failing before its mend", { timeout:
     await add(one.wallet, mint, 2);
     expect((await readLane(one.deps, w.keysetId))!.next).toBeGreaterThan(laneStart(drawn.lane));
   }, 60_000);
+
+  it("testnut run: a mint listing NUT-09 and NUT-12 but not NUT-13 can seed, is tried at a press, and passes", async () => {
+    const mint = await mintWith({ unlistedNut13: true });
+    const account = newAccount();
+    const one = device(account);
+    await one.wallet.open();
+    await one.wallet.addMint(mint.url);
+    expect(await one.wallet.mintCanSeed(mint.url)).toBe(true);
+    await add(one.wallet, mint, 1);
+    expect(await one.wallet.tryMint(mint.url)).toEqual({ outcome: "passed", cost: 0 });
+  }, 60_000);
 });
