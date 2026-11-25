@@ -22,6 +22,8 @@ import type { AppPermissions } from "./embedded/permissions.js";
 import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
 import type { RankedMint } from "./ecash/mints.js";
+import type { SeededOutput } from "./worker/ecashSeed.js";
+import type { LaneState } from "./ecash/seedLanes.js";
 import type { DriveSave, DriveState, RankedServer } from "./worker/driveStore.js";
 import type { KeptReceipt, ReceiptsState } from "./worker/receiptStore.js";
 import type { OpenOrder, PaySettings } from "./worker/paySettings.js";
@@ -166,6 +168,11 @@ export interface HeadlessSigner {
     recommended(): Promise<RankedMint[]>;
     /** The browser's own copy of the wallet, asking no relay: to show at once, marked as being checked. */
     peek(): Promise<EcashState>;
+    /** Outputs made from the seed for one operation, by the worker: never the seed (docs/ecash-seed-counter.md). */
+    outputs(keysetId: string, amounts: number[], from: number): Promise<{ outputs: SeededOutput[]; next: number }>;
+    /** This browser's lane for a keyset, and keeping it, only ever forward. */
+    lane(keysetId: string): Promise<LaneState | null>;
+    keepLane(keysetId: string, state: LaneState): Promise<LaneState | null>;
   };
   /**
    * In the embedded signer: ask the user's relays whether this site was
@@ -441,6 +448,18 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       async peek() {
         await requirePubkey();
         return client.ecashPeek();
+      },
+      async outputs(keysetId, amounts, from) {
+        await requirePubkey();
+        return client.ecashOutputs(keysetId, amounts, from);
+      },
+      async lane(keysetId) {
+        await requirePubkey();
+        return (await client.ecashLaneGet(keysetId)).state;
+      },
+      async keepLane(keysetId, state) {
+        await requirePubkey();
+        return (await client.ecashLaneSet(keysetId, state)).state;
       }
     },
     async takeBack(what) {

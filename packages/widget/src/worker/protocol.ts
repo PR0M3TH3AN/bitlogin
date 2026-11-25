@@ -531,6 +531,8 @@ export type WorkerNotification =
 // ---- An ecash wallet kept with the account (docs/ecash.md; worker/ecashStore.ts) ----
 export type { EcashState, EcashRoll } from "./ecashStore.js";
 import type { EcashState, EcashRoll } from "./ecashStore.js";
+import type { SeededOutput } from "./ecashSeed.js";
+import type { LaneState } from "../ecash/seedLanes.js";
 import type { RankedMint } from "../ecash/mints.js";
 export type { RankedMint };
 
@@ -633,6 +635,11 @@ export type WorkerActionMap = {
   drivePeek: [Record<string, never>, DriveState];
   receiptsPeek: [Record<string, never>, ReceiptsState];
   ecashSetMints: [{ mints: string[] }, EcashState];
+  /** Outputs made from the seed for one operation: never the seed (docs/ecash-seed-counter.md, rule 7). */
+  ecashOutputs: [{ keysetId: string; amounts: number[]; from: number }, { outputs: SeededOutput[]; next: number }];
+  /** This browser's lane for a keyset, and keeping it: only ever forward. */
+  ecashLaneGet: [{ keysetId: string }, { state: LaneState | null }];
+  ecashLaneSet: [{ keysetId: string; state: LaneState }, { state: LaneState | null }];
   ecashRoll: [EcashRoll, EcashState];
   /** The mints people recommend (NIP-87), the user's own follows first. */
   ecashMints: [Record<string, never>, { mints: RankedMint[] }];

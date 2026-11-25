@@ -73,6 +73,8 @@ import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
 import { blossomAuth, loadDrive, peekDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
+import { ecashSeed, seededOutputs } from "./ecashSeed.js";
+import { keepLane, readLane } from "./ecashLanes.js";
 import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
   checkDue,
@@ -241,6 +243,8 @@ const requestQueue = new LaneQueue();
  */
 const LANE: Record<string, string> = {
   ecashLoad: "ecash", ecashSetMints: "ecash", ecashRoll: "ecash",
+  // The seed's outputs and this browser's lanes (docs/ecash-seed-counter.md): no relay, no wait behind a wallet read.
+  ecashOutputs: "seed", ecashLaneGet: "seed", ecashLaneSet: "seed",
   // Asks relays which mints people recommend, and writes nothing: a line of its own, so it holds up no wallet work.
   ecashMints: "mints",
   driveLoad: "drive", driveSave: "drive", blossomServers: "drive", blossomSetServers: "drive", blossomAuth: "drive",
@@ -2130,6 +2134,30 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
 
     // The browser's own copies, asked of no relay and writing nothing: shown at once, marked as being checked, while
     // the careful read above runs behind them (docs/panel-speed-2026-11-23.md). A full session only, as the loads are.
+    // ---- The wallet's seed (docs/ecash-seed-counter.md). A full session only: none of these is on the list a
+    // handed-over session may ask, so no embedded signer, and so no site, can have an output made or a lane read.
+    // The seed is made here from the account's key and never leaves: the page is handed the outputs alone.
+    case "ecashOutputs": {
+      const { everydayPrivateKey } = requireUnlocked();
+      const p = payload as { keysetId?: unknown; amounts?: unknown; from?: unknown };
+      const seed = ecashSeed(everydayPrivateKey);
+      try {
+        return seededOutputs(seed, p.keysetId, p.amounts, p.from);
+      } finally {
+        seed.fill(0);
+      }
+    }
+    // This browser's lane for a keyset, sealed to the account's own key like the wallet's copy. Only ever forward:
+    // a lane once kept is not changed, and its counter is never set lower here, whatever the page asks.
+    case "ecashLaneGet":
+    case "ecashLaneSet": {
+      const { signer } = requireUnlocked();
+      const deps = { signer, store };
+      const keysetId = (payload as { keysetId?: unknown }).keysetId;
+      if (action === "ecashLaneGet") return { state: await readLane(deps, keysetId) };
+      return { state: await keepLane(deps, keysetId, (payload as { state?: unknown }).state) };
+    }
+
     case "ecashPeek":
     case "drivePeek":
     case "receiptsPeek": {
@@ -2344,7 +2372,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
-  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent",
+  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent", "ecashOutputs", "ecashLaneGet", "ecashLaneSet",
   "ecashPeek", "drivePeek", "receiptsPeek", "payProfile", "payListing", "unlockAuth", "guestListFind", "guestListSign", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
   "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",

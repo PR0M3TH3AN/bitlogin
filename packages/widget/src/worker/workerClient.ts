@@ -450,6 +450,15 @@ export class WorkerClient {
   ecashLoad() {
     return this.call("ecashLoad", {});
   }
+  ecashOutputs(keysetId: string, amounts: number[], from: number) {
+    return this.call("ecashOutputs", { keysetId, amounts, from });
+  }
+  ecashLaneGet(keysetId: string) {
+    return this.call("ecashLaneGet", { keysetId });
+  }
+  ecashLaneSet(keysetId: string, state: WorkerActionMap["ecashLaneSet"][0]["state"]) {
+    return this.call("ecashLaneSet", { keysetId, state });
+  }
   ecashSetMints(mints: string[]) {
     return this.call("ecashSetMints", { mints });
   }
