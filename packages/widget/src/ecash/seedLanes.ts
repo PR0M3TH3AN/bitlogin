@@ -11,8 +11,12 @@
 /** How many lanes there are, and how many counters each holds. 32 × 2²⁶ stays below 2³¹ (a hardened BIP32 index). */
 export const LANES = 32;
 export const LANE_SIZE = 2 ** 26;
-/** How many of a lane's first counters the mint is asked about before the lane is drawn (rule 3). */
-export const LANE_PROBE = 20;
+/**
+ * How many of a lane's first counters the mint is asked about before the lane is drawn (rule 3): as far as restore
+ * looks into a lane where nothing is found (2026-11-25, the review's finding 7: 20 let a lane whose first counters
+ * were burned look empty to another browser).
+ */
+export const LANE_PROBE = 100;
 
 /** The first counter of a lane. Lane 0 starts at 1: the library takes 0 to mean "choose for me". */
 export const laneStart = (lane: number): number => (lane === 0 ? 1 : lane * LANE_SIZE);
@@ -73,3 +77,10 @@ export const NO_SEED_HERE = "This browser can't keep two tabs from using the sam
 /** What the screen says beside restore (rule 3), plainly. */
 export const RESTORE_GAP =
   "If a crash left a long gap in a lane and BitLogin's record of the counter is gone from every relay too, restore can miss what came after the gap. Those sats are still at the mint, but this wallet can't find them.";
+
+/**
+ * Counters kept for trials (rule 4): the last 4096 below 2³¹, which a lane reaches only after some 67 million uses.
+ * The worker hands each one out once, in order, so restore can follow them as it follows a lane.
+ */
+export const TRIAL_FROM = 2 ** 31 - 1 - 4096;
+export const TRIAL_TO = 2 ** 31 - 2;

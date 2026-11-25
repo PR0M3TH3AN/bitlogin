@@ -4,23 +4,20 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { Wallet, type Proof } from "@cashu/cashu-ts";
+import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
+import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import { startMockMint, type MockMint } from "./mockMint.js";
-import { createSeededMint, type Lock } from "./seededMint.js";
-import { advance, laneStart, type LaneState } from "./seedLanes.js";
+import { createSeededMint } from "./seededMint.js";
+import { laneStart, type LaneState } from "./seedLanes.js";
 import { restoreFromMint } from "./seedRestore.js";
-import { ecashSeed, seededOutputs } from "../worker/ecashSeed.js";
+import { ecashSeed } from "../worker/ecashSeed.js";
+import { forwardLane, keepLane, readLane } from "../worker/ecashLanes.js";
+import { standInLock, standInSeedWorker } from "./seedWorkerStandIn.js";
 
-/**
- * A stand-in for the browser's navigator.locks, which Node hasn't: one lock per name, for the minters of this test.
- * It keeps minters in one process apart, as navigator.locks keeps tabs apart; it is a test's, never the wallet's.
- */
-const inPage = new Map<string, Promise<unknown>>();
-const standInLock: Lock = (name, fn) => {
-  const run = (inPage.get(name) ?? Promise.resolve()).then(fn, fn);
-  inPage.set(name, run.catch(() => {}));
-  return run;
-};
+const lock = standInLock();
+/** The worker's seed actions for a seed, with no lane of any browser: what restore uses. */
+const keyOnly = (seed: Uint8Array) => standInSeedWorker({ signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore(), seed, lock });
 const total = (proofs: readonly Proof[]) => proofs.reduce((n, p) => n + Number(p.amount), 0);
 
 let mints: MockMint[] = [];
@@ -37,12 +34,13 @@ async function pageWallet(mint: MockMint) {
 /** A browser in `lane`, adding sats from the seed. */
 async function browser(mint: MockMint, seed: Uint8Array, lane: number) {
   const wallet = await pageWallet(mint);
-  const kept = new Map<string, LaneState>([[wallet.keysetId, { lane, next: laneStart(lane) }]]);
-  const minter = createSeededMint({ wallet, outputs: async (id, amounts, from) => seededOutputs(seed, id, amounts, from), load: async (id) => kept.get(id) ?? null, save: async (id, s) => void kept.set(id, s), lock: standInLock });
+  const lanes = { signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore() };
+  await keepLane(lanes, wallet.keysetId, { lane, next: laneStart(lane) });
+  const minter = createSeededMint({ wallet, seed: standInSeedWorker({ ...lanes, seed, lock }) });
   const held: Proof[] = [];
   return {
     wallet,
-    kept,
+    lane: () => readLane(lanes, wallet.keysetId) as Promise<LaneState>,
     held,
     async add(sats: number) {
       const quote = await wallet.createMintQuoteBolt11(sats);
@@ -50,14 +48,14 @@ async function browser(mint: MockMint, seed: Uint8Array, lane: number) {
       held.push(...(await minter.add(sats, quote)));
     },
     /** A crash after counters were written down and before the mint was asked: they are burned. */
-    burn(n: number) {
-      const s = kept.get(wallet.keysetId)!;
-      kept.set(wallet.keysetId, advance(s, s.next + n));
+    async burn(n: number) {
+      const s = (await readLane(lanes, wallet.keysetId))!;
+      await forwardLane({ ...lanes, seed: () => seed.slice(), lock }, wallet.keysetId, s.next + n);
     }
   };
 }
 const restore = async (mint: MockMint, seed: Uint8Array, highest?: Partial<Record<number, number>>) =>
-  restoreFromMint({ wallet: await pageWallet(mint), outputs: async (id, amounts, from) => seededOutputs(seed, id, amounts, from), highest });
+  restoreFromMint({ wallet: await pageWallet(mint), seed: keyOnly(seed), ...(highest ? { highest: () => highest } : {}) });
 
 // A restore asks each mint about thousands of outputs, each made from the seed: seconds of work, more under load.
 const RESTORE_MS = 120_000;
@@ -75,9 +73,10 @@ describe("restore from the mints, from the key alone", () => {
     const back = await restore(mint, seed);
     expect(total(back.proofs)).toBe(26);
     expect(new Set(back.proofs.map((p) => p.secret))).toEqual(new Set([...a.held, ...b.held].map((p) => p.secret)));
-    expect(Object.keys(back.next).map(Number).sort((x, y) => x - y)).toEqual([3, 20]);
+    const id = a.wallet.keysetId;
+    expect(Object.keys(back.next[id]!).map(Number).sort((x, y) => x - y)).toEqual([3, 20]);
     // Where each lane goes on from: past everything it signed.
-    expect(back.next[3]).toBe(a.kept.get(a.wallet.keysetId)!.next);
+    expect(back.next[id]![3]).toBe((await a.lane()).next);
   }, RESTORE_MS);
 
   it("finds what lies beyond two crashes in a row", async () => {
@@ -86,8 +85,8 @@ describe("restore from the mints, from the key alone", () => {
     const seed = ecashSeed(generatePrivateKey());
     const a = await browser(mint, seed, 6);
     await a.add(5);
-    a.burn(40);
-    a.burn(40);
+    await a.burn(40);
+    await a.burn(40);
     await a.add(7);
     expect(total((await restore(mint, seed)).proofs)).toBe(12);
   }, RESTORE_MS);
@@ -98,12 +97,12 @@ describe("restore from the mints, from the key alone", () => {
     const seed = ecashSeed(generatePrivateKey());
     const a = await browser(mint, seed, 9);
     await a.add(5);
-    a.burn(500);
+    await a.burn(500);
     await a.add(7);
     // With no relay at all: the first 5 sats, and the rest beyond the gap missed.
     expect(total((await restore(mint, seed)).proofs)).toBe(5);
     // With the relay copy's highest counter for the lane: all of it.
-    expect(total((await restore(mint, seed, { 9: a.kept.get(a.wallet.keysetId)!.next })).proofs)).toBe(12);
+    expect(total((await restore(mint, seed, { 9: (await a.lane()).next })).proofs)).toBe(12);
   }, RESTORE_MS);
 
   it("keeps only what the mint says is unspent", async () => {

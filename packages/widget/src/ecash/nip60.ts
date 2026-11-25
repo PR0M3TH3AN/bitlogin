@@ -4,6 +4,7 @@
  * mint. Whoever can read a token can spend it, so every record is sealed to
  * the account's own key by the worker before it leaves it.
  */
+import { laneEnd, laneStart, validLane } from "./seedLanes.js";
 
 export const WALLET_KIND = 17375;
 export const TOKEN_KIND = 7375;
@@ -102,6 +103,37 @@ export interface EcashTrial {
   at: number;
 }
 const TRIAL_ROW = "bitlogin-trial";
+
+/**
+ * How far this account has gone in one lane of a mint keyset (docs/ecash-seed-counter.md, rule 3): one past the
+ * highest counter used. Kept in the wallet record so restore on another device follows a lane at least that far, gaps
+ * and all. Only ever up: two records are joined by taking the higher.
+ */
+export interface EcashCounter {
+  keysetId: string;
+  lane: number;
+  next: number;
+}
+const COUNTER_ROW = "bitlogin-counter";
+const COUNTERS_KEPT = 200;
+/** Two lists of counters as one: the higher for each keyset and lane. */
+export function withCounters(...lists: (readonly EcashCounter[] | undefined)[]): EcashCounter[] {
+  const by = new Map<string, EcashCounter>();
+  for (const c of lists.flatMap((l) => l ?? [])) {
+    const key = `${c.keysetId}:${c.lane}`;
+    if ((by.get(key)?.next ?? 0) < c.next) by.set(key, { keysetId: c.keysetId, lane: c.lane, next: c.next });
+  }
+  return [...by.values()].slice(-COUNTERS_KEPT);
+}
+/** Two lists of trials as one: the newer for each mint and keyset. */
+export function withTrials(...lists: (readonly EcashTrial[] | undefined)[]): EcashTrial[] {
+  let out: EcashTrial[] = [];
+  for (const t of lists.flatMap((l) => l ?? [])) {
+    const older = out.find((o) => o.mint === t.mint && o.keysetId === t.keysetId);
+    if (!older || older.at < t.at) out = withTrial(out, t);
+  }
+  return out;
+}
 const KEYSET = /^[0-9a-f]{16}$|^[0-9a-f]{66}$/u;
 
 export interface EcashWallet {
@@ -110,13 +142,16 @@ export interface EcashWallet {
   mints: string[];
   /** Trials of mints' keysets, newest kept for each. Absent where none was made. */
   trials?: EcashTrial[];
+  /** How far each lane of each keyset has gone. Absent where nothing was added by the seed. */
+  counters?: EcashCounter[];
 }
 
 export function writeWallet(wallet: EcashWallet): string {
   return JSON.stringify([
     ["privkey", wallet.privkey],
     ...wallet.mints.map((mint) => ["mint", mint]),
-    ...(wallet.trials ?? []).map((t) => [TRIAL_ROW, t.mint, t.keysetId, t.outcome, String(t.at)])
+    ...(wallet.trials ?? []).map((t) => [TRIAL_ROW, t.mint, t.keysetId, t.outcome, String(t.at)]),
+    ...(wallet.counters ?? []).map((c) => [COUNTER_ROW, c.keysetId, String(c.lane), String(c.next)])
   ]);
 }
 
@@ -146,10 +181,16 @@ export function readWallet(text: string): EcashWallet | null {
   let privkey = "";
   const mints: string[] = [];
   let trials: EcashTrial[] = [];
+  let counters: EcashCounter[] = [];
   for (const row of rows) {
     if (!Array.isArray(row) || typeof row[0] !== "string") continue;
     if (row[0] === "privkey" && typeof row[1] === "string" && HEX64.test(row[1])) privkey ||= row[1];
     if (row[0] === "mint" && cleanMint(row[1]) && !mints.includes(cleanMint(row[1])) && mints.length < ECASH_LIMITS.mints) mints.push(cleanMint(row[1]));
+    if (row[0] === COUNTER_ROW) {
+      const [, keysetId, lane, next] = row;
+      const c = { keysetId, lane: Number(lane), next: Number(next) };
+      if (typeof keysetId === "string" && KEYSET.test(keysetId) && validLane(c.lane) && Number.isSafeInteger(c.next) && c.next >= laneStart(c.lane) && c.next <= laneEnd(c.lane) + 1) counters = withCounters(counters, [c as EcashCounter]);
+    }
     if (row[0] === TRIAL_ROW) {
       const trial = readTrial(row);
       if (trial) {
@@ -158,7 +199,7 @@ export function readWallet(text: string): EcashWallet | null {
       }
     }
   }
-  return privkey ? { privkey, mints, ...(trials.length ? { trials } : {}) } : null;
+  return privkey ? { privkey, mints, ...(trials.length ? { trials } : {}), ...(counters.length ? { counters } : {}) } : null;
 }
 
 // ---- A token record (kind 7375): proofs at one mint, and the records it replaced.

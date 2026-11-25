@@ -132,19 +132,38 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
           const log: string[] = [];
           (window as any).workerLog = log;
           (window as any).seedOutputs = [];
+          /**
+           * On the test's word (`holdReserves`), a tab's first reserve is held until the other tab has one waiting too,
+           * and then both are sent in the same moment: two workers reserving at once from the one lane, as two tabs
+           * adding together would. Only the lock in the workers keeps them apart then.
+           */
+          const channel = new BroadcastChannel("bitlogin-seed-test");
+          let otherWaiting = false;
+          let waiting: (() => void) | null = null;
+          channel.onmessage = (e) => {
+            if (e.data !== "waiting") return;
+            otherWaiting = true;
+            if (waiting) (waiting(), (waiting = null));
+          };
           const Real = window.Worker;
           (window as any).Worker = class extends Real {
             constructor(url: string | URL, options?: WorkerOptions) {
               super(url, options);
               const send = this.postMessage.bind(this);
+              const reserves = new Set<string>();
+              // The counters each reserve was handed, from the worker's answer: two tabs must never get the same ones.
+              this.addEventListener("message", (e: MessageEvent) => {
+                if (e.data?.ok && reserves.has(e.data.id)) (window as any).seedOutputs.push({ from: e.data.result.from, n: e.data.result.next - e.data.result.from });
+              });
               this.postMessage = (message: any, ...rest: any[]) => {
                 if (message && typeof message.action === "string") log.push(message.action);
-                // The counters each operation was handed, to show two tabs were never handed the same ones.
-                if (message?.action === "ecashOutputs") (window as any).seedOutputs.push({ from: message.payload.from, n: message.payload.amounts.length });
-                // On the test's word, a lane's state is written a moment late, so two tabs taking counters at once
-                // overlap: only the lock keeps the second from reading what the first has not yet written.
-                if (message?.action === "ecashLaneSet" && (window as any).slowLaneWrites) return void setTimeout(() => (send as any)(message, ...rest), 1500);
-                return (send as any)(message, ...rest);
+                if (message?.action !== "ecashReserve") return (send as any)(message, ...rest);
+                reserves.add(message.id);
+                if (!(window as any).holdReserves) return (send as any)(message, ...rest);
+                (window as any).holdReserves = false;
+                channel.postMessage("waiting");
+                if (otherWaiting) return (send as any)(message, ...rest);
+                waiting = () => (send as any)(message, ...rest);
               };
             }
           };
@@ -299,7 +318,7 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
           await tab.frame().locator("#ecash-qr svg").waitFor({ timeout: 30_000 });
         }
         const callsBefore = await Promise.all(tabs.map(async (t) => ((await t.panel().evaluate(() => (window as any).workerLog.length)) as number)));
-        const outputsBefore = await Promise.all(tabs.map(async (t) => ((await t.panel().evaluate(() => ((window as any).slowLaneWrites = true, (window as any).seedOutputs.length))) as number)));
+        const outputsBefore = await Promise.all(tabs.map(async (t) => ((await t.panel().evaluate(() => ((window as any).holdReserves = true, (window as any).seedOutputs.length))) as number)));
         const refusedBefore = refusing.refusedCount();
         // Both invoices paid at once: each tab claims its sats on its next look, within the same second.
         refusing.payAllFunding();
@@ -307,9 +326,9 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         // Each tab added by the seed: its worker made the outputs.
         for (const [i, t] of tabs.entries()) {
           const made = ((await t.panel().evaluate(() => (window as any).workerLog)) as string[]).slice(callsBefore[i]);
-          expect(made, `tab ${i + 1}`).toContain("ecashOutputs");
+          expect(made, `tab ${i + 1}`).toContain("ecashReserve");
         }
-        // Never the same counters in both tabs, though each took them in the same moment.
+        // Never the same counters in both tabs, though both workers reserved in the same moment.
         const handed = await Promise.all(tabs.map(async (t, i) => ((await t.panel().evaluate(() => (window as any).seedOutputs)) as { from: number; n: number }[]).slice(outputsBefore[i])));
         expect(handed[0]!.length && handed[1]!.length).toBeGreaterThan(0);
         const overlaps = handed[0]!.filter((a) => handed[1]!.some((b) => a.from < b.from + b.n && b.from < a.from + a.n));

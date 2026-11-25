@@ -450,17 +450,29 @@ export class WorkerClient {
   ecashLoad() {
     return this.call("ecashLoad", {});
   }
-  ecashOutputs(keysetId: string, amounts: number[], from: number) {
-    return this.call("ecashOutputs", { keysetId, amounts, from });
-  }
   ecashKeepTrial(trial: WorkerActionMap["ecashKeepTrial"][0]["trial"]) {
     return this.call("ecashKeepTrial", { trial });
   }
   ecashLaneGet(keysetId: string) {
     return this.call("ecashLaneGet", { keysetId });
   }
-  ecashLaneSet(keysetId: string, state: WorkerActionMap["ecashLaneSet"][0]["state"]) {
-    return this.call("ecashLaneSet", { keysetId, state });
+  ecashDraw(keysetId: string, lane: number) {
+    return this.call("ecashDraw", { keysetId, lane });
+  }
+  ecashReserve(keysetId: string, amounts: number[]) {
+    return this.call("ecashReserve", { keysetId, amounts });
+  }
+  ecashForward(keysetId: string, next: number) {
+    return this.call("ecashForward", { keysetId, next });
+  }
+  ecashBlinded(keysetId: string, from: number, count: number) {
+    return this.call("ecashBlinded", { keysetId, from, count });
+  }
+  ecashUnblind(keysetId: string, keys: Record<string, string>, found: WorkerActionMap["ecashUnblind"][0]["found"]) {
+    return this.call("ecashUnblind", { keysetId, keys, found });
+  }
+  ecashTrialOutput(keysetId: string) {
+    return this.call("ecashTrialOutput", { keysetId });
   }
   ecashSetMints(mints: string[]) {
     return this.call("ecashSetMints", { mints });

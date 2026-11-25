@@ -34,6 +34,6 @@ describe("the worker's lanes", () => {
   });
 
   it("and the seed's outputs, can't be asked by a handed-over session, and so by no site", () => {
-    for (const action of ["ecashOutputs", "ecashLaneGet", "ecashLaneSet"]) expect(SIGNER_ONLY_ACTIONS.has(action as never), action).toBe(false);
+    for (const action of ["ecashLaneGet", "ecashDraw", "ecashReserve", "ecashForward", "ecashBlinded", "ecashUnblind", "ecashTrialOutput"]) expect(SIGNER_ONLY_ACTIONS.has(action as never), action).toBe(false);
   });
 });

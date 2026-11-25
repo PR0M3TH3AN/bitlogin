@@ -27,12 +27,16 @@ import {
   writeHistory,
   writeToken,
   writeWallet,
+  withCounters,
   withTrial,
+  withTrials,
+  type EcashCounter,
   type EcashProof,
   type EcashTrial,
   type EcashToken,
   type EcashWallet
 } from "../ecash/nip60.js";
+import { readCounters } from "./ecashLanes.js";
 
 /** The relays, as this needs them: ask all, publish to all. `RelayPool` is one. */
 export interface EcashRelays {
@@ -52,6 +56,8 @@ export interface EcashState {
   unsaved: boolean;
   /** Mints' keysets tried for the seed (docs/ecash-seed-counter.md, rule 4). Only one that "passed" is seeded. */
   trials?: EcashTrial[];
+  /** How far each lane of each keyset has gone, as the wallet record says: what restore follows (rule 3). */
+  counters?: EcashCounter[];
 }
 
 const LOCAL_KEY = "bitlogin:ecash:v1:";
@@ -63,6 +69,8 @@ interface LocalCopy {
   tokens: EcashToken[];
   /** When the newest wallet record seen or written was dated: a record that replaces it is dated after (2026-11-24). */
   walletAt?: number;
+  /** The wallet record here is newer than any relay took: it is sent again at the next opening (finding 9). */
+  walletUnsent?: boolean;
 }
 
 async function readLocal(store: KeyValueStore, signer: NostrSigner): Promise<LocalCopy> {
@@ -70,7 +78,7 @@ async function readLocal(store: KeyValueStore, signer: NostrSigner): Promise<Loc
   try {
     const sealed = await store.get(LOCAL_KEY + me);
     if (!sealed) return { wallet: null, tokens: [] };
-    const parsed = JSON.parse(signer.nip44Decrypt(me, sealed)) as { wallet?: unknown; tokens?: unknown; walletAt?: unknown };
+    const parsed = JSON.parse(signer.nip44Decrypt(me, sealed)) as { wallet?: unknown; tokens?: unknown; walletAt?: unknown; walletUnsent?: unknown };
     const wallet = typeof parsed.wallet === "string" ? readWallet(parsed.wallet) : null;
     const tokens: EcashToken[] = [];
     for (const item of Array.isArray(parsed.tokens) ? parsed.tokens : []) {
@@ -78,7 +86,7 @@ async function readLocal(store: KeyValueStore, signer: NostrSigner): Promise<Loc
       const proofs = cleanProofs(t.proofs);
       if (typeof t.event === "string" && t.event.length <= 80 && cleanMint(t.mint) && proofs?.length) tokens.push({ event: t.event, mint: cleanMint(t.mint), proofs });
     }
-    return { wallet, tokens, ...(Number.isSafeInteger(parsed.walletAt) ? { walletAt: parsed.walletAt as number } : {}) };
+    return { wallet, tokens, ...(Number.isSafeInteger(parsed.walletAt) ? { walletAt: parsed.walletAt as number } : {}), ...(parsed.walletUnsent === true ? { walletUnsent: true } : {}) };
   } catch {
     // A copy that can't be read is not a reason to lose what relays hold. It is left in place, untouched.
     return { wallet: null, tokens: [] };
@@ -87,7 +95,7 @@ async function readLocal(store: KeyValueStore, signer: NostrSigner): Promise<Loc
 
 async function writeLocal(store: KeyValueStore, signer: NostrSigner, copy: LocalCopy): Promise<void> {
   const me = signer.getPublicKey();
-  await store.set(LOCAL_KEY + me, signer.nip44Encrypt(me, JSON.stringify({ wallet: copy.wallet ? writeWallet(copy.wallet) : null, tokens: copy.tokens, ...(copy.walletAt ? { walletAt: copy.walletAt } : {}) })));
+  await store.set(LOCAL_KEY + me, signer.nip44Encrypt(me, JSON.stringify({ wallet: copy.wallet ? writeWallet(copy.wallet) : null, tokens: copy.tokens, ...(copy.walletAt ? { walletAt: copy.walletAt } : {}), ...(copy.walletUnsent ? { walletUnsent: true } : {}) })));
 }
 
 const accepted = (outcomes: RelayPublishOutcome[], of: number): boolean => countAcknowledgements(outcomes) >= Math.min(2, of);
@@ -97,13 +105,57 @@ function signToken(signer: NostrSigner, token: { mint: string; proofs: readonly 
   return signer.signEvent({ kind: TOKEN_KIND, created_at: Math.floor(now), tags: [], content: signer.nip44Encrypt(me, writeToken(token)) });
 }
 
+/**
+ * Each proof once (2026-11-25, the review's finding 6): where two records hold the same proof (a restore in one tab of
+ * what another tab added and hasn't sent yet), it is counted in the first only. A record left with nothing is dropped
+ * from what is shown; it is still destroyed with the rest when the wallet next rolls over at that mint.
+ */
+function once(tokens: readonly EcashToken[]): EcashToken[] {
+  const seen = new Set<string>();
+  const out: EcashToken[] = [];
+  for (const token of tokens) {
+    const proofs = token.proofs.filter((proof) => !seen.has(proof.secret));
+    for (const proof of proofs) seen.add(proof.secret);
+    if (proofs.length) out.push(proofs.length === token.proofs.length ? token : { ...token, proofs });
+  }
+  return out;
+}
+
 const state = (copy: LocalCopy, offline: boolean): EcashState => ({
   mints: copy.wallet?.mints ?? [],
-  tokens: copy.tokens,
+  tokens: once(copy.tokens),
   offline,
-  unsaved: copy.tokens.some((token) => isLocal(token.event)),
-  ...(copy.wallet?.trials?.length ? { trials: copy.wallet.trials } : {})
+  unsaved: copy.tokens.some((token) => isLocal(token.event)) || !!copy.walletUnsent,
+  ...(copy.wallet?.trials?.length ? { trials: copy.wallet.trials } : {}),
+  ...(copy.wallet?.counters?.length ? { counters: copy.wallet.counters } : {})
 });
+
+/** This browser's counters, from the worker's lanes (ecashLanes.ts), as wallet-record rows. */
+async function laneCounters(deps: { signer: NostrSigner; store: KeyValueStore }): Promise<EcashCounter[]> {
+  const kept = await readCounters(deps).catch(() => ({}) as Record<string, Record<string, number>>);
+  return Object.entries(kept).flatMap(([keysetId, lanes]) => Object.entries(lanes).map(([lane, next]) => ({ keysetId, lane: Number(lane), next })));
+}
+/** Whether `a` already says everything `b` does: the same mints, every trial and counter at least as new. */
+function covers(a: EcashWallet | null, b: EcashWallet | null): boolean {
+  if (!b) return true;
+  if (!a) return false;
+  if (a.mints.join("\n") !== b.mints.join("\n")) return false;
+  if (!(b.trials ?? []).every((t) => (a.trials ?? []).some((u) => u.mint === t.mint && u.keysetId === t.keysetId && u.at >= t.at))) return false;
+  return (b.counters ?? []).every((c) => (a.counters ?? []).some((d) => d.keysetId === c.keysetId && d.lane === c.lane && d.next >= c.next));
+}
+/** A wallet record with the trials and counters of others joined in: the newer trial, the higher counter. */
+function joined(base: EcashWallet, others: (EcashWallet | null | undefined)[], lanes: readonly EcashCounter[] = []): EcashWallet {
+  const trials = withTrials(base.trials, ...others.map((o) => o?.trials));
+  const counters = withCounters(base.counters, ...others.map((o) => o?.counters), lanes);
+  const { trials: _t, counters: _c, ...rest } = base;
+  return { ...rest, ...(trials.length ? { trials } : {}), ...(counters.length ? { counters } : {}) };
+}
+/** Send the wallet record. True where relays took it. */
+async function publishWallet(deps: { signer: NostrSigner; relays: EcashRelays }, wallet: EcashWallet, at: number): Promise<boolean> {
+  const me = deps.signer.getPublicKey();
+  const event = deps.signer.signEvent({ kind: WALLET_KIND, created_at: at, tags: [], content: deps.signer.nip44Encrypt(me, writeWallet(wallet)) });
+  return accepted(await deps.relays.publishAll(event, 6000).catch(() => []), deps.relays.relayUrls.length);
+}
 
 /**
  * Open the wallet: what relays hold, joined with what this browser holds that
@@ -136,7 +188,12 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
   };
   // Newest first; two of the same second, the lower id, as NIP-01 says for replaceable events: every device agrees.
   const newestWallet = mine(wallets.outcomes.flatMap((o) => o.events), WALLET_KIND).sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
-  const wallet = (newestWallet && readWallet(open(newestWallet) ?? "")) || local.wallet;
+  const onRelay = (newestWallet && readWallet(open(newestWallet) ?? "")) || null;
+  // The record here wins where it is newer than any relay holds (a write no relay took: finding 9); otherwise the
+  // relays'. Trials and counters are joined from both, and from this browser's lanes: none is lost to an older record.
+  const localNewer = !!local.wallet && (!newestWallet || (local.walletAt ?? 0) > newestWallet.created_at);
+  const base = localNewer ? local.wallet : (onRelay ?? local.wallet);
+  const wallet = base ? joined(base, [onRelay, local.wallet], await laneCounters(deps)) : null;
   const deleted = new Set(mine(deletions.outcomes.flatMap((o) => o.events), 5).flatMap((event) => event.tags.filter((tag) => tag[0] === "e" && typeof tag[1] === "string").map((tag) => tag[1]!)));
   const byId = new Map<string, NostrEvent>();
   for (const event of mine(tokens.outcomes.flatMap((o) => o.events), TOKEN_KIND)) byId.set(event.id, event);
@@ -149,8 +206,15 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
   // What this browser holds that no relay does: proofs written here and not yet taken by one. They are kept, and
   // sent again now. A proof a relay already has is the relay's: the local copy of it is dropped.
   const known = new Set(onRelays.flatMap((token) => token.proofs.map((proof) => proof.secret)));
-  const walletAt = Math.max(newestWallet?.created_at ?? 0, local.walletAt ?? 0) || undefined;
-  const next: LocalCopy = { wallet, tokens: [...onRelays], ...(walletAt ? { walletAt } : {}) };
+  let walletAt = Math.max(newestWallet?.created_at ?? 0, local.walletAt ?? 0) || undefined;
+  let walletUnsent = false;
+  // What the relays hold says less than this browser knows: sent again, dated after both.
+  if (wallet && !covers(onRelay, wallet)) {
+    const at = datedAfter(deps.now ?? Date.now() / 1000, walletAt);
+    if (await publishWallet(deps, wallet, at)) walletAt = at;
+    else walletUnsent = true;
+  }
+  const next: LocalCopy = { wallet, tokens: [...onRelays], ...(walletAt ? { walletAt } : {}), ...(walletUnsent ? { walletUnsent } : {}) };
   // A saved record the relays that answered didn't return, and didn't delete or replace, is kept here as it was
   // (2026-11-24): the relays holding it may have been slow, or gone. Dropped, its sats would then be on nothing but
   // those relays. Whether they are spent is the mint's to say: the wallet's check asks it, and only then are they
@@ -194,13 +258,14 @@ export async function setEcashMints(deps: { signer: NostrSigner; store: KeyValue
   const local = await readLocal(store, signer);
   // The mints change; the trials made of them stay, for whichever of them are still named.
   const trials = (local.wallet?.trials ?? []).filter((t) => clean.includes(t.mint));
-  const wallet: EcashWallet = { privkey: local.wallet?.privkey ?? deps.newKey(), mints: clean, ...(trials.length ? { trials } : {}) };
+  const wallet = joined({ privkey: local.wallet?.privkey ?? deps.newKey(), mints: clean, ...(trials.length ? { trials } : {}) }, [{ privkey: "", mints: [], ...(local.wallet?.counters ? { counters: local.wallet.counters } : {}) }], await laneCounters(deps));
   const at = datedAfter(deps.now ?? Date.now() / 1000, local.walletAt);
-  const next: LocalCopy = { wallet, tokens: local.tokens, walletAt: at };
+  const next: LocalCopy = { wallet, tokens: local.tokens, walletAt: at, walletUnsent: true };
   await writeLocal(store, signer, next);
-  const event = signer.signEvent({ kind: WALLET_KIND, created_at: at, tags: [], content: signer.nip44Encrypt(me, writeWallet(wallet)) });
-  const took = accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length);
+  const took = await publishWallet(deps, wallet, at);
   if (!took) throw new Error("The wallet was saved in this browser, but no relay took it. Try again when you are online.");
+  delete next.walletUnsent;
+  await writeLocal(store, signer, next);
   return state(next, false);
 }
 
@@ -233,12 +298,16 @@ export async function rollEcash(
   if (keep.some((token) => !token.mint || !token.proofs)) throw new Error("That is not ecash this wallet can keep.");
   const local = await readLocal(store, signer);
   // Many proofs are written as several records, each small enough for any NIP-60 wallet, and any relay, to take.
+  // A proof this browser already holds in a record that stays is not written again (finding 6): a restore in one tab
+  // of what another tab added and hasn't sent yet would otherwise hold it twice.
+  const staying = new Set(local.tokens.filter((token) => !destroy.has(token.event)).flatMap((token) => token.proofs.map((proof) => proof.secret)));
   const added: EcashToken[] = keep.flatMap((token) => {
     const records: EcashToken[] = [];
-    for (let i = 0; i < token.proofs!.length; i += ECASH_LIMITS.proofsWritten) records.push({ event: localId(), mint: token.mint, proofs: token.proofs!.slice(i, i + ECASH_LIMITS.proofsWritten) });
+    const proofs = token.proofs!.filter((proof) => !staying.has(proof.secret));
+    for (let i = 0; i < proofs.length; i += ECASH_LIMITS.proofsWritten) records.push({ event: localId(), mint: token.mint, proofs: proofs.slice(i, i + ECASH_LIMITS.proofsWritten) });
     return records;
   });
-  const next: LocalCopy = { wallet: local.wallet, tokens: [...local.tokens.filter((token) => !destroy.has(token.event)), ...added], ...(local.walletAt ? { walletAt: local.walletAt } : {}) };
+  const next: LocalCopy = { wallet: local.wallet, tokens: [...local.tokens.filter((token) => !destroy.has(token.event)), ...added], ...(local.walletAt ? { walletAt: local.walletAt } : {}), ...(local.walletUnsent ? { walletUnsent: true } : {}) };
   // First, here. From this line on, a crash or a dead relay loses nothing.
   await writeLocal(store, signer, next);
   sealed?.(state(next, false));
@@ -269,6 +338,23 @@ export async function rollEcash(
     const deletion = signer.signEvent({ kind: 5, created_at: Math.floor(now), tags: [...gone.map((id) => ["e", id]), ["k", String(TOKEN_KIND)]], content: "" });
     await relays.publishAll(deletion, 6000).catch(() => []);
   }
+  // Where this browser's lanes have gone further than the wallet record says (sats just added by the seed), the record
+  // is sent again with the counters, so restore elsewhere follows each lane that far (finding 2).
+  if (next.wallet) {
+    const withLanes = joined(next.wallet, [], await laneCounters(deps));
+    if (!covers(next.wallet, withLanes)) {
+      const at = datedAfter(now, next.walletAt);
+      next.wallet = withLanes;
+      if (await publishWallet(deps, withLanes, at)) {
+        next.walletAt = at;
+        delete next.walletUnsent;
+      } else {
+        next.walletAt = at;
+        next.walletUnsent = true;
+      }
+      await writeLocal(store, signer, next);
+    }
+  }
   return state(next, false);
 }
 
@@ -285,10 +371,13 @@ export async function keepEcashTrial(deps: { signer: NostrSigner; store: KeyValu
   const local = await readLocal(store, signer);
   if (!local.wallet || !local.wallet.mints.includes(mint)) throw new Error("That mint is not in this wallet.");
   const now = datedAfter(deps.now ?? Date.now() / 1000, local.walletAt);
-  const wallet: EcashWallet = { ...local.wallet, trials: withTrial(local.wallet.trials, { mint, keysetId: t.keysetId, outcome: t.outcome, at: now }) };
-  const next: LocalCopy = { wallet, tokens: local.tokens, walletAt: now };
+  const wallet = joined({ ...local.wallet, trials: withTrial(local.wallet.trials, { mint, keysetId: t.keysetId, outcome: t.outcome, at: now }) }, [], await laneCounters(deps));
+  // Kept here first, marked as not yet on a relay: where no relay takes it, it is sent again at the next opening.
+  const next: LocalCopy = { wallet, tokens: local.tokens, walletAt: now, walletUnsent: true };
   await writeLocal(store, signer, next);
-  const event = signer.signEvent({ kind: WALLET_KIND, created_at: now, tags: [], content: signer.nip44Encrypt(me, writeWallet(wallet)) });
-  const took = accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length);
-  return { ...state(next, false), unsaved: state(next, false).unsaved || !took };
+  if (await publishWallet(deps, wallet, now)) {
+    delete next.walletUnsent;
+    await writeLocal(store, signer, next);
+  }
+  return state(next, false);
 }

@@ -4,11 +4,14 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Amount, CheckStateEnum, Wallet, type Proof } from "@cashu/cashu-ts";
+import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
+import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
+import { standInLock, standInSeedWorker } from "./seedWorkerStandIn.js";
 import { startMockMint, type MockMint, type MockMintOptions } from "./mockMint.js";
 import { tryMint, TRIAL_FROM } from "./mintTrial.js";
 import { LANES, laneEnd } from "./seedLanes.js";
-import { ecashSeed, seededOutputs } from "../worker/ecashSeed.js";
+import { ecashSeed } from "../worker/ecashSeed.js";
 
 let mints: MockMint[] = [];
 afterEach(async () => {
@@ -28,7 +31,8 @@ async function holding(options: MockMintOptions = {}) {
   return { mint, wallet, proofs };
 }
 const seed = () => ecashSeed(generatePrivateKey());
-const trial = (wallet: Wallet, s: Uint8Array, proof: Proof) => tryMint({ wallet, outputs: async (id, amounts, from) => seededOutputs(s, id, amounts, from), proof });
+const trial = (wallet: Wallet, s: Uint8Array, proof: Proof) =>
+  tryMint({ wallet, seed: standInSeedWorker({ signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore(), seed: s, lock: standInLock() }), proof, keep: async () => {} });
 const one = (proofs: Proof[]) => proofs.find((p) => Number(p.amount) === 1)!;
 
 describe("the trial of a mint, at a press", () => {

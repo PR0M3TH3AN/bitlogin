@@ -3,10 +3,10 @@
  * mint. Pretend sats, on this machine only.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { Amount, OutputData, Wallet } from "@cashu/cashu-ts";
+import { Amount, createBlindSignature, createNewMintKeys, OutputData, pointFromHex, Wallet } from "@cashu/cashu-ts";
 import { generatePrivateKey, hkdfExpand, hkdfExtract, labelSalt } from "@bitlogin/core/crypto";
 import { startMockMint, type MockMint } from "../ecash/mockMint.js";
-import { ecashSeed, seededOutputs, type SeededOutput } from "./ecashSeed.js";
+import { ecashSeed, seededBlinded, seededOutputs, seededUnblind, type SeededOutput } from "./ecashSeed.js";
 
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 const bytes = (h: string) => new Uint8Array(h.match(/../gu)!.map((x) => parseInt(x, 16)));
@@ -46,6 +46,44 @@ describe("the wallet's seed, made in the worker", () => {
     expect(() => seededOutputs(seed, "not a keyset", [1], 1)).toThrow();
     expect(() => seededOutputs(seed, keysetId, [1], 0)).toThrow();
     expect(() => seededOutputs(seed, keysetId, [1], 2 ** 31)).toThrow();
+  });
+
+  it("makes the library's own secret and blinding factor, for older and newer keyset ids", () => {
+    const seed = ecashSeed(generatePrivateKey());
+    for (const keysetId of ["00ad268c4d1f5826", `01${"ab".repeat(32)}`]) {
+      const { outputs } = seededOutputs(seed, keysetId, [1, 8], 40);
+      outputs.forEach((o, i) => {
+        const lib = OutputData.createSingleDeterministicData(o.amount, seed, 40 + i, keysetId);
+        expect([o.B_, o.secret, BigInt(`0x${o.blindingFactor}`)]).toEqual([lib.blindedMessage.B_, hex(lib.secret), lib.blindingFactor]);
+      });
+    }
+  });
+
+  it("hands out blinded messages at any counter, and nothing that unblinds them", () => {
+    const seed = ecashSeed(generatePrivateKey());
+    const keysetId = "00ad268c4d1f5826";
+    const blinded = seededBlinded(seed, keysetId, 100, 5);
+    expect(blinded.map((b) => b.counter)).toEqual([100, 101, 102, 103, 104]);
+    blinded.forEach((b) => expect(b.B_).toBe(OutputData.createSingleDeterministicData(1, seed, b.counter, keysetId).blindedMessage.B_));
+    expect(Object.keys(blinded[0]!).sort()).toEqual(["B_", "counter", "id"]);
+    for (const [from, count] of [[0, 1], [1, 0], [1, 201], [2 ** 31 - 2, 5]]) expect(() => seededBlinded(seed, keysetId, from, count)).toThrow();
+  });
+
+  it("unblinds a mint's signatures into the library's own proofs, in the worker", () => {
+    const seed = ecashSeed(generatePrivateKey());
+    const keys = createNewMintKeys(4);
+    const keysetId = keys.keysetId;
+    const pub = Object.fromEntries(Object.entries(keys.pubKeys).map(([a, k]) => [a, hex(k as Uint8Array)]));
+    const found = seededBlinded(seed, keysetId, 9, 2).map((b, i) => {
+      const amount = [2, 4][i]!;
+      const sig = createBlindSignature(pointFromHex(b.B_), (keys.privKeys as Record<string, Uint8Array>)[String(amount)]!, keysetId);
+      return { counter: b.counter, amount, C_: sig.C_.toHex(true) };
+    });
+    const proofs = seededUnblind(seed, keysetId, pub, found);
+    proofs.forEach((p, i) => {
+      const lib = OutputData.createSingleDeterministicData(found[i]!.amount, seed, found[i]!.counter, keysetId).toProof({ id: keysetId, amount: Amount.from(found[i]!.amount), C_: found[i]!.C_ }, { id: keysetId, keys: pub } as never);
+      expect([p.secret, p.C, Number(p.amount)]).toEqual([lib.secret, lib.C, found[i]!.amount]);
+    });
   });
 
   it("outputs made by the worker and signed by a mint come back from the seed alone", async () => {

@@ -16,9 +16,7 @@
  */
 import { cleanInvoice, cleanMint, sumProofs, type EcashProof, type EcashToken } from "./nip60.js";
 import type { EcashRoll, EcashState } from "../worker/ecashStore.js";
-import type { SeededOutput } from "../worker/ecashSeed.js";
-import type { LaneState } from "./seedLanes.js";
-import type { Lock } from "./seededMint.js";
+import type { SeedWorker } from "./seededMint.js";
 
 export interface EcashStore {
   load(): Promise<EcashState>;
@@ -31,9 +29,7 @@ export interface EcashStore {
    * The seed's half in the worker (docs/ecash-seed-counter.md). Where a store has none of these, nothing is ever
    * added by the seed, and every mint stays relay-kept, as before.
    */
-  outputs?(keysetId: string, amounts: number[], from: number): Promise<{ outputs: SeededOutput[]; next: number }>;
-  lane?(keysetId: string): Promise<LaneState | null>;
-  keepLane?(keysetId: string, state: LaneState): Promise<LaneState | null>;
+  seed?: SeedWorker;
   keepTrial?(trial: { mint: string; keysetId: string; outcome: "passed" | "failed" }): Promise<EcashState>;
 }
 
@@ -81,7 +77,7 @@ export class EcashError extends Error {
 const plain = (proofs: readonly { id: string; amount: { toNumber(): number } | number; secret: string; C: string }[]): EcashProof[] =>
   proofs.map((p) => ({ id: p.id, amount: typeof p.amount === "number" ? p.amount : p.amount.toNumber(), secret: p.secret, C: p.C }));
 
-export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = {}) {
+export function createEcashWallet(store: EcashStore, options: { locks?: boolean } = {}) {
   let state: EcashState = { mints: [], tokens: [], offline: false, unsaved: false };
   const wallets = new Map<string, Promise<CashuWallet>>();
   const at = (mint: string): Promise<CashuWallet> => {
@@ -102,7 +98,13 @@ export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = 
   const proofsAt = (mint: string): EcashProof[] => tokensAt(mint).flatMap((token) => token.proofs);
   const balanceAt = (mint: string): number => sumProofs(proofsAt(mint));
   const mintError = (err: unknown): EcashError => (err instanceof EcashError ? err : new EcashError("mint", `The mint did not do that: ${(err as Error)?.message ?? "no answer"}`));
-  const seedParts = () => (store.outputs && store.lane && store.keepLane ? { outputs: store.outputs.bind(store), lane: store.lane.bind(store), keepLane: store.keepLane.bind(store) } : null);
+  /** The worker's seed actions, where the store has them. */
+  const seedParts = (): SeedWorker | null => store.seed ?? null;
+  /**
+   * Whether this browser can keep two tabs apart (rule 3a): the worker takes the lock for every change to a lane, and
+   * where the page has none, nor has the worker. A test stands one in.
+   */
+  const locksHere = (): boolean => options.locks ?? typeof (globalThis as { navigator?: { locks?: { request?: unknown } } }).navigator?.locks?.request === "function";
   /** Whether this mint's current keyset has passed the trial (rule 4): only then is anything added there by the seed. */
   const passed = (mint: string, keysetId: string): boolean => (state.trials ?? []).some((t) => t.mint === mint && t.keysetId === keysetId && t.outcome === "passed");
   /**
@@ -112,10 +114,9 @@ export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = 
   async function seededAt(mint: string, wallet: CashuWallet) {
     const parts = seedParts();
     if (!parts || !passed(mint, wallet.keysetId)) return null;
-    const { createSeededMint, browserLock } = await import("./seededMint.js");
-    const lock = options.lock ?? browserLock();
-    if (!lock) return null;
-    return createSeededMint({ wallet, outputs: parts.outputs, load: parts.lane, save: async (id, s) => void (await parts.keepLane(id, s)), lock });
+    if (!locksHere()) return null;
+    const { createSeededMint } = await import("./seededMint.js");
+    return createSeededMint({ wallet, seed: parts });
   }
 
   /**
@@ -219,7 +220,9 @@ export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = 
           try {
             minted = await seeded.add(funding.amount, checked);
           } catch (err) {
-            if ((err as { code?: string })?.code !== "no-lane") throw err;
+            // No lane to be had, or no lock in the worker: nothing was asked of the mint yet, so it is added as before.
+            const code = (err as { code?: string })?.code;
+            if (code !== "no-lane" && code !== "no-seed-here") throw err;
           }
         }
         const proofs = plain(minted ?? (await wallet.mintProofsBolt11(funding.amount, checked)));
@@ -242,14 +245,13 @@ export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = 
      */
     seedHere(): "yes" | "no-seed" | "no-locks" {
       if (!seedParts()) return "no-seed";
-      if (options.lock) return "yes";
-      const locks = (globalThis as { navigator?: { locks?: { request?: unknown } } }).navigator?.locks;
-      return typeof locks?.request === "function" ? "yes" : "no-locks";
+      return locksHere() ? "yes" : "no-locks";
     },
     /**
-     * Restore from the mints, at the person's press (rule 3): each of the wallet's mints is asked, with outputs made
-     * from the seed in every lane, for what it signed and still owes. What it hands back that this wallet doesn't hold
-     * is kept with the wallet, and this browser's lane moves forward past what was found in it. Nothing is spent.
+     * Restore from the mints, at the person's press (rule 3): each of the wallet's mints is asked, in every keyset it
+     * lists, every lane and the trial counters, for what it signed for this seed and still owes. Each lane is followed at
+     * least as far as the wallet record says it went. What comes back that this wallet doesn't hold is kept with it,
+     * and this browser's lane moves forward past what was found in it, by the worker, under its lock. Nothing is spent.
      * A mint that can't be reached, or can't restore, is named and left as it is.
      */
     async restore(): Promise<{ found: number; mints: { mint: string; sats: number; trouble?: string }[] }> {
@@ -260,14 +262,31 @@ export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = 
       for (const mint of state.mints) {
         try {
           const wallet = await at(mint);
-          const restored = await restoreFromMint({ wallet, outputs: parts.outputs });
+          // How far each lane went, as the wallet record says, and as this browser's own lane says.
+          const known = new Map<string, Partial<Record<number, number>>>();
+          for (const c of state.counters ?? []) {
+            const lanes = known.get(c.keysetId) ?? {};
+            lanes[c.lane] = Math.max(lanes[c.lane] ?? 0, c.next - 1);
+            known.set(c.keysetId, lanes);
+          }
+          for (const k of wallet.keyChain.getKeysets()) {
+            const mine = await parts.lane(k.id).catch(() => null);
+            if (!mine) continue;
+            const lanes = known.get(k.id) ?? {};
+            lanes[mine.lane] = Math.max(lanes[mine.lane] ?? 0, mine.next - 1);
+            known.set(k.id, lanes);
+          }
+          const restored = await restoreFromMint({ wallet, seed: parts, highest: (id) => known.get(id) ?? {} });
           const held = new Set(proofsAt(mint).map((p) => p.secret));
           const fresh = plain(restored.proofs).filter((p) => !held.has(p.secret));
           if (fresh.length) state = await store.roll({ destroy: [], keep: [{ mint, proofs: fresh }], history: { direction: "in", amount: sumProofs(fresh) } });
-          // This browser's own lane, past what the mint has signed in it: never back, never another lane.
-          const mine = await parts.lane(wallet.keysetId);
-          const past = mine ? restored.next[mine.lane] : undefined;
-          if (mine && past !== undefined && past > mine.next) await parts.keepLane(wallet.keysetId, { lane: mine.lane, next: past });
+          // This browser's own lane in each keyset, past what the mint has signed in it: the worker moves it, under its
+          // lock, never back and never to another lane.
+          for (const [id, lanes] of Object.entries(restored.next)) {
+            const mine = await parts.lane(id).catch(() => null);
+            const past = mine ? lanes[mine.lane] : undefined;
+            if (mine && past !== undefined && past > mine.next) await parts.forward(id, past);
+          }
           mints.push({ mint, sats: sumProofs(fresh) });
         } catch (err) {
           mints.push({ mint, sats: 0, trouble: (err as Error)?.message || "no answer" });
@@ -290,7 +309,8 @@ export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = 
      * gone. The outcome is kept with the wallet record, for every device. Never run when the wallet opens.
      */
     async tryMint(mint: string): Promise<MintTrialOutcome> {
-      if (!store.outputs || !store.keepTrial) return { outcome: "not-tried", why: "This wallet can't use a seed here.", cost: 0 };
+      const seed = seedParts();
+      if (!seed || !store.keepTrial) return { outcome: "not-tried", why: "This wallet can't use a seed here.", cost: 0 };
       if (!state.mints.includes(mint)) throw new EcashError("no-wallet", "That mint is not in this wallet.");
       if (balanceAt(mint) < 1) throw new EcashError("not-enough", "The trial needs 1 sat at this mint. Add some first.");
       const { tryMint } = await import("./mintTrial.js");
@@ -309,20 +329,34 @@ export function createEcashWallet(store: EcashStore, options: { lock?: Lock } = 
         throw mintError(err);
       }
       const proof = proofsAt(mint).find((p) => p.amount === 1)!;
-      const held = tokensAt(mint);
-      const rest = proofsAt(mint).filter((p) => p.secret !== proof.secret);
+      let once: EcashProof | null = null;
       let result: Awaited<ReturnType<typeof tryMint>>;
       try {
-        result = await tryMint({ wallet, outputs: store.outputs.bind(store), proof: proof as never });
+        result = await tryMint({
+          wallet,
+          seed,
+          proof: proof as never,
+          // The proof the first swap made, kept in place of the one it took before the second swap is asked: where
+          // the second fails for any reason, the sat is still held (the review's finding 4).
+          keep: async (made) => {
+            once = plain([made])[0]!;
+            const held = tokensAt(mint);
+            const rest = proofsAt(mint).filter((p) => p.secret !== proof.secret);
+            state = await store.roll({ destroy: held.map((t) => t.event), keep: [{ mint, proofs: [...rest, once] }] });
+          }
+        });
       } catch (err) {
         // Where it stopped is unknown from here: the mint is asked what is spent, and nothing is dropped on a guess.
         await reconcile();
         throw mintError(err);
       }
       if (result.outcome === "not-tried") return { outcome: "not-tried", why: result.why, cost: 0 };
-      // The sat the trial took: back, as the proof the trial ended with, where it passed; gone where it failed.
-      const keep = result.outcome === "passed" ? [...rest, ...plain([result.kept])] : rest;
-      state = await store.roll({ destroy: held.map((t) => t.event), keep: [{ mint, proofs: keep }], ...(result.cost ? { history: { direction: "out" as const, amount: result.cost } } : {}) });
+      // Failed: the proof the trial ended with is spent, and that sat is gone, said once in the history.
+      const spent = once as EcashProof | null;
+      if (result.outcome === "failed" && spent) {
+        const left = proofsAt(mint).filter((p) => p.secret !== spent.secret);
+        state = await store.roll({ destroy: tokensAt(mint).map((t) => t.event), keep: [{ mint, proofs: left }], ...(result.cost ? { history: { direction: "out" as const, amount: result.cost } } : {}) });
+      }
       state = await store.keepTrial({ mint, keysetId: result.keysetId, outcome: result.outcome });
       return { outcome: result.outcome, cost: result.cost };
     },

@@ -31,6 +31,10 @@ export interface MockMint {
   signedCount(): number;
   /** How many requests it has refused whole for an output it had signed before, or one given twice. */
   refusedCount(): number;
+  /** Start a new keyset and sign with it from now on; the old one stays listed, inactive, and restorable. */
+  rotate(): void;
+  /** The ids of its keysets, oldest first. */
+  keysetIds(): string[];
   close(): Promise<void>;
 }
 
@@ -39,18 +43,32 @@ export interface MockMintOptions {
   signsAgain?: boolean;
   /** Not say it supports restore or deterministic secrets (NUT-09, NUT-13), and not restore. */
   noRestore?: boolean;
+  /**
+   * What happens to the n-th swap (from 1): answered as usual, refused with a server error before anything is done
+   * ("fail-before"), or done and then answered with a server error, as an answer lost on the way ("act-then-fail").
+   */
+  swapTrouble?: (n: number) => "ok" | "fail-before" | "act-then-fail";
+  /** Take a swap's inputs as spent before it checks the outputs, and then refuse those as signed before. */
+  spendsThenRefuses?: boolean;
 }
 
 export async function startMockMint(options: MockMintOptions = {}): Promise<MockMint> {
-  const keys = createNewMintKeys(12);
-  const id = keys.keysetId;
-  const pub: Record<string, string> = {};
-  for (const [amount, key] of Object.entries(keys.pubKeys)) pub[amount] = hex(key as Uint8Array);
-  const priv = (amount: number | string): Uint8Array => {
-    const key = (keys.privKeys as Record<string, Uint8Array>)[String(amount)];
+  /** Its keysets, oldest first: the last is the one it signs with. */
+  const keysets: { id: string; pub: Record<string, string>; privKeys: Record<string, Uint8Array> }[] = [];
+  const newKeyset = () => {
+    const keys = createNewMintKeys(12);
+    const pub: Record<string, string> = {};
+    for (const [amount, key] of Object.entries(keys.pubKeys)) pub[amount] = hex(key as Uint8Array);
+    keysets.push({ id: keys.keysetId, pub, privKeys: keys.privKeys as Record<string, Uint8Array> });
+  };
+  newKeyset();
+  const active = () => keysets[keysets.length - 1]!;
+  const priv = (amount: number | string, keysetId = active().id): Uint8Array => {
+    const key = keysets.find((k) => k.id === keysetId)?.privKeys[String(amount)];
     if (!key) throw new Error(`no key for ${amount}`);
     return key;
   };
+  let swaps = 0;
   const spent = new Set<string>();
   const funding = new Map<string, { amount: number; state: "UNPAID" | "PAID" | "ISSUED"; request: string }>();
   const invoices = new Map<string, number>();
@@ -76,6 +94,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
   const sign = (outputs: { amount: number | string; B_: string }[], amounts?: number[]) =>
     outputs.map((output, i) => {
       const amount = amounts ? amounts[i]! : Number(output.amount);
+      const id = active().id;
       const blind = createBlindSignature(pointFromHex(output.B_), priv(amount), id);
       const signature = { amount, id, C_: (blind.C_ as Point).toHex(true) };
       signed.set(output.B_, signature);
@@ -83,11 +102,11 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
     });
   const Y = (secret: string): Point => hashToCurve(new TextEncoder().encode(secret));
   /** Every input is the mint's own, unspent, and none is given twice. Returns their sum. */
-  const take = (inputs: { amount: number | string; secret: string; C: string }[]): number => {
+  const take = (inputs: { amount: number | string; id?: string; secret: string; C: string }[]): number => {
     const seen = new Set<string>();
     let sum = 0;
     for (const input of inputs) {
-      const expected = Y(input.secret).multiply(BigInt(`0x${hex(priv(input.amount))}`)).toHex(true);
+      const expected = Y(input.secret).multiply(BigInt(`0x${hex(priv(input.amount, input.id ?? active().id))}`)).toHex(true);
       if (expected !== input.C) throw new Error("a proof is not this mint's");
       if (spent.has(input.secret) || seen.has(input.secret)) throw new Error("Token already spent.");
       seen.add(input.secret);
@@ -121,6 +140,8 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
     },
     signedCount: () => signed.size,
     refusedCount: () => refused,
+    rotate: newKeyset,
+    keysetIds: () => keysets.map((k) => k.id),
     close: () => new Promise((resolve) => server.close(() => resolve()))
   };
 
@@ -128,8 +149,11 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
     if (method === "GET" && path === "/v1/info") {
       return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true }, ...(options.noRestore ? {} : { 9: { supported: true }, 13: { supported: true } }) } };
     }
-    if (method === "GET" && path === "/v1/keysets") return { keysets: [{ id, unit: "sat", active: true, input_fee_ppk: 0 }] };
-    if (method === "GET" && (path === "/v1/keys" || path === `/v1/keys/${id}`)) return { keysets: [{ id, unit: "sat", active: true, input_fee_ppk: 0, keys: pub }] };
+    const listed = (k: (typeof keysets)[number]) => ({ id: k.id, unit: "sat", active: k === active(), input_fee_ppk: 0 });
+    if (method === "GET" && path === "/v1/keysets") return { keysets: keysets.map(listed) };
+    if (method === "GET" && path === "/v1/keys") return { keysets: [{ ...listed(active()), keys: active().pub }] };
+    const asked = keysets.find((k) => path === `/v1/keys/${k.id}`);
+    if (method === "GET" && asked) return { keysets: [{ ...listed(asked), keys: asked.pub }] };
     if (method === "POST" && path === "/v1/mint/quote/bolt11") {
       const quote = rand();
       funding.set(quote, { amount: Number(body.amount), state: "UNPAID", request: `lnbc${Number(body.amount) * 10}n1fund${rand(12).replace(/1/gu, "q")}` });
@@ -153,9 +177,14 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
       const out = body.outputs.reduce((sum: number, o: any) => sum + Number(o.amount), 0);
       const inSum = body.inputs.reduce((sum: number, i: any) => sum + Number(i.amount), 0);
       if (inSum !== out) throw new Error("inputs do not equal outputs");
+      const trouble = options.swapTrouble?.(++swaps) ?? "ok";
+      if (trouble === "fail-before") throw Object.assign(new Error("internal error"), { status: 500 });
+      if (options.spendsThenRefuses) take(body.inputs);
       fresh(body.outputs);
-      take(body.inputs);
-      return { signatures: sign(body.outputs) };
+      if (!options.spendsThenRefuses) take(body.inputs);
+      const signatures = sign(body.outputs);
+      if (trouble === "act-then-fail") throw Object.assign(new Error("gateway timeout"), { status: 504 });
+      return { signatures };
     }
     if (method === "POST" && path === "/v1/melt/quote/bolt11") {
       const amount = invoices.get(body.request);

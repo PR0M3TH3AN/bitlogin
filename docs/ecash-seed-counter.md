@@ -6,7 +6,10 @@ first, then restore from the mint). Built on beta, against mock mints only,
 through step 3 (2026-11-25): the wallet adds by the seed at a mint whose
 keyset passed the trial (`ecash/wallet.ts`), and its screen names each
 mint, offers the trial at a press, and restores from the mints
-(`assets/ecash-ui.js`). Not yet on any site.
+(`assets/ecash-ui.js`). Mended after the orchestrator's review the same
+day: the worker keeps the counters, restore looks in every keyset and the
+trial counters and follows the wallet record's copy of the counters, and the
+trial keeps its sat. Not yet on any site.
 
 ## What it is, and what a counter used twice costs
 
@@ -69,7 +72,9 @@ block. So keeping two browsers apart must not depend on relays at all.
   the lane is taken from a relay or another device.
 - **The lane drawn must be one the mint says is empty.** On first use
   with a mint, the wallet asks it (restore) whether the lane's first
-  counters hold anything it has signed. If they do, another browser of
+  100 counters hold anything it has signed (as far as restore looks into
+  an empty lane; 20 until the review of 2026-11-25, which let a lane whose
+  first counters were burned look empty). If they do, another browser of
   this account has that lane, or this one did before it was cleared, and
   the wallet draws again. Two browsers then share a lane only if both
   draw the same empty one before either has used it. That is far rarer
@@ -78,9 +83,14 @@ block. So keeping two browsers apart must not depend on relays at all.
   and the mint shows the old lane as used, so it isn't drawn again. The
   sats in the old lane are still found by restore, which looks in every
   lane.
-- **The relay copy only speeds a new device up.** It records the highest
-  counter used in each lane, so a restore needn't search from 0. It is
-  never what safety rests on.
+- **The relay copy of the counters.** The wallet record (sealed, kind
+  17375) carries, for each keyset and lane, one past the highest counter
+  this account has reserved there (rows of BitLogin's own,
+  `bitlogin-counter`). The worker notes each reservation, and the record
+  is sent again whenever the lanes have gone further than it says (after
+  a seeded add, at each opening). Two records are joined by taking the
+  higher. Restore follows each lane at least that far, gaps and all. It
+  is never what keeping two browsers apart rests on.
 - **How far restore looks in each lane, set against the largest gap
   (rule 1):**
   - **A lane where nothing is found** in its first 100 counters is empty.
@@ -95,9 +105,17 @@ block. So keeping two browsers apart must not depend on relays at all.
   every relay too, restore can miss what came after the gap. Those sats
   are still at the mint, but this wallet can't find them." (Tested: 5 of
   12 found without the relay copy, all 12 with it.)
+- **Every keyset the mint lists, active or not.** A mint that rotates its
+  keyset keeps the old one listed, and sats added under it are still its
+  to restore (the review's finding 1).
+- **And the trial counters** (rule 4), followed from their start like a
+  lane: the proof a trial ends with is made at one of them.
 - **What that costs:** an empty lane is about 100 outputs asked about, so
-  all 32 empty is about 3,200, a few requests to each mint. A lane in use
-  costs what it holds, plus 300.
+  all 32 empty is about 3,200, plus 100 for the trial counters: about 33
+  requests to the mint for each keyset. A lane in use costs what it holds,
+  plus 300. Each output asked about is made in the worker: about 6 ms on
+  this machine for the older keyset ids most mints use, 2 ms for newer
+  ones, so some 20 seconds a keyset (2026-11-25).
 
 ### 3a. Two tabs of one browser share its lane
 
@@ -126,12 +144,19 @@ alone. How a mint is shown to refuse:
   deterministic secrets (NUT-13). That is needed, but not enough.
 - **A trial that can cost one sat** (built in `ecash/mintTrial.ts`,
   2026-11-24). One 1-sat proof of the person's is swapped into an output
-  made from a counter kept for trials: the last 4,096 below 2³¹, which no
-  lane reaches. The mint is asked first that the counter is unused. The
-  proof that comes back is then swapped into that same output again.
+  made from a counter kept for trials: the last 4,096 below 2³¹, which a
+  lane reaches only after some 67 million uses. The worker hands each one
+  out once, in order. The mint is asked first that the counter is unused.
+  The proof that comes back is kept in the wallet at once, in place of the
+  one it took, and is then swapped into that same output again.
   - A mint that charges for each swap isn't tried. The trial would cost
     more than a sat, and nothing is spent.
-  - If the mint refuses the second request, it passes.
+  - If the mint refuses the second request and the proof is still
+    unspent, it passes. A mint that spends the input before refusing does
+    not pass: it would lose a whole invoice on a retried claim.
+  - If the second request fails for any other reason, the sat is still
+    held, and the trial can be pressed again. If the answer to the first
+    was lost, restore finds the proof at its trial counter.
   - If it signs it again, it fails, and the most this costs is the 1 sat
     (and any fee).
   - **It runs only when the person presses for it.** Words beside the
@@ -172,13 +197,19 @@ relay gone, rule 5 and the mint are enough.
   worker is held to `connect-src 'self' wss:` (`ecash.md` EC6), and
   letting the key-holding worker reach any https address would loosen
   the one place keys live. So the worker makes the outputs instead.
-  - For each operation, the page tells the worker the mint's keyset (its
-    public keys), the amounts and the counters reserved.
-  - The worker derives each output's secret and blinding factor from the
-    seed and hands back those outputs alone.
-  - The library takes them as they are (`asCustom`), and restore is
-    asked with outputs made the same way.
-  - The page sees what any operation's outputs are, as it already sees
+  - **The worker keeps the counters too** (2026-11-25, the review's
+    finding 3). For each operation, the page names the keyset and the
+    amounts; the worker reserves the counters from this browser's lane,
+    writes them down, and hands back those outputs alone. The page can
+    never name a counter and be handed what unblinds it: a script that
+    ran once on the wallet's page could otherwise work out outputs the
+    wallet will use later, and take the sats added to them from the
+    mint's restore.
+  - For restore and the check before use, the worker hands the page
+    blinded messages only, at any counter, and turns what the mint signs
+    into finished proofs itself.
+  - The library takes the outputs as they are (`asCustom`).
+  - The page sees what an operation's outputs are, as it already sees
     the proofs, and never the seed. A seed makes every future proof, so
     it is held as closely as the key itself.
 - **If an account's key ever changes:** BitLogin has no way to change an
@@ -237,8 +268,9 @@ outputs it has signed before, and one that signs them again.
 
 ## Open, for the owner
 
-- Restore asks each mint about a few thousand outputs. The mint learns
-  nothing about the person from that (the requests are blinded), but it
-  takes a few seconds.
+- Restore asks each mint about some 3,300 outputs for each keyset it
+  lists. The mint learns nothing about the person from that (the requests
+  are blinded), but it takes time: about 20 seconds a keyset on this
+  machine, for the older keyset ids most mints use.
 - Other NIP-60 wallets don't use this seed. The same account opened in
   one of them sees the same sats, but can't restore them.

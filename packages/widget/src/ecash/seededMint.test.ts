@@ -5,22 +5,21 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { Wallet, type Proof } from "@cashu/cashu-ts";
+import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
+import { InMemoryKeyValueStore, type KeyValueStore } from "@bitlogin/core/storage";
 import { startMockMint, type MockMint } from "./mockMint.js";
-import { createSeededMint, asOutputData, NO_SEED_HERE, seedUsableHere, type Lock } from "./seededMint.js";
+import { createSeededMint, asOutputData, seedUsableHere, type Lock } from "./seededMint.js";
 import { laneOf, laneStart, type LaneState } from "./seedLanes.js";
 import { ecashSeed, seededOutputs } from "../worker/ecashSeed.js";
+import { keepLane, readLane } from "../worker/ecashLanes.js";
+import { standInLock as makeLock, standInSeedWorker } from "./seedWorkerStandIn.js";
 
 /**
- * A stand-in for the browser's navigator.locks, which Node hasn't: one lock per name, for the minters of this test.
- * It keeps minters in one process apart, as navigator.locks keeps tabs apart; it is a test's, never the wallet's.
+ * A stand-in for the browser's navigator.locks, which Node hasn't: one lock per name, for the workers of this test.
+ * It keeps them in one process apart, as navigator.locks keeps tabs apart; it is a test's, never the wallet's.
  */
-const inPage = new Map<string, Promise<unknown>>();
-const standInLock: Lock = (name, fn) => {
-  const run = (inPage.get(name) ?? Promise.resolve()).then(fn, fn);
-  inPage.set(name, run.catch(() => {}));
-  return run;
-};
+const standInLock: Lock = makeLock();
 const total = (proofs: readonly Proof[]) => proofs.reduce((n, p) => n + Number(p.amount), 0);
 const distinct = (proofs: readonly Proof[]) => new Set(proofs.map((p) => p.secret)).size;
 
@@ -30,23 +29,19 @@ afterEach(async () => {
   mints = [];
 });
 
-/** One browser: its own page wallet with no seed, its own lane state, the worker's outputs from the shared seed. */
+/** One browser: its own page wallet with no seed, its own worker and storage, the account's seed. */
 async function browser(mint: MockMint, seed: Uint8Array, opts: { random?: () => number; checkFirst?: boolean } = {}) {
   const wallet = new Wallet(mint.url, { unit: "sat" });
   await wallet.loadMint();
-  const kept = new Map<string, LaneState>();
-  const minter = createSeededMint({
-    wallet,
-    outputs: async (keysetId, amounts, from) => seededOutputs(seed, keysetId, amounts, from),
-    load: async (id) => kept.get(id) ?? null,
-    save: async (id, state) => void kept.set(id, state),
-    lock: standInLock,
-    ...opts
-  });
+  const lanes = { signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore() };
+  const minter = createSeededMint({ wallet, seed: standInSeedWorker({ ...lanes, seed, lock: standInLock }), ...opts });
   const held: Proof[] = [];
   return {
     wallet,
-    kept,
+    /** This browser's lane, as its worker keeps it. */
+    lane: () => readLane(lanes, wallet.keysetId) as Promise<LaneState>,
+    /** Put this browser in a lane, as one that drew it before. */
+    setLane: (lane: number, next = laneStart(lane)) => keepLane(lanes, wallet.keysetId, { lane, next }),
     minter,
     held,
     async add(sats: number) {
@@ -77,7 +72,7 @@ describe("two browsers of one account, adding sats from one seed", () => {
       expect(total(a.held)).toBe(15);
       expect(total(b.held)).toBe(18);
       expect(distinct([...a.held, ...b.held])).toBe(a.held.length + b.held.length);
-      const lanes = [a.kept, b.kept].map((k) => [...k.values()][0]!.lane);
+      const lanes = [(await a.lane()).lane, (await b.lane()).lane];
       expect(lanes[0]).not.toBe(lanes[1]);
     });
   }
@@ -88,12 +83,26 @@ describe("two browsers of one account, adding sats from one seed", () => {
     const seed = ecashSeed(generatePrivateKey());
     const a = await browser(mint, seed, { random: first(5) });
     await a.add(3);
-    expect([...a.kept.values()][0]!.lane).toBe(5);
+    expect((await a.lane()).lane).toBe(5);
     // A second browser, or this one after its storage was cleared, that would draw lane 5 first: the mint shows it used.
     const b = await browser(mint, seed, { random: first(5) });
     await b.add(3);
-    expect([...b.kept.values()][0]!.lane).not.toBe(5);
+    expect((await b.lane()).lane).not.toBe(5);
     expect(distinct([...a.held, ...b.held])).toBe(a.held.length + b.held.length);
+  });
+
+  it("never draw a lane whose first counters were burned and whose later ones are used (finding 7)", async () => {
+    const mint = await startMockMint();
+    mints.push(mint);
+    const seed = ecashSeed(generatePrivateKey());
+    // Lane 5's first 60 counters burned with nothing signed, as crashes would leave them, then used past them. A
+    // probe of only the first 20 sees an empty lane; it must look far enough to find what was signed.
+    const c = await browser(mint, seed, { random: first(5) });
+    await c.setLane(5, laneStart(5) + 60);
+    await c.add(3);
+    const d = await browser(mint, seed, { random: first(5) });
+    await d.add(3);
+    expect((await d.lane()).lane).not.toBe(5);
   });
 
   it("in the same lane, on a refusing mint, have the clash refused whole and retried: nothing lost", async () => {
@@ -104,12 +113,12 @@ describe("two browsers of one account, adding sats from one seed", () => {
     // own refusal is what is tested.
     const a = await browser(mint, seed, { checkFirst: false });
     const b = await browser(mint, seed, { checkFirst: false });
-    for (const x of [a, b]) x.kept.set(x.wallet.keysetId, { lane: 7, next: laneStart(7) });
+    for (const x of [a, b]) await x.setLane(7);
     await a.add(8);
     await b.add(8);
     expect(total(a.held) + total(b.held)).toBe(16);
     expect(distinct([...a.held, ...b.held])).toBe(a.held.length + b.held.length);
-    expect(laneOf([...b.kept.values()][0]!.next)).toBe(7);
+    expect(laneOf((await b.lane()).next)).toBe(7);
   });
 
   it("in the same lane, on a mint that signs again, one after the other: the check first saves them", async () => {
@@ -118,7 +127,7 @@ describe("two browsers of one account, adding sats from one seed", () => {
     const seed = ecashSeed(generatePrivateKey());
     const a = await browser(mint, seed);
     const b = await browser(mint, seed);
-    for (const x of [a, b]) x.kept.set(x.wallet.keysetId, { lane: 7, next: laneStart(7) });
+    for (const x of [a, b]) await x.setLane(7);
     await a.add(8);
     await b.add(8);
     expect(total(a.held) + total(b.held)).toBe(16);
@@ -145,29 +154,35 @@ describe("two browsers of one account, adding sats from one seed", () => {
 });
 
 describe("two tabs of one browser, on one store", () => {
-  /** Two tabs: each its own page wallet and minter, the one browser's storage between them, slow as storage is. */
+  /**
+   * Two tabs: each its own page wallet, minter and worker, the one browser's storage between them, slow as storage
+   * is. The worker reserves under `lock`.
+   */
   async function tabs(mint: MockMint, seed: Uint8Array, lock: Lock, together = false) {
-    const store = new Map<string, LaneState>();
+    const inner = new InMemoryKeyValueStore();
+    const signer = new NostrSigner(generatePrivateKey());
     const pause = () => new Promise((done) => setTimeout(done, 5));
-    // With no lock, both tabs read before either goes on, whatever the machine's load: the moment the lock is for.
-    // (Only there: under a lock the second read waits for the first tab, as it must.)
+    // With no lock, both tabs read their lane before either goes on, whatever the machine's load: the moment the lock
+    // is for. (Only there: under a lock the second read waits for the first tab, as it must.)
     const waiting: (() => void)[] = [];
     const meet = () => (together && waiting.length < 2 ? new Promise<void>((done) => (waiting.push(done), waiting.length === 2 && waiting.forEach((go) => go()))) : Promise.resolve());
+    const store: KeyValueStore = {
+      get: async (key: string) => {
+        const read = (await pause(), await inner.get(key));
+        if (key.includes(":ecash-lane:")) await meet();
+        return read;
+      },
+      set: async (key: string, value: string) => (await pause(), inner.set(key, value)),
+      delete: (key: string) => inner.delete(key)
+    } as KeyValueStore;
     const tab = async () => {
       const wallet = new Wallet(mint.url, { unit: "sat" });
       await wallet.loadMint();
       // The browser has used this mint before: its lane is chosen and stored, and both tabs read it.
-      if (!store.has(wallet.keysetId)) store.set(wallet.keysetId, { lane: 7, next: laneStart(7) });
+      if (!(await readLane({ signer, store: inner }, wallet.keysetId))) await keepLane({ signer, store: inner }, wallet.keysetId, { lane: 7, next: laneStart(7) });
       const minter = createSeededMint({
         wallet,
-        outputs: async (id, amounts, from) => seededOutputs(seed, id, amounts, from),
-        load: async (id) => {
-          const read = (await pause(), store.get(id) ?? null);
-          await meet();
-          return read;
-        },
-        save: async (id, state) => (await pause(), void store.set(id, state)),
-        lock,
+        seed: standInSeedWorker({ signer, store, seed, lock }),
         // The lock alone is what these show: with the check first on, a tab that comes second is sometimes saved by
         // it, and the test would be of the check, not the lock.
         checkFirst: false
@@ -214,8 +229,11 @@ describe("a browser with no navigator.locks", () => {
     const wallet = new Wallet(mint.url, { unit: "sat" });
     await wallet.loadMint();
     const seed = ecashSeed(generatePrivateKey());
-    expect(() => createSeededMint({ wallet, outputs: async (id, a, f) => seededOutputs(seed, id, a, f), load: async () => null, save: async () => {} })).toThrow(NO_SEED_HERE);
-    // Nothing was asked of the mint: not even a lane drawn.
+    // Its worker has no lock either: it reserves nothing, and nothing is signed.
+    const minter = createSeededMint({ wallet, seed: standInSeedWorker({ signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore(), seed, lock: null }) });
+    const quote = await wallet.createMintQuoteBolt11(3);
+    mint.payAllFunding();
+    await expect(minter.add(3, quote)).rejects.toMatchObject({ code: "no-seed-here" });
     expect(mint.signedCount()).toBe(0);
   });
 });
