@@ -69,6 +69,7 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
   let client: { server: Server; origin: string };
   let serving = "";
   let slowBuildJson = 0;
+
   let before = "";
   let after = "";
 
@@ -85,6 +86,7 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         const file = join(serving, normalize(relative).replace(/^(\.\.[/\\])+/u, ""));
         if (!existsSync(file)) return void res.writeHead(404).end();
         if (relative === "/build.json" && slowBuildJson) await sleep(slowBuildJson);
+
         let body: Buffer | string = await readFile(file);
         if (["/connect/index.html", "/connect/panel/index.html", "/signer/index.html"].includes(relative)) body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relays}" data-discovery-relays="${relays}">`);
         // As bitlogin.network serves them: revalidated every time.
@@ -153,7 +155,36 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
       const browser = await playwright!.chromium.launch();
       const results: Record<string, unknown>[] = [];
       try {
-        const page = await browser.newPage();
+        const context = await browser.newContext();
+        // The panel's worker answers held back on the test's word (window.slowWalletAnswer, ms), for the wallet's first
+        // look at what this browser holds.
+        await context.addInitScript(() => {
+          if (!location.pathname.startsWith("/connect/")) return;
+          const Real = window.Worker;
+          (window as any).Worker = class extends Real {
+            constructor(url: string | URL, options?: WorkerOptions) {
+              super(url, options);
+              const asked = new Map<string, string>();
+              const send = this.postMessage.bind(this);
+              this.postMessage = (message: any, ...rest: any[]) => {
+                if (message && typeof message.id === "string") asked.set(message.id, message.action);
+                return (send as any)(message, ...rest);
+              };
+              const deliver = this.dispatchEvent.bind(this);
+              this.addEventListener("message", (e: MessageEvent) => {
+                const ms = (window as any).slowWalletAnswer;
+                if (!ms || (e as any).held || asked.get(e.data?.id) !== "ecashPeek") return;
+                e.stopImmediatePropagation();
+                setTimeout(() => {
+                  const again = new MessageEvent("message", { data: e.data });
+                  (again as any).held = true;
+                  deliver(again);
+                }, ms);
+              });
+            }
+          };
+        });
+        const page = await context.newPage();
         const errors: string[] = [];
         page.on("console", (m) => m.type() === "error" && errors.push(m.text().slice(0, 240)));
         page.on("pageerror", (e) => errors.push(String(e).slice(0, 240)));
@@ -248,6 +279,8 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
 
         // ---- A slow line and no release: build.json answers after 1.6 s, past the check's own 1.5 s. The kept frame must still be kept.
         slowBuildJson = 1600;
+        // The worker's first answer for the wallet slowed, holding "Opening your wallet" up, as a busy machine does.
+        await panel()!.evaluate(() => ((window as any).slowWalletAnswer = 600));
         const thrownBefore = (await page.evaluate(() => (window as any).thrownAway)) as number;
         await page.evaluate((signin) => {
           const kept = document.getElementById("panel") as HTMLIFrameElement;
@@ -302,6 +335,7 @@ describe.skipIf(!playwright)("a panel kept open across a release", () => {
         const againFirst = againSaid[0]?.height ?? 0;
         results.push({ mode: "after a hide inside the hold, the next showing starts at the screen's height", opened: againFirst === 0 || againFirst > 300, againSaid: againSaid.map((m) => m.height ?? "none") });
         slowBuildJson = 0;
+        await panel()?.evaluate(() => ((window as any).slowWalletAnswer = 0)).catch(() => {});
         results.push({ mode: "kept frames thrown away by the shell", opened: ((await page.evaluate(() => (window as any).thrownAway)) as number) === 0 });
       } finally {
         if (process.env.BITLOGIN_STALE_OUT) writeFileSync(process.env.BITLOGIN_STALE_OUT, JSON.stringify(results, null, 2));
