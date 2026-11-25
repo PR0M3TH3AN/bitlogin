@@ -1610,6 +1610,25 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 </script>`;
       const portalPage = `<!doctype html><meta charset="utf-8"><title>the portal</title><div id="slot"></div>
 <script type="module">
+  // "#secure-own": the room is the top page, with its own signer frame beside the panel, as BitPortal's own pages
+  // mount both with no shell.
+  const own = location.hash.endsWith("-own");
+  if (own) {
+    const signer = document.createElement("iframe");
+    signer.id = "signer";
+    signer.src = "${SIGNIN}/signer/index.html";
+    signer.style.cssText = "width:1px;height:1px;border:0;position:absolute;left:-9px";
+    document.body.append(signer);
+    window.heard = [];
+    addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+    window.ask = (message, wait = 4000) => new Promise((done) => {
+      const id = "q" + Math.random().toString(36).slice(2, 8);
+      const on = (e) => { if (e.source === signer.contentWindow && e.origin === "${SIGNIN}" && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+      addEventListener("message", on);
+      signer.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, "${SIGNIN}");
+      setTimeout(() => done({ t: "no answer" }), wait);
+    });
+  }
   window.said = [];
   addEventListener("message", (e) => { if (e.origin === "${SIGNIN}" && e.data && e.data.bitlogin === "bitlogin-panel") window.said.push(e.data); });
   const panel = document.createElement("iframe");
@@ -1619,7 +1638,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
   document.getElementById("slot").replaceChildren(panel);
   const again = setInterval(() => {
     if (window.said.some((m) => m.t === "ready")) return clearInterval(again);
-    panel.contentWindow?.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hello", mode: "account" }, "${SIGNIN}");
+    const mode = location.hash.slice(1).replace(/-own$/u, "") || "account";
+    panel.contentWindow?.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hello", mode, ...(mode === "ask" ? { world: location.origin } : {}) }, "${SIGNIN}");
   }, 50);
 </script>`;
       const RELAY = relayUrls.join(",");
@@ -1649,6 +1669,24 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(made).toMatchObject({ unlocked: true, guest: true });
         const guest = made.pubkey as string;
 
+        // BitPortal's own page, with no shell: the room is the top page, with its own signer frame and the panel side by
+        // side. Its signer is the same guest; the panel, mounted by it on "secure", opens on "Secure this account".
+        const room = await context.newPage();
+        await room.goto("https://portal.bitblocks.network/#secure-own");
+        await room.waitForFunction(() => (window as any).heard?.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        expect(await room.evaluate(() => (window as any).ask({ t: "want", family: "https://*.bitblocks.network", guest: true }))).toMatchObject({ unlocked: true, guest: true, pubkey: guest });
+        const roomWidget = room.frameLocator("#panel").locator("#account-slot bitlogin-auth");
+        await roomWidget.locator('form[data-form="create-name"]').waitFor({ timeout: 60_000 });
+        expect(await roomWidget.locator("h1, h2").first().textContent()).toContain("Secure this account");
+        await room.close();
+        // And asked by the room itself, the panel finds the room's own signer beside it (two deep from the panel, as
+        // framesOfClient looks): it goes on to sign in, never "BitLogin's signer wasn't found".
+        const asking = await context.newPage();
+        await asking.goto("https://portal.bitblocks.network/#ask-own");
+        await asking.frameLocator("#panel").locator("#signin").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await asking.frameLocator("#panel").locator("#status").textContent()).not.toContain("wasn't found");
+        await asking.close();
+
         // The portal shows BitLogin's panel: it says this is a guest, and how long a guest lasts here.
         const portal = await context.newPage();
         await portal.goto("https://portal.bitblocks.network/");
@@ -1676,7 +1714,20 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         // they are, and is told it is no longer a guest.
         await shownLongEnough(portal);
         await panel.locator("#guest-secure").click();
-        const widget = panel.locator("#account-slot bitlogin-auth");
+        let widget = panel.locator("#account-slot bitlogin-auth");
+        await widget.locator('form[data-form="create-name"]').waitFor({ timeout: 30_000 });
+        expect(await widget.locator("h1, h2").first().textContent()).toContain("Secure this account");
+
+        // Or opened by the client on it, from a press there: the panel's "secure" mode. A new tab, so nothing the
+        // panel resumes from its last showing puts it there: only the mode.
+        await portal.close();
+        const securing = await context.newPage();
+        await securing.goto("https://portal.bitblocks.network/#secure");
+        widget = securing.frameLocator("#panel").locator("#account-slot bitlogin-auth");
+        await widget.locator('form[data-form="create-name"]').waitFor({ timeout: 60_000 });
+        expect(await widget.locator("h1, h2").first().textContent()).toContain("Secure this account");
+        // A press in the panel's first moments after it is shown is ignored (§SW19.8).
+        await shownLongEnough(securing);
         await startPasswordSignUp(widget, `guest-${Date.now().toString(36)}`);
         await widget.locator(".phrase-word").first().waitFor({ timeout: 90_000 }).catch(async (err) => {
           const said = (await widget.evaluate((e) => (e as HTMLElement).shadowRoot?.textContent ?? "").catch(() => "")) as string;
@@ -1684,12 +1735,16 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         });
         await completeRecoveryCeremony(widget);
         await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
-        expect(await panel.locator("#guest").isVisible()).toBe(false);
+        expect(await securing.frameLocator("#panel").locator("#guest").isVisible()).toBe(false);
         const two = await world("gp2.bitblocks.network");
         await two.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
         const after = await two.ask({ t: "state" });
         expect(after).toMatchObject({ unlocked: true, pubkey: guest });
         expect(after.guest).toBeUndefined();
+        // Opened on "secure" with no guest kept any more: the account page, nothing to secure.
+        await securing.goto("https://portal.bitblocks.network/#secure");
+        await securing.frameLocator("#panel").locator("#account").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await securing.frameLocator("#panel").locator("#guest").isVisible()).toBe(false);
         // Its bag is still its own to write: now as an account, which a world asks for at first use.
         expect((await two.ask({ t: "sign", event: { kind: 1, content: "secured", tags: [] } })).event?.pubkey).toBe(guest);
       } finally {
@@ -1790,10 +1845,14 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         const elsewhere = await world(context, "g3.other-test.example");
         expect(await elsewhere.ask({ t: "want", family: "https://*.other-test.example", guest: true })).toMatchObject({ familyTaken: false, guestTaken: false, unlocked: false });
 
-        // An application, through the client: told it is the guest.
+        // An application, through the client: told it is the guest, and handed the guest's pass, which says so.
         const app = await context.newPage();
         await app.goto("https://gapp1.bitblocks.network/");
         expect(await app.evaluate(() => (window as any).isReady)).toMatchObject({ guest: true, pubkey: guest, familyTaken: true });
+        const appPass = (await app.evaluate((s) => (window as any).bl.roomPass(s), getPublicKeyHex(generatePrivateKey()))) as NostrEvent;
+        expect(appPass).toMatchObject({ kind: 27300, pubkey: guest });
+        expect(appPass.tags).toContainEqual(["nswp:origin", "https://gapp1.bitblocks.network"]);
+        expect(appPass.tags).toContainEqual(["nswp:guest", "1"]);
         await context.close();
 
         // A browser where an account was allowed for the family: the account wins, and no guest is made.
@@ -3612,13 +3671,14 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 <script type="module">
   import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
   const more = new URLSearchParams(location.search).has("more");
+  const pass = new URLSearchParams(location.search).has("pass");
   window.heard = [];
   addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
   window.bl = createBitLoginClient({
     at: "${origin}",
     permissions: {
       name: "Test App",
-      sign: [0, 1, 5, 7, 27235, 30078, ...(more ? [3] : [])],
+      sign: [0, 1, 5, 7, 27235, 30078, ...(more ? [3] : []), ...(pass ? [27300] : [])],
       appData: ["testapp:"],
       proofs: ["https://api.testapp.example"],
       read: [30078]
@@ -3719,6 +3779,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow-app").click();
         expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
         expect(await page.evaluate(() => (window as any).bl.state())).toMatchObject({ signedIn: true, pubkey: me });
+        // A room pass: not for an application whose approved set doesn't sign the pass's kind.
+        expect((await attempt("roomPass", getPublicKeyHex(generatePrivateKey()))).ok).toBe(false);
 
         // An application can put a careful kind to the person too (§SW20), through the client: BitLogin's page
         // shows it in words, signs it on a press, and the client hands back exactly what was asked.
@@ -3795,6 +3857,23 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await page.goto(`${site}/?more`);
         expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, needsMore: true, canAsk: true });
         expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
+
+        // Approved again for a set that signs the pass's kind (a local copy and a local application may hold it): a
+        // room pass, for its own address, saying nothing of a guest.
+        await page.goto(`${site}/?pass`);
+        expect(await page.evaluate(() => (window as any).isReady)).toMatchObject({ signedIn: false, needsMore: true });
+        const [again] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await again.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        await again.waitForTimeout(1000);
+        await again.locator("#allow-app").click();
+        expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
+        const sessionForPass = getPublicKeyHex(generatePrivateKey());
+        const passed = await attempt("roomPass", sessionForPass);
+        expect(passed.ok).toBe(true);
+        expect(verifyNostrEvent(passed.value)).toBe(true);
+        expect(passed.value).toMatchObject({ kind: 27300, pubkey: me });
+        expect(passed.value.tags.slice(0, 2)).toEqual([["nswp:session", sessionForPass], ["nswp:origin", site]]);
+        expect(passed.value.tags.some((t: string[]) => t[0] === "nswp:guest")).toBe(false);
 
         // Nothing the application heard was a key.
         expect(JSON.stringify(await page.evaluate(() => (window as any).heard))).not.toMatch(/nsec1|"payload"|senderPublicKey/u);

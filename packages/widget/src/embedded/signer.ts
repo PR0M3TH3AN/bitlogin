@@ -45,6 +45,7 @@ import {
   type Asked,
   createSignGate,
   handoffMessage,
+  passAllowed,
   prepareForGuest,
   prepareForSite,
   readHandoffMessage,
@@ -408,7 +409,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (ask.t === "pass") {
       // Not for an application: it is held to the set the user read. Counted apart from notes, so that signing
       // in does not use up a post. The worker builds all of it, for the site the hand-off was sealed for.
-      if (app || ask.session === pubkey || !passGate.take(Date.now())) return refuse();
+      // For an application only where the set it was approved for signs the pass's kind (passAllowed).
+      if (!passAllowed(app) || ask.session === pubkey || !passGate.take(Date.now())) return refuse();
       try {
         const pass = await headless.roomPass(ask.session);
         if (pass.pubkey !== pubkey) return refuse();

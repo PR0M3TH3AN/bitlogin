@@ -122,6 +122,12 @@ export interface BitLoginClient {
   switchAccount(): Promise<boolean>;
   /** Sign out of this application: the signer forgets this site. */
   signOut(): Promise<void>;
+  /**
+   * A room pass (NSWP-12) for this site, made and signed by BitLogin for `session` (the room session's public key,
+   * hex), for an account or a guest: a guest's says so (`["nswp:guest", "1"]`). The site never writes what it says.
+   * For an application, only where the set the user approved signs the pass's kind (27300). Throws where refused.
+   */
+  roomPass(session: string): Promise<NostrEvent>;
   getPublicKey(): Promise<string>;
   signEvent(event: UnsignedEvent): Promise<NostrEvent>;
   nip44: { encrypt(peer: string, plaintext: string): Promise<string>; decrypt(peer: string, ciphertext: string): Promise<string> };
@@ -378,6 +384,12 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
             .then(() => resolve(current.signedIn));
         }, 400);
       });
+    },
+    async roomPass(session: string) {
+      await introduce();
+      const reply = await request({ t: "pass", session });
+      if (reply.t !== "signed" || !verifyNostrEvent(reply.event as NostrEvent)) throw new BitLoginRefused("make a room pass");
+      return reply.event as NostrEvent;
     },
     async signOut() {
       await request({ t: "lock" });

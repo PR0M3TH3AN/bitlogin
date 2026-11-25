@@ -83,6 +83,13 @@ phrase like any account, and nothing else: no login name, no password, no passke
 - After securing, neither says guest.
 - No secret key ever reaches a world, and a world can't tell a guest's key from an account's except by the pass.
 
+- **The pass through the client** (2026-11-25): `createBitLoginClient(...).roomPass(session)` hands a site the pass
+  BitLogin made and signed, for an account or a guest; a guest's carries `nswp:guest`, and a site never writes what
+  a pass says. For an application, only where the set the person approved signs the pass's kind (27300).
+- **Securing from a press at the client:** the panel's mode `"secure"` opens it straight on "Secure this account"
+  where this browser keeps a guest for the client's family, and on the account pages otherwise. Not a client
+  method: a BitLogin window opened by the client is a top-level page, whose storage isn't the one the guest is in.
+
 ## G7a. Abuse, and the bounds
 
 - **One guest per browser profile per family.** The signer makes a guest only where its store holds no guest

@@ -727,6 +727,7 @@ const showAccount = () => {
     widget.addEventListener("bitlogin-login", async () => {
       who = await readCachedSession();
       // Signed in, or the guest secured: no longer a guest here.
+      securingGuest = false;
       $("guest").hidden = true;
       startOver();
     });
@@ -745,8 +746,11 @@ const showAccount = () => {
  * it closes, that is said always: a page can tell it is Brave, not whether its shields are up for this site.
  */
 let wantedOwn = "";
+/** Opened on "Secure this account" (the "secure" mode): the guest line stands aside, as its button already did its part. */
+let securingGuest = false;
 const showGuest = async () => {
   $("guest").hidden = true;
+  if (securingGuest) return;
   const family = inPanel && client ? familyOf(client) : "";
   if (who || !family || !knownFamily(family)) return;
   const kept = await (await theWorker()).guestStatus(family).catch(() => null);
@@ -1012,6 +1016,23 @@ const begin = async (wantsSwitch) => {
 /** Open the panel for what it is shown for: the account, a file browser, a wallet, purchases, or a world's question. */
 const route = async (mode, world) => {
   if (mode === "account") return showAccount();
+  // From a press at the client: straight to "Secure this account" where this browser keeps a guest for its family;
+  // otherwise the account page, with nothing to secure (docs/guest-accounts.md G6).
+  if (mode === "secure") {
+    wantedOwn = "";
+    securingGuest = true;
+    showAccount();
+    who = await readCachedSession();
+    const family = inPanel && client ? familyOf(client) : "";
+    const kept = !who && family && knownFamily(family) ? await (await theWorker()).guestStatus(family).catch(() => null) : null;
+    const widget = $("account-slot").firstChild;
+    if (!kept || !widget || typeof widget.secureGuest !== "function") {
+      securingGuest = false;
+      return void showGuest();
+    }
+    widget.secureGuest(family);
+    return;
+  }
   // Straight to the file browser, the wallet or purchases. All are the signed-in person's: with nobody signed in, the
   // account page comes first, and says why; with the lock on, its PIN is asked first.
   if (mode === "files" || mode === "wallet" || mode === "library") return openOwnPage(mode);
