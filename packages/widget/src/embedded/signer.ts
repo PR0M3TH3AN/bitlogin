@@ -32,7 +32,7 @@ import { isListAsked } from "./guests.js";
 import { bestReceipt, localService, readReceipt, receiptGood, UNLOCK_SERVICES, type Receipt, type UnlockService } from "../pay/listing.js";
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
 import { knownFamily } from "./family.js";
-import { deviceLabel, pairUrl } from "./pair.js";
+import { deviceLabel, PAIRING_PAUSED, pairUrl } from "./pair.js";
 import { familyOf } from "./publicSuffix.js";
 import { APP_LIMITS, buyingOpenAt, isLocalAddress, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import type { Profile } from "./profile.js";
@@ -324,6 +324,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       return say(state(ask.id));
     }
     if (ask.t === "pair") {
+      if (PAIRING_PAUSED) return say({ t: "pairing-expired", id: ask.id, why: "paused" });
       // Only where nobody is signed in here, or it is the guest: an account is never written over from a phone.
       if ((pubkey && !guest) || !pairGate.take(Date.now())) return say({ t: "refused", id: ask.id });
       stopPairing();

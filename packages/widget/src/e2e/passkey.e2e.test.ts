@@ -32,6 +32,7 @@ import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
 import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "../../../core/src/nostr/event.js";
 import { NostrSigner } from "../../../core/src/account/signer.js";
 import { sealMessage } from "../embedded/messages.js";
+import { PAIRING_PAUSED, PAUSED_WORDS } from "../embedded/pair.js";
 import { startMockMint } from "../ecash/mockMint.js";
 import { startMockUnlock } from "../pay/mockUnlock.js";
 import { NostrSigner } from "@bitlogin/core/account";
@@ -4262,7 +4263,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       300_000
     );
   }
-  it(
+  // Paused (the owner's "Yes, pause it now", 2026-11-25): this runs again once pairing is open again.
+  it.skipIf(PAIRING_PAUSED)(
     "a headset is signed in from a phone: the number it shows is tapped on the phone, and a wrong one signs nothing in (pair-a-headset.md)",
     async () => {
       // Relays as real ones are: an ephemeral note is passed on to whoever listens, and kept by none.
@@ -4408,5 +4410,78 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       }
     },
     300_000
+  );
+
+  it(
+    "pairing is paused: a headset's pair is answered at once, /pair/ says so, and the phone's worker answers no headset whatever it is given",
+    async () => {
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN) window.heard.push(e.data); });
+  window.post = (message) => frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, ...message }, SIGNIN);
+</script>`;
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        const headset = await browser.newContext();
+        await headset.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: worldPage }));
+        const world = await headset.newPage();
+        await world.goto("https://h1.bitblocks.network/");
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        await world.evaluate(() => (window as any).post({ t: "pair", id: "p1" }));
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.id === "p1"), null, { timeout: 30_000 });
+        const said = (await world.evaluate(() => (window as any).heard.filter((m: any) => m.id === "p1"))) as Record<string, unknown>[];
+        // At once, and with no code: nothing is offered for a phone to answer.
+        expect(said[0]).toMatchObject({ t: "pairing-expired", id: "p1", why: "paused" });
+        expect(said.some((m) => m.t === "pairing")).toBe(false);
+
+        // The phone: signed in, and opening a code from a link. Only the words, and no question.
+        const phone = await browser.newContext();
+        const account = await phone.newPage();
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, `paused-${Date.now().toString(36)}`);
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+        const pair = await phone.newPage();
+        await pair.goto(`${origin}/pair/#K7QF-3MPX`);
+        await pair.locator("#said").filter({ hasText: PAUSED_WORDS }).waitFor({ timeout: 30_000 });
+        for (const step of ["#step-out", "#step-holding", "#step-code", "#step-number", "#step-ask", "#again"]) expect(await pair.locator(step).isVisible(), step).toBe(false);
+
+        // The worker itself, asked by a script on BitLogin's own page, signed in: refused, whatever it is given.
+        // As a string, so the test runner leaves its import() as the browser's own.
+        const refusals = (await pair.evaluate(`(async () => {
+          const { createHeadlessSigner } = await import("/vendor/bitlogin/bitlogin-headless.js");
+          const list = (v) => (v || "").split(",").filter(Boolean);
+          const s = await createHeadlessSigner({ vaultRelays: list(document.documentElement.dataset.vaultRelays), discoveryRelays: list(document.documentElement.dataset.discoveryRelays) });
+          if (!(await s.restore())) return ["not signed in"];
+          const out = [];
+          for (const args of [["", 0], ["${"ab".repeat(32)}", 47], ["x", 47, "https://*.bitblocks.network"], [{}, "47"]]) {
+            try {
+              await s.pairAnswer(...args);
+              out.push("answered");
+            } catch (err) {
+              out.push(String(err && err.message));
+            }
+          }
+          try {
+            await s.pairBegin("https://h1.bitblocks.network", "a browser");
+            out.push("began");
+          } catch (err) {
+            out.push(String(err && err.message));
+          }
+          s.destroy();
+          return out;
+        })()`)) as string[];
+        expect(refusals).toEqual(Array(5).fill(PAUSED_WORDS));
+      } finally {
+        await browser.close();
+      }
+    },
+    240_000
   );
 });

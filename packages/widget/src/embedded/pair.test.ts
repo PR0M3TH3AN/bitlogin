@@ -3,7 +3,8 @@
  * take-back for one device. Each failing before it was built.
  */
 import { describe, expect, it } from "vitest";
-import { codeHash, deviceLabel, makeCode, normalizeCode, numberChoices, PAIR_KIND, pairUrl, readOffer } from "./pair.js";
+import { readFileSync } from "node:fs";
+import { codeHash, deviceLabel, makeCode, normalizeCode, numberChoices, PAIR_KIND, PAIRING_PAUSED, pairingPaused, PAUSED_WORDS, pairUrl, readOffer } from "./pair.js";
 import { isTakenBack, mergeTakenBack, NOTHING_TAKEN_BACK, readTakenBack, takeBack, writeTakenBack } from "./takeBack.js";
 
 const SITE = "https://portal.bitblocks.network";
@@ -104,5 +105,34 @@ describe("a headset on the phone's list of sites", () => {
     expect(readAllowed(JSON.stringify([{ ...headset, deviceLabel: "<b>x</b>" }]), 160)[0]?.deviceLabel).toBeUndefined();
     expect(removeAllowed(list, SITE, pubkey, device)).toEqual([own]);
     expect(removeAllowed(list, SITE, pubkey)).toEqual([headset]);
+  });
+});
+
+describe("pairing, paused (the owner's \"Yes, pause it now\", 2026-11-25)", () => {
+  it("is paused, and says so in words, with a code of its own", () => {
+    expect(PAIRING_PAUSED).toBe(true);
+    expect(PAUSED_WORDS).toBe("Signing in a headset from your phone is paused while we make it safe. Sign in on the headset with the sign-in window instead.");
+    expect(() => pairingPaused()).toThrow(PAUSED_WORDS);
+    try {
+      pairingPaused();
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("paused");
+    }
+  });
+
+  it("refuses in the worker before anything else is read: pairAnswer and pairBegin begin with the pause", () => {
+    const worker = readFileSync(new URL("../worker/cryptoWorker.ts", import.meta.url), "utf8");
+    for (const action of ["pairAnswer", "pairBegin"]) {
+      const start = worker.indexOf(`case "${action}": {`);
+      expect(start, action).toBeGreaterThan(-1);
+      const first = worker.slice(start, worker.indexOf("\n", worker.indexOf("\n", start) + 1));
+      expect(first, action).toContain("if (PAIRING_PAUSED) pairingPaused();");
+    }
+  });
+
+  it("is answered at once in the signer, before a code is made", () => {
+    const signer = readFileSync(new URL("./signer.ts", import.meta.url), "utf8");
+    const at = signer.indexOf('if (ask.t === "pair") {');
+    expect(signer.slice(at, at + 400)).toContain('if (PAIRING_PAUSED) return say({ t: "pairing-expired", id: ask.id, why: "paused" });');
   });
 });

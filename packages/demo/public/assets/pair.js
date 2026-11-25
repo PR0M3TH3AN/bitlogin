@@ -3,7 +3,7 @@
 // number to show, and asks the person to tap the same: only then is "Sign in this headset?" put, and the yes sends
 // the headset what Allow sends a site, sealed to the headset's one-time key, by BitLogin's worker. This page never
 // holds a key. Everything an offer says is written as text, never as markup.
-import { familyDomain, familyOf, knownAppName, knownFamily, normalizeCode, numberChoices, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
+import { familyDomain, familyOf, knownAppName, knownFamily, normalizeCode, numberChoices, PAIRING_PAUSED, PAUSED_WORDS, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -45,8 +45,14 @@ let number = 0;
 let shownCode = "";
 let lockOn = false;
 
-const me = await readCachedSession().catch(() => null);
-if (!me) show("step-out");
+const me = PAIRING_PAUSED ? null : await readCachedSession().catch(() => null);
+// Paused (the owner's "Yes, pause it now", 2026-11-25): nothing is looked for, nothing is asked, and the worker refuses
+// to answer a headset whatever it is given.
+if (PAIRING_PAUSED) {
+  end(PAUSED_WORDS);
+  $("again").hidden = true;
+}
+else if (!me) show("step-out");
 else if (fromLink) show("step-holding");
 else {
   show("step-code");

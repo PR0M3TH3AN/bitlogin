@@ -8,6 +8,12 @@ would plausibly want. Newest first.
 
 ## 2026-11-25
 
+- **Signing in a headset from your phone is paused** the same day it was
+  released: a world draws the code and the number a headset shows, so a
+  hostile one could have them answered for its own headset. A headset's
+  `pair` is answered `pairing-expired` with `why: "paused"` at once, and
+  `client.pair()` resolves false.
+
 - **A headset is signed in from the person's phone** (`docs/pair-a-headset.md`):
   a world sends `pair` to its signer frame and shows the code and a QR of
   `/pair/#CODE`; the phone, signed in to BitLogin, finds it, has the person

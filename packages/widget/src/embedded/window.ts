@@ -23,7 +23,7 @@ export { describePermissions, knownAppName, type AppPermissions, type Permission
 export { declineFamily, describeAllowed, familyDeclined, familyOffer, loadAllowed, recordAllowed, removeAllowed, saveAllowed, type AllowedSite } from "./allowed.js";
 export { familyDomain, familyOf, inFamily, knownFamily };
 export { SIGN_LIMITS, type Asked } from "./policy.js";
-export { normalizeCode, numberChoices, type PairOffer } from "./pair.js";
+export { normalizeCode, numberChoices, PAIRING_PAUSED, PAUSED_WORDS, type PairOffer } from "./pair.js";
 export { describeAsked, type AskedWords } from "./careful.js";
 export { applyChange, keepersOf, readOwnerList, resolveOwnerList, scopeOf, type GuestChange } from "./guests.js";
 export { askLockDevice } from "../lockDevice.js";

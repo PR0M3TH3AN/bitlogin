@@ -313,8 +313,8 @@ export type SignerReply =
   | { t: "pairing"; id: string; code: string; url: string; expires: number; number?: number }
   /** The phone signed this headset in: the signer is unlocked, and says so in `state` too. */
   | { t: "paired"; id: string }
-  /** The code ran out, or the phone said no (a wrong number, or "Not this one"): `why` says which. */
-  | { t: "pairing-expired"; id: string; why?: "refused" }
+  /** The code ran out, the phone said no (a wrong number, or "Not this one"), or pairing is paused: `why` says which. */
+  | { t: "pairing-expired"; id: string; why?: "refused" | "paused" }
   /** Answers `propose` and `wallet` at once: the question is waiting for the person. Show BitLogin's panel or window. */
   | { t: "asking"; id: string }
   /** Answers `wallet`, once the person agreed: the connection this world may use. */
