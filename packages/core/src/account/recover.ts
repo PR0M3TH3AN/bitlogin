@@ -549,6 +549,12 @@ export async function completeRecoveryWithNewCredentials(
         "Another account is already registered with that login name and password. Pick a different one.",
       );
     }
+    // As at registration (2026-11-25): "free" needs every relay asked to have answered to the end with nothing here.
+    if (existingAtLocator.candidates.length === 0 && existingAtLocator.respondedCount !== existingAtLocator.totalCount) {
+      throw new RecoveryFailedError(
+        "Couldn't check that this login name and password are free: not every vault relay answered. Nothing was changed. Try again in a moment.",
+      );
+    }
 
     const nextRecoveryGeneration =
       recovered.currentRecoveryPayload.recovery_generation + 1;

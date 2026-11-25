@@ -139,14 +139,15 @@ export async function changePassword(
   } finally {
     newLocatorCheckPool.closeAll();
   }
-  if (!existingAtNewLocator.quorumMet) {
-    throw new RegistrationFailedError(
-      "Couldn't verify the new password isn't already registered under this login name. Please retry, or add more vault relays.",
-    );
-  }
   if (existingAtNewLocator.candidates.length > 0) {
     throw new AccountAlreadyExistsError(
       "Another account is already registered with this login name and the new password you chose. Pick a different new password.",
+    );
+  }
+  // As at registration (2026-11-25): "free" needs every relay asked to have answered to the end with nothing here.
+  if (!existingAtNewLocator.quorumMet || existingAtNewLocator.respondedCount !== existingAtNewLocator.totalCount) {
+    throw new RegistrationFailedError(
+      "Couldn't check that the new password is free under this login name: not every vault relay answered. Your password wasn't changed. Try again in a moment.",
     );
   }
 

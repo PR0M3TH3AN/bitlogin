@@ -114,16 +114,19 @@ export async function registerAccount(
     } finally {
       checkPool.closeAll();
     }
-    if (!existingCapsule.quorumMet) {
-      throw new RegistrationFailedError(
-        "Couldn't verify this login name and password aren't already registered. Please retry, or add more vault relays.",
-      );
-    }
     // Any validly signed event at this address (decryptable by us or not) required
     // knowing this exact locator private key to publish -- which requires this exact
     // login name + password -- so its mere presence means an account already exists here.
     if (existingCapsule.candidates.length > 0) {
       throw new AccountAlreadyExistsError();
+    }
+    // "Free" needs EVERY relay asked to have answered to the end with nothing here (2026-11-25). A quorum of answers
+    // is not enough: the relays holding an existing account may be the ones that were slow, and registering over it
+    // would destroy that account. A relay that timed out or failed means "couldn't check", and nothing is written.
+    if (!existingCapsule.quorumMet || existingCapsule.respondedCount !== existingCapsule.totalCount) {
+      throw new RegistrationFailedError(
+        "Couldn't check that this login name and password are free: not every vault relay answered. Nothing was registered. Try again in a moment.",
+      );
     }
 
     // §15.3 — validate an imported identity before minting any other account secrets.
