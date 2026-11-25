@@ -49,16 +49,24 @@ let lastHeight = 0;
  * `ready`: it is shown once, at the size its first screen needs, not grown three times as that screen draws itself.
  */
 let holdingSizes = false;
+/** Which showing holds the sizes: each `show` and each `hide` is a new one (2026-11-24). */
+let showing = 0;
 const toClient = (message) => {
   if (!client) return;
   // A size goes with how tall the content is, so a short page is not shown with empty space under it.
   if (message.t === "size") {
+    // Hidden, no size is said or kept as the last one, by any caller: its screens are put away, and the bar alone
+    // would be the height a later showing starts from (2026-11-24).
+    if (document.documentElement.dataset.panelHidden) return;
     lastSize = message.size;
     if (holdingSizes) return;
-    lastHeight = contentHeight();
-    // A frame not drawn has no height to give (2026-11-24): the client's own is kept until it is drawn, and the height
-    // is said then, when the content's size is seen to change.
-    message = lastHeight > 10 && document.documentElement.clientWidth > 0 ? { ...message, height: lastHeight } : message;
+    // A frame not drawn has no height to give (2026-11-24): the client's own is kept until it is drawn. Only a height
+    // said counts as the last one: otherwise a page then drawn at the height measured undrawn would look unchanged,
+    // and its height would never be said.
+    const height = contentHeight();
+    const known = height > 10 && document.documentElement.clientWidth > 0;
+    lastHeight = known ? height : 0;
+    message = known ? { ...message, height } : message;
   }
   window.parent.postMessage(panelMessage(message), client);
 };
@@ -98,7 +106,9 @@ const heightStill = (until) =>
 if (inPanel && typeof ResizeObserver === "function") {
   let waiting = false;
   new ResizeObserver(() => {
-    if (waiting || !client) return;
+    // Hidden, nothing is said: its screens were put away, and the bar alone would become the height said last, to be
+    // said again at the next showing (2026-11-24).
+    if (waiting || !client || document.documentElement.dataset.panelHidden) return;
     waiting = true;
     requestAnimationFrame(() => {
       waiting = false;
@@ -110,6 +120,8 @@ if (inPanel && typeof ResizeObserver === "function") {
 const here = inPanel ? "panel" : "window";
 const status = (text) => {
   $("status").textContent = text;
+  // The press that reloads an out-of-date page goes with the line that says so, and with nothing else.
+  $("reload-updated").hidden = true;
 };
 /** A press sooner than a person could have read the question was meant for the site, and is ignored. */
 const TOO_SOON_MS = 900;
@@ -901,9 +913,11 @@ const openOwnPage = async (mode) => {
   showAccount();
   status(page.signIn);
 };
-$("open-files").addEventListener("click", () => void openOwnPage("files"));
-$("open-ecash").addEventListener("click", () => void openOwnPage("wallet"));
-$("open-library").addEventListener("click", () => void openOwnPage("library"));
+// Opened from the account page, where something may be typed: the person is asked, with one press, before a reload.
+const openFromButton = async (mode) => ((await outOfDate()) ? updated(mode) : openOwnPage(mode));
+$("open-files").addEventListener("click", () => void openFromButton("files"));
+$("open-ecash").addEventListener("click", () => void openFromButton("wallet"));
+$("open-library").addEventListener("click", () => void openFromButton("library"));
 $("account-back").addEventListener("click", () => void leaveAccount());
 $("close").addEventListener("click", () => leave(false));
 
@@ -967,6 +981,9 @@ const letWorkerGo = () => {
 };
 const hide = () => {
   document.documentElement.dataset.panelHidden = "1";
+  // A hold taken at a showing ends with it: its end, still to come, says nothing.
+  showing++;
+  holdingSizes = false;
   if (found?.ask && !finished) void found.answer(null).catch(() => false);
   finished = true;
   found = null;
@@ -987,6 +1004,68 @@ if (inPanel) {
     true
   );
 }
+
+/**
+ * Which build this page is, and whether it is still the one being served (2026-11-24). A shell keeps the panel's
+ * frame between openings, and BitLogin may be released meanwhile: the wallet's, the files' and the purchases' code is
+ * fetched only when it is opened, so a page from the release before would run code from the release after against its
+ * own older page. The owner met it: signed in, and the wallet would not open until he reloaded.
+ */
+const BUILD = document.querySelector('meta[name="bitlogin-build"]')?.getAttribute("content") ?? "";
+/** Whether a newer build is being served than this page's. Not known (offline, slow, an old host): taken as current. */
+const outOfDate = async () => {
+  if (!BUILD) return false;
+  try {
+    const answer = await Promise.race([
+      fetch(new URL(inPanel ? "../../build.json" : "../build.json", location.href), { cache: "no-store" }),
+      new Promise((done) => setTimeout(() => done(null), 1500))
+    ]);
+    if (!answer || !answer.ok) return false;
+    const served = (await answer.json())?.build;
+    return typeof served === "string" && served.length > 0 && served !== BUILD;
+  } catch {
+    return false;
+  }
+};
+/**
+ * What the panel was asked, kept across its own reload, so it comes back to it: the client's address, already heard
+ * from and checked, and the mode. Only this page's own storage holds it, for a minute; messages still go only to that
+ * address and are heard only from it, from the same frame's parent.
+ */
+const RESUME = "bitlogin:panel-resume";
+const resumeAfterReload = () => {
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(RESUME) ?? "null");
+    sessionStorage.removeItem(RESUME);
+    if (!kept || typeof kept.client !== "string" || !(Date.now() - kept.at < 60_000)) return null;
+    // The mode and world are checked as a hello's are: what this page wrote for itself is held to the same rules.
+    const asked = readPanelHello({ bitlogin: "bitlogin-panel", v: 1, t: "hello", mode: kept.mode, ...(typeof kept.world === "string" ? { world: kept.world } : {}) });
+    if (!asked) return null;
+    return { client: kept.client, mode: asked.mode, world: asked.world };
+  } catch {
+    return null;
+  }
+};
+/** Reload this panel, to come back to `mode`. False where nothing can be kept across it: then the person is asked. */
+const bringUpToDate = (mode, world) => {
+  try {
+    sessionStorage.setItem(RESUME, JSON.stringify({ client, mode, world, at: Date.now() }));
+  } catch {
+    return false;
+  }
+  location.reload();
+  return true;
+};
+/** BitLogin was updated while this page was open: one press brings it up to date, and opens what was asked. */
+const updated = (mode) => {
+  status("BitLogin has been updated since this page was opened. Reload it to open this.");
+  $("reload-updated").hidden = false;
+  toClient({ t: "size", size: "tall" });
+  $("reload-updated").onclick = () => {
+    $("reload-updated").hidden = true;
+    if (!inPanel || !bringUpToDate(mode)) location.reload();
+  };
+};
 
 const helloFromClient = () =>
   new Promise((resolve) => {
@@ -1009,7 +1088,9 @@ if (inPanel) {
   document.body.classList.add("panel");
   for (const element of document.querySelectorAll("[data-panel-only]")) element.hidden = false;
   $("panel-me").textContent = location.host;
-  const hello = window.parent === window ? null : await helloFromClient();
+  // Reloaded by itself to be up to date: what it was asked comes back, from the address already checked.
+  const resumed = window.parent === window ? null : resumeAfterReload();
+  const hello = window.parent === window ? null : resumed && panelClientAllowed(resumed.client, location.origin) ? resumed : await helloFromClient();
   if (!hello) {
     for (const element of document.querySelectorAll(".panel-foot, .panel-close")) element.hidden = true;
     status(`This panel is shown inside ${PANEL_CLIENTS.map((origin) => new URL(origin).host).join(" or ")}, where a world asks to sign you in. There is nothing to do here on its own.`);
@@ -1027,6 +1108,15 @@ if (inPanel) {
     holdingSizes = false;
     toClient({ t: "size", size: lastSize });
     toClient({ t: "ready" });
+    // `ready` went with no height (its first screen not yet drawn at the cap): its height is said as soon as there is
+    // one, on a timer, not only when the resize watcher calls, which a page too slow or not drawn may not do for long.
+    if (lastHeight === 0) {
+      const since = performance.now();
+      const look = setInterval(() => {
+        if (lastHeight > 0 || performance.now() - since > 30_000) return clearInterval(look);
+        if (contentHeight() > 10 && document.documentElement.clientWidth > 0) toClient({ t: "size", size: lastSize });
+      }, 200);
+    }
     // Shown from now, by the client: the first moments in which a press is ignored count from here.
     shownAt = performance.now();
     // A client that keeps this panel between openings shows it again, in a mode, and hides it (§SW19.8). Only the
@@ -1037,7 +1127,32 @@ if (inPanel) {
       if (!control) return;
       if (control.t === "hide") return void hide();
       shown();
-      void route(control.mode, control.world);
+      // `show` is heard, and said so at once: a client waits only a moment for a size before it takes the kept frame
+      // for one that doesn't know `show` (BitPortal's shell: 1.5 s), and the check below may take as long on a slow
+      // line (2026-11-24). Said with the height last said, not measured now: at a hide every screen was put away, and
+      // what is left is the bar alone, which would have the panel drawn short and then grown.
+      if (client) window.parent.postMessage(panelMessage({ t: "size", size: lastSize, ...(lastHeight > 0 ? { height: lastHeight } : {}) }), client);
+      // Shown again after a release: brought up to date first, then what was asked. Nothing is in hand at a showing:
+      // every screen was put away when it was hidden.
+      // And what it was shown for is drawn before its size is said again, as at the first `ready`: a screen passing
+      // through "loading" on its way is not said, so the panel isn't shrunk and grown again.
+      holdingSizes = true;
+      // The hold is this showing's: a later showing or a hide takes it over, and this one's end then says nothing.
+      const mine = ++showing;
+      void outOfDate().then(async (stale) => {
+        if (mine !== showing) return;
+        if (stale && bringUpToDate(control.mode, control.world)) return;
+        const until = performance.now() + READY_WAIT_MS;
+        try {
+          await Promise.race([route(control.mode, control.world), new Promise((done) => setTimeout(done, READY_WAIT_MS))]);
+          await heightStill(until);
+        } finally {
+          if (mine === showing) {
+            holdingSizes = false;
+            toClient({ t: "size", size: lastSize });
+          }
+        }
+      });
     });
     await first;
   }
