@@ -27,6 +27,10 @@ Each time `main` moves (added 2026-11-23, after BitPortal found the
    (2026-11-24, after a commit followed a red run unread):
    `scripts/full-check.sh <log> && git commit …`. A run that failed is
    quoted as failed wherever it is quoted, even when a later run passed.
+   The check takes the machine's heavy-run lock first and waits its turn
+   (`scripts/heavy.sh`, fleet rule 14: one heavy run at a time on this
+   machine, across every project). A browser-test run made by hand goes
+   through it too: `sh scripts/heavy.sh npx vitest run <file>`.
 1. Merge to `main` only on the owner's word, with the PR's head pinned.
 2. In `~/Documents/GitHub/bitlogin-main` (a worktree on `main`):
    `git pull --ff-only`, then `npm run build:demo` **and**
