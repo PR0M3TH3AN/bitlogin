@@ -226,6 +226,11 @@ Less than a site's own grant, where the two differ:
    list of families, changed only by a release.)
 2. **Offer it at the first site of a family, or only from the second?**
    **Decided 2026-11-19: from the second, as two buttons** (SF4).
+   **Reversed 2026-11-25, for a world that asks,** by the owner's words
+   through the BitPortal session: "These logins should carry. especialy
+   when on the same domain." A world of a known family may ask for it at
+   its first sign-in, and is offered it there (SF4a). A world that doesn't
+   ask is still offered it from the second.
 3. **Is `bitblocks.network` a known family,** remembered thirty days
    instead of seven? **Decided 2026-11-19: yes.** BitLogin keeps a short
    list of known families beside `KNOWN_APPS`, starting with
