@@ -55,6 +55,15 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     $("ecash-error").hidden = !text;
   };
   let current = "loading";
+  /** When the person last pressed to go to another screen of the wallet: an add finishing behind leaves them there. */
+  let movedAt = 0;
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (e.target instanceof Element && e.target.closest('[id^="ecash-go-"], #ecash-back, #ecash-mints button')) movedAt = performance.now();
+    },
+    true
+  );
   /** Why the last opening failed, while the browser's copy is on screen: nothing that spends is offered meanwhile. */
   let trouble = "";
   const show = (name) => {
@@ -458,6 +467,7 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       e.target.hidden = true;
       $("ecash-invoice").hidden = false;
       const mine = funding;
+      const shownAt = performance.now();
       // Asked once a second while the invoice waits, one ask at a time; stopped once it is paid or runs out.
       let asking = false;
       polling = setInterval(async () => {
@@ -473,14 +483,18 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
         try {
           // "Added" is said once the mint has issued the sats and they are sealed in this browser: from then on they
           // are kept, whatever relays do. Until two relays have them, the note says they are still being sent.
+          // Unless the person pressed to go somewhere else since this invoice was shown (Restore, say): that press is
+          // theirs, and is not undone when the relays answer (2026-11-25: the claim's second redraw took Restore away).
+          const stillHere = () => movedAt < shownAt;
           const added = () => {
-            if (request || funding !== mine) return;
+            if (request || funding !== mine || !stillHere()) return;
             home();
             $("ecash-note").textContent = `Added ${sats(mine.amount)}. Sending to your relays.`;
           };
           if (!(await wallet.claim(mine, added))) return;
           stopPolling();
           if (request) return void goOn();
+          if (!stillHere()) return;
           home();
           $("ecash-note").textContent = wallet.state().unsaved
             ? `Added ${sats(mine.amount)}. Kept in this browser: your relays didn't take it yet, and it is sent again next time.`
