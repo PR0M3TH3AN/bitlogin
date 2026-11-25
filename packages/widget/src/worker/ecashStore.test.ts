@@ -4,7 +4,7 @@ import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import type { NostrEvent, NostrFilter, RelayPublishOutcome } from "@bitlogin/core/nostr";
 import { keepEcashTrial, loadEcash, rollEcash, setEcashMints, type EcashRelays } from "./ecashStore.js";
-import { balances, readToken, TOKEN_KIND, WALLET_KIND } from "../ecash/nip60.js";
+import { balances, readToken, TOKEN_KIND, WALLET_KIND, writeWallet } from "../ecash/nip60.js";
 
 const MINT = "https://mint.example";
 const proof = (secret: string, amount: number) => ({ id: "00ad268c4d1f5826", amount, secret, C: `02${"ab".repeat(32)}` });
@@ -245,5 +245,33 @@ describe("a mint's trial, kept with the wallet record (docs/ecash-seed-counter.m
     await expect(keepEcashTrial(deps, { mint: "https://elsewhere.example", keysetId: KEYSET, outcome: "passed" })).rejects.toThrow();
     await expect(keepEcashTrial(deps, { mint: MINT, keysetId: "x", outcome: "passed" })).rejects.toThrow();
     await expect(keepEcashTrial(deps, { mint: MINT, keysetId: KEYSET, outcome: "maybe" })).rejects.toThrow();
+  });
+});
+
+describe("a wallet record that replaces another (2026-11-24)", () => {
+  const KEYSET = "00ad268c4d1f5826";
+  it("is dated after it, even in the same second, so it can't lose to it", async () => {
+    const deps = setup();
+    const now = Math.floor(Date.now() / 1000);
+    await setEcashMints({ ...deps, now }, [MINT]);
+    // In the very same second, by the clock: a trial kept.
+    await keepEcashTrial({ ...deps, now }, { mint: MINT, keysetId: KEYSET, outcome: "passed" });
+    const records = [...deps.relays.events.values()].filter((e) => e.kind === WALLET_KIND).map((e) => e.created_at).sort();
+    expect(records).toEqual([now, now + 1]);
+    // Another device reads the newer, with the trial in it.
+    expect((await loadEcash({ ...deps, store: new InMemoryKeyValueStore() })).trials).toMatchObject([{ outcome: "passed" }]);
+  });
+
+  it("read from relays, two of the same second: every device takes the one with the lower id", async () => {
+    const deps = setup();
+    const me = deps.signer.getPublicKey();
+    const at = Math.floor(Date.now() / 1000);
+    const make = (mint: string) => deps.signer.signEvent({ kind: WALLET_KIND, created_at: at, tags: [], content: deps.signer.nip44Encrypt(me, writeWallet({ privkey: "cd".repeat(32), mints: [mint] })) });
+    const a = make("https://a.example");
+    const b = make("https://b.example");
+    // The higher id first, as a relay may return it: code with no rule for a tie would take that one.
+    for (const e of [a, b].sort((x, y) => y.id.localeCompare(x.id))) deps.relays.events.set(e.id, e);
+    const lower = a.id < b.id ? "https://a.example" : "https://b.example";
+    for (let i = 0; i < 3; i++) expect((await loadEcash({ ...deps, store: new InMemoryKeyValueStore() })).mints).toEqual([lower]);
   });
 });

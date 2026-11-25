@@ -61,6 +61,8 @@ const localId = (): string => `local:${Array.from(crypto.getRandomValues(new Uin
 interface LocalCopy {
   wallet: EcashWallet | null;
   tokens: EcashToken[];
+  /** When the newest wallet record seen or written was dated: a record that replaces it is dated after (2026-11-24). */
+  walletAt?: number;
 }
 
 async function readLocal(store: KeyValueStore, signer: NostrSigner): Promise<LocalCopy> {
@@ -68,7 +70,7 @@ async function readLocal(store: KeyValueStore, signer: NostrSigner): Promise<Loc
   try {
     const sealed = await store.get(LOCAL_KEY + me);
     if (!sealed) return { wallet: null, tokens: [] };
-    const parsed = JSON.parse(signer.nip44Decrypt(me, sealed)) as { wallet?: unknown; tokens?: unknown };
+    const parsed = JSON.parse(signer.nip44Decrypt(me, sealed)) as { wallet?: unknown; tokens?: unknown; walletAt?: unknown };
     const wallet = typeof parsed.wallet === "string" ? readWallet(parsed.wallet) : null;
     const tokens: EcashToken[] = [];
     for (const item of Array.isArray(parsed.tokens) ? parsed.tokens : []) {
@@ -76,7 +78,7 @@ async function readLocal(store: KeyValueStore, signer: NostrSigner): Promise<Loc
       const proofs = cleanProofs(t.proofs);
       if (typeof t.event === "string" && t.event.length <= 80 && cleanMint(t.mint) && proofs?.length) tokens.push({ event: t.event, mint: cleanMint(t.mint), proofs });
     }
-    return { wallet, tokens };
+    return { wallet, tokens, ...(Number.isSafeInteger(parsed.walletAt) ? { walletAt: parsed.walletAt as number } : {}) };
   } catch {
     // A copy that can't be read is not a reason to lose what relays hold. It is left in place, untouched.
     return { wallet: null, tokens: [] };
@@ -85,7 +87,7 @@ async function readLocal(store: KeyValueStore, signer: NostrSigner): Promise<Loc
 
 async function writeLocal(store: KeyValueStore, signer: NostrSigner, copy: LocalCopy): Promise<void> {
   const me = signer.getPublicKey();
-  await store.set(LOCAL_KEY + me, signer.nip44Encrypt(me, JSON.stringify({ wallet: copy.wallet ? writeWallet(copy.wallet) : null, tokens: copy.tokens })));
+  await store.set(LOCAL_KEY + me, signer.nip44Encrypt(me, JSON.stringify({ wallet: copy.wallet ? writeWallet(copy.wallet) : null, tokens: copy.tokens, ...(copy.walletAt ? { walletAt: copy.walletAt } : {}) })));
 }
 
 const accepted = (outcomes: RelayPublishOutcome[], of: number): boolean => countAcknowledgements(outcomes) >= Math.min(2, of);
@@ -132,7 +134,8 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
       return null;
     }
   };
-  const newestWallet = mine(wallets.outcomes.flatMap((o) => o.events), WALLET_KIND).sort((a, b) => b.created_at - a.created_at)[0];
+  // Newest first; two of the same second, the lower id, as NIP-01 says for replaceable events: every device agrees.
+  const newestWallet = mine(wallets.outcomes.flatMap((o) => o.events), WALLET_KIND).sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
   const wallet = (newestWallet && readWallet(open(newestWallet) ?? "")) || local.wallet;
   const deleted = new Set(mine(deletions.outcomes.flatMap((o) => o.events), 5).flatMap((event) => event.tags.filter((tag) => tag[0] === "e" && typeof tag[1] === "string").map((tag) => tag[1]!)));
   const byId = new Map<string, NostrEvent>();
@@ -146,7 +149,8 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
   // What this browser holds that no relay does: proofs written here and not yet taken by one. They are kept, and
   // sent again now. A proof a relay already has is the relay's: the local copy of it is dropped.
   const known = new Set(onRelays.flatMap((token) => token.proofs.map((proof) => proof.secret)));
-  const next: LocalCopy = { wallet, tokens: [...onRelays] };
+  const walletAt = Math.max(newestWallet?.created_at ?? 0, local.walletAt ?? 0) || undefined;
+  const next: LocalCopy = { wallet, tokens: [...onRelays], ...(walletAt ? { walletAt } : {}) };
   // A saved record the relays that answered didn't return, and didn't delete or replace, is kept here as it was
   // (2026-11-24): the relays holding it may have been slow, or gone. Dropped, its sats would then be on nothing but
   // those relays. Whether they are spent is the mint's to say: the wallet's check asks it, and only then are they
@@ -178,6 +182,9 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
   return state(next, false);
 }
 
+/** A wallet record's date: now, or a second after the record it replaces where the clock says the same or earlier. */
+const datedAfter = (now: number, before: number | undefined): number => Math.max(Math.floor(now), (before ?? 0) + 1);
+
 /** Name the wallet's mints, making the wallet (and a key of its own) where there is none. */
 export async function setEcashMints(deps: { signer: NostrSigner; store: KeyValueStore; relays: EcashRelays; newKey: () => string; now?: number }, mints: unknown): Promise<EcashState> {
   const { signer, store, relays } = deps;
@@ -188,9 +195,10 @@ export async function setEcashMints(deps: { signer: NostrSigner; store: KeyValue
   // The mints change; the trials made of them stay, for whichever of them are still named.
   const trials = (local.wallet?.trials ?? []).filter((t) => clean.includes(t.mint));
   const wallet: EcashWallet = { privkey: local.wallet?.privkey ?? deps.newKey(), mints: clean, ...(trials.length ? { trials } : {}) };
-  const next: LocalCopy = { wallet, tokens: local.tokens };
+  const at = datedAfter(deps.now ?? Date.now() / 1000, local.walletAt);
+  const next: LocalCopy = { wallet, tokens: local.tokens, walletAt: at };
   await writeLocal(store, signer, next);
-  const event = signer.signEvent({ kind: WALLET_KIND, created_at: Math.floor(deps.now ?? Date.now() / 1000), tags: [], content: signer.nip44Encrypt(me, writeWallet(wallet)) });
+  const event = signer.signEvent({ kind: WALLET_KIND, created_at: at, tags: [], content: signer.nip44Encrypt(me, writeWallet(wallet)) });
   const took = accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length);
   if (!took) throw new Error("The wallet was saved in this browser, but no relay took it. Try again when you are online.");
   return state(next, false);
@@ -230,7 +238,7 @@ export async function rollEcash(
     for (let i = 0; i < token.proofs!.length; i += ECASH_LIMITS.proofsWritten) records.push({ event: localId(), mint: token.mint, proofs: token.proofs!.slice(i, i + ECASH_LIMITS.proofsWritten) });
     return records;
   });
-  const next: LocalCopy = { wallet: local.wallet, tokens: [...local.tokens.filter((token) => !destroy.has(token.event)), ...added] };
+  const next: LocalCopy = { wallet: local.wallet, tokens: [...local.tokens.filter((token) => !destroy.has(token.event)), ...added], ...(local.walletAt ? { walletAt: local.walletAt } : {}) };
   // First, here. From this line on, a crash or a dead relay loses nothing.
   await writeLocal(store, signer, next);
   sealed?.(state(next, false));
@@ -276,9 +284,9 @@ export async function keepEcashTrial(deps: { signer: NostrSigner; store: KeyValu
   if (!mint || typeof t?.keysetId !== "string" || !/^[0-9a-f]{16}$|^[0-9a-f]{66}$/u.test(t.keysetId) || (t.outcome !== "passed" && t.outcome !== "failed")) throw new Error("That is not a trial of a mint.");
   const local = await readLocal(store, signer);
   if (!local.wallet || !local.wallet.mints.includes(mint)) throw new Error("That mint is not in this wallet.");
-  const now = Math.floor(deps.now ?? Date.now() / 1000);
+  const now = datedAfter(deps.now ?? Date.now() / 1000, local.walletAt);
   const wallet: EcashWallet = { ...local.wallet, trials: withTrial(local.wallet.trials, { mint, keysetId: t.keysetId, outcome: t.outcome, at: now }) };
-  const next: LocalCopy = { wallet, tokens: local.tokens };
+  const next: LocalCopy = { wallet, tokens: local.tokens, walletAt: now };
   await writeLocal(store, signer, next);
   const event = signer.signEvent({ kind: WALLET_KIND, created_at: now, tags: [], content: signer.nip44Encrypt(me, writeWallet(wallet)) });
   const took = accepted(await relays.publishAll(event, 6000).catch(() => []), relays.relayUrls.length);
