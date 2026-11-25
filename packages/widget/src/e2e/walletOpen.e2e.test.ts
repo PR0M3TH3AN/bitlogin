@@ -505,7 +505,17 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
           await acct().locator('[data-action="goto-lock-settings"]').filter({ hasText: "Lock settings" }).click({ timeout: 30_000 }).catch(() => {});
           await acct().locator('[data-action="lock-off"]').waitFor({ timeout: 20_000 }).catch(() => {});
         }
-        await frame().locator("#account-slot bitlogin-auth").locator('[data-action="lock-off"]').click();
+        await frame()
+          .locator("#account-slot bitlogin-auth")
+          .locator('[data-action="lock-off"]')
+          .click({ timeout: 30_000 })
+          .catch(async (err) => {
+            // What the account page showed instead, for the report: the screen, and what the panel's status said.
+            // The widget draws in a shadow root: its text is read from there.
+            const said = (await acct().evaluate((e) => (e as HTMLElement).shadowRoot?.textContent ?? e.textContent ?? "").catch(() => "")) as string;
+            const status = (await panelFrame()?.evaluate(() => document.getElementById("status")?.textContent ?? "").catch(() => "")) ?? "";
+            throw new Error(`"Turn the lock off" never came. The account page said: ${said.replace(/\s+/gu, " ").slice(0, 600)} | the panel's status: ${status} | ${(err as Error).message.slice(0, 80)}`);
+          });
         await frame().locator("#account-slot bitlogin-auth").locator('[data-action="goto-lock-settings"]').filter({ hasText: "Set up a lock" }).waitFor({ timeout: 60_000 }).catch(() => {});
         keptHere(await wallet("3 sats only in this browser, after the lock and its PIN, the lock then turned off"));
 
