@@ -214,6 +214,17 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         const frame = () => page.frameLocator("#panel");
         const panelFrame = () => page.frames().find((f) => f.url().startsWith(`${signIn.origin}/connect/panel/`));
 
+        /**
+         * The panel drops a press in its first 0.9 s after it is shown, counted from its `ready` (§SW19.8). This test's
+         * shell shows the frame at once, before `ready` (BitPortal keeps it hidden until then), so a press is made only
+         * a second after the panel last said `ready` or a size: never sooner than its guard allows.
+         */
+        const pressable = async () => {
+          await page.waitForFunction(() => (window as any).said.some((m: { t: string }) => m.t === "ready"), undefined, { timeout: 120_000 }).catch(() => {});
+          const last = (await page.evaluate(() => Math.max(0, ...(window as any).said.filter((m: { t: string }) => m.t === "ready" || m.t === "size").map((m: { at: number }) => m.at)))) as number;
+          const wait = last + 1100 - Date.now();
+          if (wait > 0) await sleep(wait);
+        };
         const press = async (mode: string, how: "again" | "kept") => {
           if (how === "kept") {
             await page.evaluate((signin) => {
@@ -277,7 +288,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         await page.mouse.click(60, 20);
         const widget = frame().locator("#account-slot bitlogin-auth");
         await widget.locator('[data-action="goto-create"]').waitFor({ timeout: 60_000 });
-        await sleep(1000);
+        await pressable();
         await widget.locator('[data-action="goto-create"]').click();
         const loginName = `wallet-${Date.now().toString(36)}`;
         await widget.locator('form[data-form="create-name"] input[name="loginName"]').fill(loginName);
@@ -303,7 +314,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         await press("wallet", "again");
         await frame().locator('[data-ecash="setup"], [data-ecash="home"]').filter({ visible: true }).first().waitFor({ timeout: 60_000 });
         await frame().locator("#ecash-mint").fill(mint.url);
-        await sleep(1000);
+        await pressable();
         await frame().locator('#ecash-mint-form button[type="submit"]').click();
         await frame()
           .locator('[data-ecash="home"]')
@@ -342,14 +353,14 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         relays("noWrites");
         for (let i = 0; i < Number(process.env.BITLOGIN_WALLET_UNSAVED ?? "10"); i++) {
           // A press in the first 0.9 s after the panel is shown is ignored (§SW19.8).
-          await sleep(1000);
+          await pressable();
           await frame().locator("#ecash-go-fund").click();
           await frame().locator("#ecash-fund-amount").fill("1");
           await frame().locator('#ecash-fund-form button[type="submit"]').click();
           await frame().locator("#ecash-qr svg").waitFor({ timeout: 30_000 });
           mint.payAllFunding();
           await frame().locator("#ecash-note").filter({ hasText: /^Added 1 sats?\. Kept in this browser/u }).waitFor({ timeout: 60_000 });
-          await sleep(1000);
+          await pressable();
         }
         const onlyHere = await wallet("records only in this browser, relays that read and never answer a write");
         // The sats no relay has yet are counted and said plainly, with what not to do meanwhile.
@@ -366,7 +377,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         expect(String(broken.text)).toMatch(/^Your wallet couldn't be opened\. Part of BitLogin's page couldn't be loaded.* Nothing was changed\.$/u);
         expect(await frame().locator("#ecash-retry").isVisible()).toBe(true);
         await context.unroute("**/vendor/bitlogin/bitlogin-ecash.js");
-        await sleep(1000);
+        await pressable();
         await frame().locator("#ecash-retry").click();
         await frame().locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
         expect(await frame().locator("#ecash-total").textContent()).toBe("30");
@@ -383,7 +394,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         expect(await frame().locator("#ecash-retry").isVisible()).toBe(true);
         expect(await frame().locator("#ecash-go-fund").isDisabled()).toBe(true);
         await panelFrame()!.evaluate(() => ((window as any).failEcashLoad = false, sessionStorage.removeItem("failEcashLoad")));
-        await sleep(1000);
+        await pressable();
         await frame().locator("#ecash-retry").click();
         await frame().locator("#ecash-note").filter({ hasText: "Kept with your account" }).waitFor({ timeout: 60_000 });
         expect(await frame().locator("#ecash-go-fund").isDisabled()).toBe(false);
@@ -402,7 +413,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         relays("noWrites");
         const fund = async (n: number) => {
           for (let i = 0; i < n; i++) {
-            await sleep(1000);
+            await pressable();
             await frame().locator("#ecash-go-fund").click();
             await frame().locator("#ecash-fund-amount").fill("1");
             await frame().locator('#ecash-fund-form button[type="submit"]').click();
@@ -435,7 +446,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         keptHere(await wallet("3 sats only in this browser, the panel closed and opened again"));
         // Signed out, and in again with the password.
         await press("account", "again");
-        await sleep(1000);
+        await pressable();
         // A press in the panel's first 0.9 s after it is shown is ignored (§SW19.8), and under load that moment comes
         // late: pressed again until it takes.
         const acct = () => frame().locator("#account-slot bitlogin-auth");
@@ -451,7 +462,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         keptHere(await wallet("3 sats only in this browser, after signing out and in"));
         // The lock: turned on, locked, and opened with its PIN.
         await press("account", "again");
-        await sleep(1000);
+        await pressable();
         for (let i = 0; i < 10 && !(await acct().locator('input[name="newLockPin"]').isVisible()); i++) {
           await acct().locator('[data-action="goto-lock-settings"]').click({ timeout: 60_000 }).catch(() => {});
           await acct().locator('input[name="newLockPin"]').waitFor({ timeout: 20_000 }).catch(() => {});
@@ -479,7 +490,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
           const said = asked ? "" : ((await panelFrame()?.evaluate(() => document.body.innerText.replace(/\s+/gu, " ").slice(0, 200)).catch(() => "")) ?? "");
           results.push({ condition: `${condition}: the PIN asked`, asked, said });
           expect({ asked, said }).toEqual({ asked: true, said: "" });
-          await sleep(1000);
+          await pressable();
           await frame().locator("#unlock-pin").fill("pin-428517");
           await frame().locator("#unlock-go").click();
           // Opening the lock derives its key from the PIN, slowly on purpose: under a full run's load, it takes a while.
@@ -494,7 +505,7 @@ describe.skipIf(!playwright)("the wallet opened while relays and the mint misbeh
         // And with the lock turned off, the same sats.
         await press("account", "again");
         await frame().locator("#account-slot bitlogin-auth").locator('form[data-form="lock-open"]').waitFor({ timeout: 60_000 });
-        await sleep(1000);
+        await pressable();
         await frame().locator("#account-slot bitlogin-auth").locator('input[name="lockPin"]').fill("pin-428517");
         await frame().locator("#account-slot bitlogin-auth").locator('form[data-form="lock-open"] button[type="submit"]').click();
         // Straight after the PIN, the account page may not yet have read that the lock is on: its button says "Set up
