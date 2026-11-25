@@ -326,6 +326,8 @@ export interface SignerSitePayload {
   site: string;
   /** For signerRestore: the family the site is in, by the embedded signer's Public Suffix List. Its grant is taken up where the site has none of its own. */
   family?: string;
+  /** For signerRestore: make the family's guest account where nobody is signed in here and none is kept (docs/guest-accounts.md). */
+  guest?: boolean;
 }
 
 export interface SignerTouchPayload {
@@ -354,6 +356,8 @@ export interface SignerRestoreResult {
   signedSensitive?: number[];
   /** What this world was let do beyond a note and a reaction, by name. */
   more?: WorldMore[];
+  /** A guest account (docs/guest-accounts.md), not yet secured. */
+  guest?: boolean;
 }
 
 // ---- The optional lock (docs/sign-in-window.md §SW12) ----

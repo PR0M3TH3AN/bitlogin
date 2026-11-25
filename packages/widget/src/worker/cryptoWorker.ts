@@ -54,9 +54,9 @@ import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSession
 import { describe as describeKept, forget as forgetKept, keep as keepKept, loadKept, saveKept } from "./keptAccounts.js";
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
-import { inFamily, readFamily } from "../embedded/family.js";
+import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
 import { isLocalAddress, isSignInAddress, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
-import { createSignGate, HELD_MOST, signClass } from "../embedded/policy.js";
+import { createSignGate, HELD_MOST, prepareForGuest, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
 import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
 import { ACHIEVEMENT_LIMITS, achievementForWorld } from "../embedded/achievements.js";
@@ -74,6 +74,10 @@ import { blossomAuth, loadDrive, peekDrive, rankServers, saveDrive, SERVER_LIST_
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
 import { deleteSignerGrant, grantedAt, grantSite, grantsToKeep, keepSecFor, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import { loadGuest, makeGuest } from "./guestRecord.js";
+
+/** How long a guest's signer stays unlocked in one page before it takes the guest up again: a day. */
+const GUEST_SESSION_SEC = 24 * 3600;
 import {
   checkDue,
   checkLearned,
@@ -188,6 +192,8 @@ interface SessionState {
   family: string | null;
   /** The family an application's own grant was allowed with in the same press (SF5a): a sign-out here ends it too. */
   memberOf: string | null;
+  /** For a signer-only session: the family whose guest account this is (docs/guest-accounts.md), or null. */
+  guest: string | null;
   /** For a signer-only session serving a world: what the user let it do beyond a note and a reaction, by name. */
   more: readonly string[];
 }
@@ -213,6 +219,7 @@ const session: SessionState = {
   relays: [],
   family: null,
   memberOf: null,
+  guest: null,
   more: []
 };
 
@@ -382,6 +389,7 @@ function clearSession(): void {
   session.relays = [];
   session.family = null;
   session.memberOf = null;
+  session.guest = null;
   session.more = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
@@ -929,7 +937,25 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const ownGrant = await loadSignerGrant(store, p.site, Date.now() / 1000);
       const family = !ownGrant && p.family !== undefined && readFamily(p.family) && inFamily(p.site, p.family) ? p.family : null;
       const grant = ownGrant ?? (family ? await loadSignerGrant(store, family, Date.now() / 1000) : null);
-      if (!grant || (family && grant.site !== family)) return { restored: false };
+      // Nobody signed in here for the site or its family: its guest account, for a family BitLogin knows
+      // (docs/guest-accounts.md). Taken up where one is kept; made only where the site asked for one. An account wins.
+      if (!grant || (family && grant.site !== family)) {
+        const guestFamily = p.family !== undefined && readFamily(p.family) && inFamily(p.site, p.family) && knownFamily(p.family) ? p.family : null;
+        const guest = guestFamily ? (p.guest === true ? await makeGuest(store, guestFamily).catch(() => null) : await loadGuest(store, guestFamily)) : null;
+        if (!guest) return { restored: false };
+        clearSession();
+        session.signer = new NostrSigner(guest.key);
+        session.everydayPrivateKey = guest.key;
+        session.signerOnly = true;
+        session.app = null;
+        session.site = p.site;
+        session.guest = guestFamily;
+        session.remember = false;
+        session.profile = null;
+        session.relays = [];
+        session.more = [];
+        return { restored: true, everydayPublicKey: session.signer.getPublicKey(), until: Math.floor(Date.now() / 1000) + GUEST_SESSION_SEC, signed: [], guest: true };
+      }
       clearSession();
       session.signer = new NostrSigner(grant.everydayPrivateKey);
       session.everydayPrivateKey = grant.everydayPrivateKey;
@@ -1210,7 +1236,8 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
         site: session.site,
         identity: signer.getPublicKey(),
         nowSeconds: Date.now() / 1000,
-        profile: session.profile
+        profile: session.profile,
+        guest: !!session.guest
       });
       if (!pass) throw new Error("refused");
       return signer.signEvent(pass);
@@ -1736,6 +1763,12 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
         // the rest of that site's rules stay with the page.
         if (session.app) {
           const allowed = prepareForApp(session.app.permissions, p, session.app.site, Date.now() / 1000);
+          if (!allowed) throw new Error("refused");
+          return signer.signEvent(allowed);
+        }
+        // A guest account: a note, a reaction and its bag, and nothing else (docs/guest-accounts.md G4).
+        if (session.guest) {
+          const allowed = session.site ? prepareForGuest(p, session.site, Date.now() / 1000) : null;
           if (!allowed) throw new Error("refused");
           return signer.signEvent(allowed);
         }
