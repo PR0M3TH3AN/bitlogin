@@ -22,6 +22,8 @@ import {
   familyDeclined,
   familyDomain,
   familyOffer,
+  familyOf,
+  knownFamily,
   findEmbeddedSigner,
   applyChange,
   keepersOf,
@@ -724,6 +726,8 @@ const showAccount = () => {
     });
     widget.addEventListener("bitlogin-login", async () => {
       who = await readCachedSession();
+      // Signed in, or the guest secured: no longer a guest here.
+      $("guest").hidden = true;
       startOver();
     });
     $("account-slot").replaceChildren(widget);
@@ -731,6 +735,35 @@ const showAccount = () => {
   status("");
   $("account").hidden = false;
   toClient({ t: "size", size: "tall" });
+  void showGuest();
+};
+
+/**
+ * A guest (docs/guest-accounts.md G8): where nobody is signed in here, and this browser keeps a guest account for
+ * the client's family, the panel says so, says how long a guest lasts in this browser, and offers to secure it.
+ * Only in the panel, for a client in a family BitLogin knows. In Brave, which forgets a framed site's storage when
+ * it closes, that is said always: a page can tell it is Brave, not whether its shields are up for this site.
+ */
+let wantedOwn = "";
+const showGuest = async () => {
+  $("guest").hidden = true;
+  const family = inPanel && client ? familyOf(client) : "";
+  if (who || !family || !knownFamily(family)) return;
+  const kept = await (await theWorker()).guestStatus(family).catch(() => null);
+  if (!kept || who) return;
+  const brave = typeof navigator.brave?.isBrave === "function";
+  $("guest-keep").textContent = brave
+    ? "This browser forgets guests when it closes. Secure this account to keep it."
+    : "This account lives in this browser only. Clearing this site's data loses it.";
+  // The wallet, Files and purchases are for a secured account: nothing of value lives in a guest's browser alone.
+  $("guest-first").hidden = !["wallet", "files", "library"].includes(wantedOwn);
+  $("guest-secure").onclick = () => {
+    const widget = $("account-slot").firstChild;
+    if (!widget || typeof widget.secureGuest !== "function") return;
+    $("guest").hidden = true;
+    widget.secureGuest(family);
+  };
+  $("guest").hidden = false;
 };
 const leaveAccount = async () => {
   $("account").hidden = true;
@@ -915,6 +948,7 @@ const OWN_PAGES = {
  * PIN typed there opens that one alone: this one used to stay locked, and the wallet said "Sign in first".
  */
 const openOwnPage = async (mode) => {
+  wantedOwn = mode;
   const page = OWN_PAGES[mode];
   who = await readCachedSession();
   // A panel shown again, for the account its worker already took up, needn't take it up again: that would wait

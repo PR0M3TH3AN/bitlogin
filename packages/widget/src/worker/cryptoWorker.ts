@@ -74,7 +74,7 @@ import { blossomAuth, loadDrive, peekDrive, rankServers, saveDrive, SERVER_LIST_
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
 import { deleteSignerGrant, grantedAt, grantSite, grantsToKeep, keepSecFor, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
-import { loadGuest, makeGuest } from "./guestRecord.js";
+import { forgetGuest, loadGuest, makeGuest } from "./guestRecord.js";
 
 /** How long a guest's signer stays unlocked in one page before it takes the guest up again: a day. */
 const GUEST_SESSION_SEC = 24 * 3600;
@@ -930,6 +930,14 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
 
     // The site's page was loaded again: what was kept for that site, if it is still in date, becomes a
     // signer-only session. It touches nothing a full session uses.
+    // Whether a guest is kept here for a family: its public key, and nothing else of it. For BitLogin's own panel,
+    // which says so and offers to secure it (docs/guest-accounts.md G3, G8).
+    case "guestStatus": {
+      const family = (payload as { family?: unknown }).family;
+      const guest = typeof family === "string" && readFamily(family) ? await loadGuest(store, family) : null;
+      return guest ? { pubkey: getPublicKeyHex(guest.key) } : {};
+    }
+
     case "signerRestore": {
       const p = payload as SignerSitePayload;
       // The site's own grant first. Where it has none, the family's, for a site in that family: the embedded
@@ -1582,9 +1590,21 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
 
     case "register": {
       const p = payload as RegisterPayload;
+      // Securing a guest (docs/guest-accounts.md G6): made from the guest's own phrase, so its key is the guest's.
+      const fromGuest = p.fromGuest !== undefined && !p.importKey && readFamily(p.fromGuest) && knownFamily(p.fromGuest) ? p.fromGuest : null;
+      if (p.fromGuest !== undefined && !fromGuest) throw new Error("That is not a guest account kept here.");
+      const guest = fromGuest ? await loadGuest(store, fromGuest) : null;
+      if (fromGuest && !guest) throw new Error("No guest account is kept here to secure.");
       const result = p.importKey
         ? await importAccount({ nsecOrHex: p.importKey, loginName: p.loginName, password: p.password, vaultRelayUrls })
-        : await registerAccount({ loginName: p.loginName, password: p.password, vaultRelayUrls });
+        : await registerAccount({ loginName: p.loginName, password: p.password, vaultRelayUrls, ...(guest ? { recoveryPhrase: guest.phrase } : {}) });
+      if (fromGuest) {
+        // The family is signed in as the account now, by the family's grant, as SF4's is: the guest is forgotten,
+        // and every world of the family takes the account up, the same key, no longer a guest.
+        const now = Date.now() / 1000;
+        await saveSignerGrant(store, { site: fromGuest, everydayPrivateKey: result.everydayPrivateKey, until: Math.floor(now) + keepSecFor(fromGuest), at: Math.floor(now), signed: [] }, now);
+        await forgetGuest(store, fromGuest);
+      }
       clearSession();
       session.signer = new NostrSigner(result.everydayPrivateKey);
       session.everydayPrivateKey = result.everydayPrivateKey;
@@ -2389,7 +2409,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
   "handoffBegin", "handoffExport", "handoffAccept",
-  "signerKeep", "signerRestore", "signerTouch", "signerForget", "signerHold", "signerHeld",
+  "signerKeep", "signerRestore", "guestStatus", "signerTouch", "signerForget", "signerHold", "signerHeld",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",

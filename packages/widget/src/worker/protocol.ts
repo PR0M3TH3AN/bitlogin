@@ -26,6 +26,11 @@ export interface RegisterPayload {
   password: string;
   /** When present, import this existing identity (nsec or 64-char hex) instead of generating one (§SF10). */
   importKey?: string;
+  /**
+   * Secure this family's guest account (docs/guest-accounts.md G6): the account is made from the guest's own phrase,
+   * so its key is the guest's, and the family is then signed in as it, the guest forgotten.
+   */
+  fromGuest?: string;
 }
 export interface RegisterResult {
   recoveryPhrase: string;
@@ -574,6 +579,8 @@ export type WorkerActionMap = {
   handoffAccept: [HandoffSealed, HandoffAcceptResult];
   signerKeep: [SignerKeepPayload, { kept: boolean }];
   signerRestore: [SignerSitePayload, SignerRestoreResult];
+  /** Whether a guest account is kept here for a family, by its public key alone (docs/guest-accounts.md G3). */
+  guestStatus: [{ family: string }, { pubkey?: string }];
   signerTouch: [SignerTouchPayload, Record<string, never>];
   signerForget: [SignerSitePayload, Record<string, never>];
   /** Keep, and read back, the receipts BitLogin's page handed a site's signer. A signer-only session only. */

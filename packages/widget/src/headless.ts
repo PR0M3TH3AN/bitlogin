@@ -248,6 +248,8 @@ export interface HeadlessSigner {
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
   forgetSignerGrant(site: string): Promise<void>;
+  /** Whether a guest account is kept here for a family: its public key, or null (docs/guest-accounts.md). */
+  guestStatus(family: string): Promise<string | null>;
   /** In the embedded signer: keep, and read back, the receipts BitLogin's own page handed it for this site (docs/paying.md). */
   holdReceipts(site: string, receipts: NostrEvent[]): Promise<void>;
   heldReceipts(site: string): Promise<NostrEvent[]>;
@@ -531,6 +533,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async forgetSignerGrant(site) {
       await client.signerForget({ site });
+    },
+    async guestStatus(family) {
+      return (await client.guestStatus(family)).pubkey ?? null;
     },
     async logout() {
       await client.logout();

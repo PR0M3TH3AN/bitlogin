@@ -360,6 +360,9 @@ export class WorkerClient {
   signerRestore(payload: SignerSitePayload) {
     return this.call("signerRestore", payload);
   }
+  guestStatus(family: string) {
+    return this.call("guestStatus", { family });
+  }
   signerTouch(payload: SignerTouchPayload) {
     return this.call("signerTouch", payload);
   }

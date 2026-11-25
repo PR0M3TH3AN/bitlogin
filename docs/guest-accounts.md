@@ -1,8 +1,9 @@
 # Guest accounts in BitLogin
 
 **Date:** 2026-11-25. **Status:** agreed by the owner ("Yes to both": a guest's bag with no press; a world may
-refuse guests). Built on `release/guest-accounts`, part one: the guest made, kept and served, its bag, the pass,
-the client's `guest`. Part two, still to build: the panel's guest line and "Secure this account" (G6, G8).
+refuse guests). Built on `release/guest-accounts`: the guest made, kept and served, its bag, the pass, the
+client's `guest` (part one); the panel's guest line, in Brave's words where it is Brave, and "Secure this account",
+made from the guest's own phrase and signing the family in as the account (part two).
 
 For NSWP `docs/backlog/guest-accounts.md` (the owner's decisions of 2026-11-23) and the owner's ask of
 2026-11-25: "the bag is still locked behind a signing. It should be available with our starter items to any guest".
