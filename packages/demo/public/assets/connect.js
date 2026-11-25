@@ -70,6 +70,9 @@ const toClient = (message) => {
   }
   window.parent.postMessage(panelMessage(message), client);
 };
+/** The screens that say something is still being opened: the wallet's, the files' and a purchase's. */
+const LOADING = '[data-ecash="loading"], [data-files="loading"], [data-shop="loading"]';
+const loadingShown = () => [...document.querySelectorAll(LOADING)].some((e) => !e.hidden && !e.closest("[hidden]"));
 /** The most the first `ready` waits for the first screen: well inside the six seconds a client gives a panel. */
 const READY_WAIT_MS = 3000;
 /** How long the content's height must stay as it is for the first screen to count as drawn. */
@@ -86,7 +89,9 @@ const heightStill = (until) =>
     const look = setInterval(() => {
       const now = performance.now();
       const next = contentHeight();
-      if (Math.abs(next - height) > 4) {
+      // A screen still loading isn't the one to be shown: its height is passed through, not said (2026-11-24, seen under
+      // load: the wallet's "Opening your wallet" stood long enough to count as still, and its height was said).
+      if (Math.abs(next - height) > 4 || loadingShown()) {
         height = next;
         since = now;
       }
