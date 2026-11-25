@@ -240,12 +240,16 @@ export interface HeadlessSigner {
   restoreSignerGrant(
     site: string,
     /** The family the site is in (publicSuffix.ts): its grant is taken up where the site has none of its own. */
-    family?: string
-  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; more?: WorldMore[]; permissions?: AppPermissions; signedSensitive?: number[] } | null>;
+    family?: string,
+    /** Make the family's guest account where nobody is signed in here and none is kept (docs/guest-accounts.md). */
+    guest?: boolean
+  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; more?: WorldMore[]; permissions?: AppPermissions; signedSensitive?: number[]; guest?: boolean } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
   forgetSignerGrant(site: string): Promise<void>;
+  /** Whether a guest account is kept here for a family: its public key, or null (docs/guest-accounts.md). */
+  guestStatus(family: string): Promise<string | null>;
   /** In the embedded signer: keep, and read back, the receipts BitLogin's own page handed it for this site (docs/paying.md). */
   holdReceipts(site: string, receipts: NostrEvent[]): Promise<void>;
   heldReceipts(site: string): Promise<NostrEvent[]>;
@@ -500,8 +504,8 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async keepSignerGrant(grant) {
       return (await client.signerKeep(grant)).kept;
     },
-    async restoreSignerGrant(site, family) {
-      const res = await client.signerRestore({ site, ...(family ? { family } : {}) });
+    async restoreSignerGrant(site, family, guest) {
+      const res = await client.signerRestore({ site, ...(family ? { family } : {}), ...(guest ? { guest: true } : {}) });
       if (!res.restored || !res.everydayPublicKey || typeof res.until !== "number") return null;
       pubkey = res.everydayPublicKey;
       return {
@@ -514,7 +518,8 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
         ...(res.check ? { check: res.check } : {}),
         ...(res.family ? { family: res.family } : {}),
         ...(res.more?.length ? { more: res.more } : {}),
-        ...(res.permissions ? { permissions: res.permissions, signedSensitive: res.signedSensitive ?? [] } : {})
+        ...(res.permissions ? { permissions: res.permissions, signedSensitive: res.signedSensitive ?? [] } : {}),
+        ...(res.guest ? { guest: true } : {})
       };
     },
     async touchSignerGrant(site, signed, signedSensitive, signedPass) {
@@ -528,6 +533,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async forgetSignerGrant(site) {
       await client.signerForget({ site });
+    },
+    async guestStatus(family) {
+      return (await client.guestStatus(family)).pubkey ?? null;
     },
     async logout() {
       await client.logout();

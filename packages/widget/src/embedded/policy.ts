@@ -130,6 +130,17 @@ export function prepareForSite(input: unknown, site: string, nowSeconds: number)
 }
 
 /**
+ * What a guest account's signer signs with no press (docs/guest-accounts.md G4, the owner's word of 2026-11-25): a
+ * note and a reaction, as any site may, and its bag (NSWP-17: kind 37308, `d` "bag"), and nothing else.
+ */
+export const GUEST_BAG_KIND = 37308;
+export function prepareForGuest(input: unknown, site: string, nowSeconds: number): UnsignedForSite | null {
+  const e = input as { kind?: unknown; tags?: unknown } | null;
+  const bag = e?.kind === GUEST_BAG_KIND && Array.isArray(e.tags) && e.tags.some((t) => Array.isArray(t) && t[0] === "d") && e.tags.filter((t) => Array.isArray(t) && t[0] === "d").every((t) => (t as unknown[])[1] === "bag" && (t as unknown[]).length === 2);
+  return prepare(input, site, nowSeconds, (kind) => signClass(kind) === "ordinary" || (kind === GUEST_BAG_KIND && bag));
+}
+
+/**
  * The same, for a careful kind that may be put to the person (§SW20). It signs nothing and allows nothing: it is
  * what BitLogin's own page will show them, word for word, and what is signed if they say yes there.
  */
@@ -236,7 +247,7 @@ export type SignerRequest =
    * under its domain. Written as BitLogin writes a family, or "" where it isn't one. It approves nothing: the signer
    * takes it only for its own family, one BitLogin knows, and the window offers it beside "Just this one".
    */
-  | { t: "wantFamily"; id: string; family: string }
+  | { t: "wantFamily"; id: string; family: string; /** And a guest account, where nobody is signed in here (docs/guest-accounts.md). */ guest?: true }
   /** Follow or unfollow one person: the visitor's newest follow list as the world found it (or null), and the one change. */
   | { t: "follow"; id: string; list: unknown; add?: string; remove?: string }
   /** A score on one of a world's boards (NSWP-15; scores.ts). For any world its visitor allowed: less than a note. */
@@ -276,6 +287,10 @@ export type SignerReply =
       taken?: boolean;
       /** In answer to a `want` for a family only: whether the window will offer it. Approves nothing. */
       familyTaken?: boolean;
+      /** In answer to a `want` for a guest: whether this signer is, or will be, a guest here (docs/guest-accounts.md). */
+      guestTaken?: boolean;
+      /** This signer is a guest account: made by BitLogin for a visitor who arrived signed out, not yet secured. */
+      guest?: true;
     }
   | { t: "signed"; id: string; event: NostrEvent }
   /** Answers `propose` and `wallet` at once: the question is waiting for the person. Show BitLogin's panel or window. */
@@ -338,7 +353,7 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   // A world asking for more, by name. A message that carries a permission set is an application's, below.
   if (d.t === "want" && d.permissions === undefined && Array.isArray(d.more)) return { t: "wantMore", id: d.id, more: cleanMore(d.more) };
   // A world asking for its family, and nothing else with it.
-  if (d.t === "want" && d.permissions === undefined && d.more === undefined && d.family !== undefined) return { t: "wantFamily", id: d.id, family: readFamily(d.family) };
+  if (d.t === "want" && d.permissions === undefined && d.more === undefined && d.family !== undefined) return { t: "wantFamily", id: d.id, family: readFamily(d.family), ...(d.guest === true ? { guest: true as const } : {}) };
   if (d.t === "follow" && (d.list === null || (!!d.list && typeof d.list === "object"))) {
     const add = typeof d.add === "string" && HEX64.test(d.add);
     const remove = typeof d.remove === "string" && HEX64.test(d.remove);

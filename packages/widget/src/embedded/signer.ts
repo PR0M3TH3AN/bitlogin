@@ -45,6 +45,7 @@ import {
   type Asked,
   createSignGate,
   handoffMessage,
+  prepareForGuest,
   prepareForSite,
   readHandoffMessage,
   readSignerRequest,
@@ -199,6 +200,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     remembered = false;
     app = null;
     more = [];
+    guest = false;
     forgetHeld();
     if (was) void (forSite ? was.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => was.destroy());
   };
@@ -208,26 +210,34 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
    * again is answered "unlocked" from the first question.
    */
   let remembering: Promise<void> | null = null;
+  /** This signer is a guest account (docs/guest-accounts.md): its bag with no press, nothing more than a site's else. */
+  let guest = false;
+  /** Take up what is kept, or (`makeGuest`) the family's guest account where nobody is signed in here. */
+  const takeUp = async (makeGuest = false): Promise<void> => {
+    if (!site) return;
+    const kept = await (await load()).restoreSignerGrant(site, familyOf(site) || undefined, makeGuest);
+    if (!kept) return;
+    guest = kept.guest === true;
+    pubkey = kept.pubkey;
+    name = kept.name ?? null;
+    profile = kept.profile ?? null;
+    until = kept.until;
+    // A guest isn't a grant kept for the site: nothing was allowed, so nothing is "remembered".
+    remembered = !guest;
+    app = kept.permissions ?? null;
+    more = app ? [] : (kept.more ?? []);
+    if (app) gates = appGates(kept.signed, kept.signedSensitive);
+    else gate = createSignGate(SIGN_LIMITS, kept.signed);
+    // Too long unchecked: the answer waits for the check. Otherwise the check is made behind the answer.
+    if (kept.check === "overdue") await checkTakenBack();
+    else if (kept.check === "due") void checkTakenBack();
+    passGate = createSignGate(passLimits, kept.signedPass);
+    await takeUpHeld();
+  };
   const remember = (): Promise<void> =>
     (remembering ??= (async () => {
-      if (!site) return;
       try {
-        const kept = await (await load()).restoreSignerGrant(site, familyOf(site) || undefined);
-        if (!kept) return;
-        pubkey = kept.pubkey;
-        name = kept.name ?? null;
-        profile = kept.profile ?? null;
-        until = kept.until;
-        remembered = true;
-        app = kept.permissions ?? null;
-        more = app ? [] : (kept.more ?? []);
-        if (app) gates = appGates(kept.signed, kept.signedSensitive);
-        else gate = createSignGate(SIGN_LIMITS, kept.signed);
-        // Too long unchecked: the answer waits for the check. Otherwise the check is made behind the answer.
-        if (kept.check === "overdue") await checkTakenBack();
-        else if (kept.check === "due") void checkTakenBack();
-        passGate = createSignGate(passLimits, kept.signedPass);
-        await takeUpHeld();
+        await takeUp();
       } catch {
         /* nothing kept, or no storage here: the user is asked, as before */
       }
@@ -242,6 +252,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       ...(id ? { id } : {}),
       unlocked: !!pubkey,
       ...(pubkey ? { pubkey, until, remembered } : {}),
+      ...(pubkey && guest ? { guest: true as const } : {}),
       // The name in their own signed profile, where they have one; else the name the sign-in address knew them by.
       ...(pubkey && (profile?.name || name) ? { name: profile?.name || name! } : {}),
       ...(pubkey && profile?.picture ? { picture: profile.picture } : {}),
@@ -275,7 +286,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (ask.t === "wantFamily") {
       // Only its own family, as the browser's address for it says, and one BitLogin knows. It approves nothing.
       familyAsked = !!ask.family && ask.family === familyOf(site) && knownFamily(ask.family);
-      return say({ ...(state(ask.id) as Extract<SignerReply, { t: "state" }>), familyTaken: familyAsked });
+      // And its guest account, where nobody is signed in here: made at once, with nothing pressed. An account wins.
+      if (ask.guest && familyAsked && !pubkey) await takeUp(true).catch(() => {});
+      return say({ ...(state(ask.id) as Extract<SignerReply, { t: "state" }>), familyTaken: familyAsked, ...(ask.guest ? { guestTaken: familyAsked && guest && !!pubkey } : {}) });
     }
     if (ask.t === "wantMore") {
       // Remembered for the window to show, in BitLogin's own words. It approves nothing.
@@ -409,7 +422,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
 
     // "sign".
     const now = Date.now();
-    const prepared = app ? prepareForApp(app, ask.event, site, now / 1000) : prepareForSite(ask.event, site, now / 1000);
+    const prepared = app ? prepareForApp(app, ask.event, site, now / 1000) : guest ? prepareForGuest(ask.event, site, now / 1000) : prepareForSite(ask.event, site, now / 1000);
     if (!prepared) return refuse();
     const counted = app ? limitClass(prepared.kind) : null;
     if (!(counted ? gates[counted] : gate).take(now)) return refuse();
@@ -502,6 +515,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       // A hand-off for a family is for this site's own family, as this page works it out, and no other.
       if (got.family && got.family !== familyOf(site)) throw new Error("for another family");
       profile = got.profile ?? null;
+      // Signed in as an account by BitLogin's own page: no longer the guest, here.
+      guest = false;
       app = got.app?.permissions ?? null;
       more = app || got.family ? [] : (got.more ?? []);
       gates = appGates();

@@ -450,6 +450,12 @@
   </section>
   <section id="account" class="connect-card" hidden>
     <h1>Your BitLogin account</h1>
+    <div id="guest" class="connect-known" data-panel-only hidden>
+      <p id="guest-said">You're a guest on this device.</p>
+      <p id="guest-keep" class="connect-small"></p>
+      <p id="guest-first" class="connect-small" hidden>Secure this account first.</p>
+      <button id="guest-secure" class="btn primary" type="button">Secure this account</button>
+    </div>
     <p class="connect-small">Everything BitLogin does is here: your accounts, your password, your recovery phrase, your key, your connections and your lock.</p>
     <div class="connect-warning">
       <p>BitLogin shows your recovery phrase and private key only when you ask, here. Nothing else should ever ask you to type them in, and a world never needs them.</p>

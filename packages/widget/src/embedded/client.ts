@@ -52,6 +52,13 @@ export interface BitLoginClientOptions {
    * site of the family: for a note and a reaction there, never this application's kinds. Read `familyTaken`.
    */
   family?: string;
+  /**
+   * With `family`: where nobody is signed in on this browser, be the family's guest account at once, with nothing
+   * pressed (docs/guest-accounts.md): an account BitLogin makes and keeps in this browser, the same in every site of
+   * the family, not yet secured. It may sign a note, a reaction and its bag, and nothing of this application's set.
+   * Read `guest` in the state.
+   */
+  guest?: boolean;
 }
 
 export interface BitLoginClientState {
@@ -78,6 +85,11 @@ export interface BitLoginClientState {
    * offered. Absent where no family was asked for. Known once `ready()` has resolved.
    */
   familyTaken?: boolean;
+  /**
+   * True while this browser is signed in here as the family's guest account (with `pubkey`): not yet secured, and
+   * not signed in to this application's set (`signedIn` stays false). Absent otherwise.
+   */
+  guest?: boolean;
 }
 
 export interface UnsignedEvent {
@@ -216,6 +228,7 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
   /** Whether the signer took the family asked for. Undefined where none was asked. */
   let familyTaken: boolean | undefined;
   const family = typeof options.family === "string" ? options.family : undefined;
+  const asGuest = family !== undefined && options.guest === true;
   const listeners = new Set<(state: BitLoginClientState) => void>();
   const waiting = new Map<string, { resolve(value: Record<string, unknown>): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   let stopped = false;
@@ -236,7 +249,9 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
       ...(enough && typeof d.until === "number" ? { until: d.until } : {}),
       ...(unlocked && !enough ? { needsMore: true } : {}),
       ...(canAsk !== undefined ? { canAsk } : {}),
-      ...(familyTaken !== undefined ? { familyTaken } : {})
+      ...(familyTaken !== undefined ? { familyTaken } : {}),
+      // A guest is who they are here, for what a guest may do: not this application's set.
+      ...(unlocked && d.guest === true ? { guest: true, pubkey: d.pubkey as string } : {})
     };
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     current = next;
@@ -291,7 +306,7 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
       // The family first, on its own, as a world asks for it. A signer too old to know the question says nothing:
       // after a short wait that is "not offered", and the application's own question goes on as before.
       if (family !== undefined) {
-        const answered = await Promise.race([request({ t: "want", family }).then(() => true, () => false), new Promise<boolean>((done) => setTimeout(() => done(false), FAMILY_WAIT_MS))]);
+        const answered = await Promise.race([request({ t: "want", family, ...(asGuest ? { guest: true } : {}) }).then(() => true, () => false), new Promise<boolean>((done) => setTimeout(() => done(false), FAMILY_WAIT_MS))]);
         if (!answered || familyTaken === undefined) familyTaken = false;
       }
       await request({ t: "want", permissions: wanted });
