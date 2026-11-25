@@ -9,7 +9,7 @@
  */
 import { hkdfExpand, hkdfExtract, labelSalt } from "@bitlogin/core/crypto";
 import * as cashu from "@cashu/cashu-ts";
-import { Amount, blindMessage, deriveBlindingFactor, deriveSecret, OutputData, type Proof } from "@cashu/cashu-ts";
+import { Amount, blindMessage, deriveBlindingFactor, deriveKeysetId, deriveSecret, OutputData, pointFromHex, verifyDLEQProof, type Proof } from "@cashu/cashu-ts";
 
 /** The label the seed is made under. Used for nothing else, so the seed can't equal anything else made from the key. */
 export const ECASH_SEED_LABEL = "bitlogin/ecash-seed/v1";
@@ -96,28 +96,64 @@ export function seededBlinded(seed: Uint8Array, keysetId: unknown, from: unknown
   return out;
 }
 
-/** A signature a mint handed back for one of this seed's counters. */
+/** A signature a mint handed back for one of this seed's counters, with the mint's proof that it made it (NUT-12). */
 export interface FoundAt {
   counter: number;
   amount: number;
   C_: string;
+  dleq?: { e: string; s: string };
+}
+
+/** A keyset as the mint lists it: its keys, and what its id is made from besides them. */
+export interface KeysetGiven {
+  keys: Record<string, string>;
+  unit?: string;
+  input_fee_ppk?: number;
+  final_expiry?: number;
+}
+
+const bytes = (h: string): Uint8Array => {
+  if (!/^(?:[0-9a-f]{2})+$/u.test(h)) throw new Error("That is not hex.");
+  return new Uint8Array(h.match(/../gu)!.map((x) => parseInt(x, 16)));
+};
+/**
+ * The keys handed over are this keyset's own: the id worked out from them (and, for the newer ids, from the unit, fee
+ * and expiry they are listed with) must be the keyset id asked about. Otherwise a key of the page's own, passed as the
+ * mint's, would have its own proofs taken as the mint's.
+ */
+function checkKeys(keysetId: string, given: KeysetGiven): Record<string, string> {
+  const keys = given?.keys;
+  if (!keys || typeof keys !== "object" || Object.keys(keys).length === 0 || Object.keys(keys).length > 64) throw new Error("Those are not a keyset's keys.");
+  const made = keysetId.startsWith("00")
+    ? deriveKeysetId(keys as never, { versionByte: 0 })
+    : deriveKeysetId(keys as never, { versionByte: 1, unit: given.unit ?? "sat", ...(given.input_fee_ppk ? { input_fee_ppk: given.input_fee_ppk } : {}), ...(given.final_expiry ? { expiry: given.final_expiry } : {}) });
+  if (made !== keysetId) throw new Error("Those keys are not this keyset's.");
+  return keys;
 }
 
 /**
  * The proofs for signatures a mint handed back (restore), unblinded here: the page gets finished proofs, which it
- * would hold anyway, and never the secret or blinding factor of a counter. A signature that isn't the mint's for that
- * counter's blinded message gives a proof the mint won't take, and nothing else.
+ * would hold anyway, and never the secret or blinding factor of a counter.
+ *
+ * Only a signature the mint proved it made (2026-11-25, the review's second finding 1): each must carry a DLEQ proof
+ * (NUT-12) that it is the mint's key times this counter's blinded message, checked here against keys that make this
+ * keyset's id. Without that, a page could pass a point of its own choosing and be handed r·K back, enough to take, later,
+ * whatever the mint signs at that counter. A mint whose restore gives no proofs is not restored from at all.
  */
-export function seededUnblind(seed: Uint8Array, keysetId: unknown, keys: unknown, found: unknown): Proof[] {
+export function seededUnblind(seed: Uint8Array, keysetId: unknown, keyset: unknown, found: unknown): Proof[] {
   const id = checkKeyset(keysetId);
-  if (!keys || typeof keys !== "object") throw new Error("Those are not a keyset's keys.");
+  const keys = checkKeys(id, keyset as KeysetGiven);
   if (!Array.isArray(found) || found.length > 1000) throw new Error("At most a thousand at a time.");
   const derive = createSecretAndBlindingFactorDeriver(seed, id);
-  const keyset = { id, keys: keys as Record<string, string> };
+  const given = { id, keys };
   return (found as FoundAt[]).map((f) => {
     if (!Number.isSafeInteger(f?.counter) || f.counter < 1 || f.counter >= COUNTER_LIMIT || !Number.isSafeInteger(f.amount) || f.amount < 1 || typeof f.C_ !== "string") throw new Error("That is not a signature for a counter.");
+    const key = keys[String(f.amount)];
+    if (typeof key !== "string") throw new Error("This keyset has no key for that amount.");
     const made = at(derive, f.counter);
-    return new OutputData({ amount: Amount.from(f.amount), id, B_: made.B_ }, made.r, made.secret).toProof({ id, amount: Amount.from(f.amount), C_: f.C_ }, keyset as never);
+    if (typeof f.dleq?.e !== "string" || typeof f.dleq?.s !== "string") throw Object.assign(new Error("This mint doesn't prove what it signs."), { code: "no-dleq" });
+    if (!verifyDLEQProof({ e: bytes(f.dleq.e), s: bytes(f.dleq.s) }, pointFromHex(made.B_), pointFromHex(f.C_), pointFromHex(key))) throw new Error("That signature isn't proved to be the mint's.");
+    return new OutputData({ amount: Amount.from(f.amount), id, B_: made.B_ }, made.r, made.secret).toProof({ id, amount: Amount.from(f.amount), C_: f.C_ }, given as never);
   });
 }
 

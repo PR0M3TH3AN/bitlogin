@@ -3,7 +3,7 @@
  * mint. Pretend sats, on this machine only.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { Amount, createBlindSignature, createNewMintKeys, OutputData, pointFromHex, Wallet } from "@cashu/cashu-ts";
+import { Amount, createBlindSignature, createDLEQProof, createNewMintKeys, OutputData, pointFromHex, Wallet } from "@cashu/cashu-ts";
 import { generatePrivateKey, hkdfExpand, hkdfExtract, labelSalt } from "@bitlogin/core/crypto";
 import { startMockMint, type MockMint } from "../ecash/mockMint.js";
 import { ecashSeed, seededBlinded, seededOutputs, seededUnblind, type SeededOutput } from "./ecashSeed.js";
@@ -76,10 +76,12 @@ describe("the wallet's seed, made in the worker", () => {
     const pub = Object.fromEntries(Object.entries(keys.pubKeys).map(([a, k]) => [a, hex(k as Uint8Array)]));
     const found = seededBlinded(seed, keysetId, 9, 2).map((b, i) => {
       const amount = [2, 4][i]!;
-      const sig = createBlindSignature(pointFromHex(b.B_), (keys.privKeys as Record<string, Uint8Array>)[String(amount)]!, keysetId);
-      return { counter: b.counter, amount, C_: sig.C_.toHex(true) };
+      const priv = (keys.privKeys as Record<string, Uint8Array>)[String(amount)]!;
+      const sig = createBlindSignature(pointFromHex(b.B_), priv, keysetId);
+      const dleq = createDLEQProof(pointFromHex(b.B_), priv);
+      return { counter: b.counter, amount, C_: sig.C_.toHex(true), dleq: { e: hex(dleq.e), s: hex(dleq.s) } };
     });
-    const proofs = seededUnblind(seed, keysetId, pub, found);
+    const proofs = seededUnblind(seed, keysetId, { keys: pub, unit: "sat" }, found);
     proofs.forEach((p, i) => {
       const lib = OutputData.createSingleDeterministicData(found[i]!.amount, seed, found[i]!.counter, keysetId).toProof({ id: keysetId, amount: Amount.from(found[i]!.amount), C_: found[i]!.C_ }, { id: keysetId, keys: pub } as never);
       expect([p.secret, p.C, Number(p.amount)]).toEqual([lib.secret, lib.C, found[i]!.amount]);

@@ -8,7 +8,7 @@
  * TEST SUPPORT ONLY: nothing that ships imports this.
  */
 import { createServer, type Server } from "node:http";
-import { createBlindSignature, createNewMintKeys, hashToCurve, pointFromHex } from "@cashu/cashu-ts";
+import { createBlindSignature, createDLEQProof, createNewMintKeys, hashToCurve, pointFromHex } from "@cashu/cashu-ts";
 
 type Point = ReturnType<typeof pointFromHex>;
 const hex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -50,6 +50,10 @@ export interface MockMintOptions {
   swapTrouble?: (n: number) => "ok" | "fail-before" | "act-then-fail";
   /** Take a swap's inputs as spent before it checks the outputs, and then refuse those as signed before. */
   spendsThenRefuses?: boolean;
+  /** Sign without a DLEQ proof (NUT-12), and not say it gives them. Off by default: a mint proves what it signs. */
+  noDleq?: boolean;
+  /** Sign a swap's outputs and leave its inputs unspent, as a broken mint might. */
+  swapsWithoutTaking?: boolean;
 }
 
 export async function startMockMint(options: MockMintOptions = {}): Promise<MockMint> {
@@ -96,7 +100,8 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
       const amount = amounts ? amounts[i]! : Number(output.amount);
       const id = active().id;
       const blind = createBlindSignature(pointFromHex(output.B_), priv(amount), id);
-      const signature = { amount, id, C_: (blind.C_ as Point).toHex(true) };
+      const proof = options.noDleq ? null : createDLEQProof(pointFromHex(output.B_), priv(amount));
+      const signature = { amount, id, C_: (blind.C_ as Point).toHex(true), ...(proof ? { dleq: { e: hex(proof.e), s: hex(proof.s) } } : {}) };
       signed.set(output.B_, signature);
       return signature;
     });
@@ -147,7 +152,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
 
   const handle = (method: string, path: string, body: any): unknown => {
     if (method === "GET" && path === "/v1/info") {
-      return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true }, ...(options.noRestore ? {} : { 9: { supported: true }, 13: { supported: true } }) } };
+      return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true }, ...(options.noRestore ? {} : { 9: { supported: true }, 13: { supported: true } }), ...(options.noDleq ? {} : { 12: { supported: true } }) } };
     }
     const listed = (k: (typeof keysets)[number]) => ({ id: k.id, unit: "sat", active: k === active(), input_fee_ppk: 0 });
     if (method === "GET" && path === "/v1/keysets") return { keysets: keysets.map(listed) };
@@ -181,7 +186,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
       if (trouble === "fail-before") throw Object.assign(new Error("internal error"), { status: 500 });
       if (options.spendsThenRefuses) take(body.inputs);
       fresh(body.outputs);
-      if (!options.spendsThenRefuses) take(body.inputs);
+      if (!options.spendsThenRefuses && !options.swapsWithoutTaking) take(body.inputs);
       const signatures = sign(body.outputs);
       if (trouble === "act-then-fail") throw Object.assign(new Error("gateway timeout"), { status: 504 });
       return { signatures };

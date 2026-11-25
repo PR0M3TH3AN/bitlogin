@@ -13,7 +13,7 @@
  */
 import { Amount, OutputData, type Proof, type Wallet } from "@cashu/cashu-ts";
 import { drawLane, LANE_PROBE, laneStart, NO_SEED_HERE, type LaneState } from "./seedLanes.js";
-import type { BlindedAt, FoundAt, SeededOutput } from "../worker/ecashSeed.js";
+import type { BlindedAt, FoundAt, KeysetGiven, SeededOutput } from "../worker/ecashSeed.js";
 
 /** The worker's seed actions, as the page has them (headless.ts): none hands out what unblinds a counter it names. */
 export interface SeedWorker {
@@ -27,8 +27,8 @@ export interface SeedWorker {
   forward(keysetId: string, next: number): Promise<LaneState | null>;
   /** Blinded messages at any counters: nothing that unblinds them. */
   blinded(keysetId: string, from: number, count: number): Promise<BlindedAt[]>;
-  /** Finished proofs for what a mint signed at this seed's counters, unblinded in the worker. */
-  unblind(keysetId: string, keys: Record<string, string>, found: FoundAt[]): Promise<Proof[]>;
+  /** Finished proofs for what a mint signed at this seed's counters and proved it signed, unblinded in the worker. */
+  unblind(keysetId: string, keyset: KeysetGiven, found: FoundAt[]): Promise<Proof[]>;
   /** One output for a trial, at the next trial counter not yet handed out. */
   trialOutput(keysetId: string): Promise<SeededOutput>;
 }

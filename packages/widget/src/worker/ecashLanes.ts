@@ -12,7 +12,8 @@
 import type { NostrSigner } from "@bitlogin/core/account";
 import type { KeyValueStore } from "@bitlogin/core/storage";
 import { cleanState, laneEnd, laneStart, TRIAL_FROM, TRIAL_TO, validLane, type LaneState } from "../ecash/seedLanes.js";
-import { seededOutputs, type SeededOutput } from "./ecashSeed.js";
+import { seededBlinded, seededOutputs, seededUnblind, type BlindedAt, type SeededOutput } from "./ecashSeed.js";
+import type { Proof } from "@cashu/cashu-ts";
 
 const KEYSET = /^[0-9a-f]{16}$|^[0-9a-f]{66}$/u;
 const checkKeyset = (keysetId: unknown): string => {
@@ -66,6 +67,36 @@ async function writeSealed(deps: LaneDeps, key: string, value: unknown): Promise
 
 export async function readLane(deps: LaneDeps, keysetId: unknown): Promise<LaneState | null> {
   return cleanState(await readSealed(deps, keyFor(deps.signer.getPublicKey(), keysetId)));
+}
+
+/** Nothing at all is done with the seed where there is no lock to keep tabs apart (the review's second finding 1). */
+const needLock = (deps: SeedDeps): void => {
+  if (!deps.lock) throw Object.assign(new Error(NO_LOCK), { code: "no-seed-here" });
+};
+/** This browser's lane for a keyset, as the page asks it: only where the seed may be used. */
+export async function seedLane(deps: SeedDeps, keysetId: unknown): Promise<LaneState | null> {
+  needLock(deps);
+  return readLane(deps, keysetId);
+}
+/** Blinded messages at any counters: only where the seed may be used. */
+export async function seedBlinded(deps: SeedDeps, keysetId: unknown, from: unknown, count: unknown): Promise<BlindedAt[]> {
+  needLock(deps);
+  const seed = deps.seed();
+  try {
+    return seededBlinded(seed, keysetId, from, count);
+  } finally {
+    seed.fill(0);
+  }
+}
+/** Finished proofs for signatures the mint proved: only where the seed may be used. */
+export async function seedUnblind(deps: SeedDeps, keysetId: unknown, keyset: unknown, found: unknown): Promise<Proof[]> {
+  needLock(deps);
+  const seed = deps.seed();
+  try {
+    return seededUnblind(seed, keysetId, keyset, found);
+  } finally {
+    seed.fill(0);
+  }
 }
 
 /** Keep a lane's state, forward only. Returns what is kept after: the one asked for, or the one already there. */

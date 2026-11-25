@@ -8,7 +8,7 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import { startMockMint, type MockMint } from "./mockMint.js";
-import { createSeededMint } from "./seededMint.js";
+import { asOutputData, createSeededMint } from "./seededMint.js";
 import { laneStart, type LaneState } from "./seedLanes.js";
 import { restoreFromMint } from "./seedRestore.js";
 import { ecashSeed } from "../worker/ecashSeed.js";
@@ -104,6 +104,23 @@ describe("restore from the mints, from the key alone", () => {
     // With the relay copy's highest counter for the lane: all of it.
     expect(total((await restore(mint, seed, { 9: (await a.lane()).next })).proofs)).toBe(12);
   }, RESTORE_MS);
+
+  it("brings back a keyset with more than a thousand signed outputs (fault 2)", async () => {
+    const mint = await startMockMint();
+    mints.push(mint);
+    const seed = ecashSeed(generatePrivateKey());
+    const wallet = await pageWallet(mint);
+    const worker = standInSeedWorker({ signer: new NostrSigner(generatePrivateKey()), store: new InMemoryKeyValueStore(), seed, lock });
+    await worker.draw(wallet.keysetId, 2);
+    // 1,100 one-sat outputs signed, as a long history at one mint leaves them.
+    for (let i = 0; i < 11; i++) {
+      const made = await worker.reserve(wallet.keysetId, Array(100).fill(1));
+      const quote = await wallet.createMintQuoteBolt11(100);
+      mint.payAllFunding();
+      await wallet.ops.mintBolt11(100, quote).asCustom(made.outputs.map(asOutputData)).run();
+    }
+    expect(total((await restore(mint, seed)).proofs)).toBe(1100);
+  }, RESTORE_MS * 2);
 
   it("keeps only what the mint says is unspent", async () => {
     const mint = await startMockMint();

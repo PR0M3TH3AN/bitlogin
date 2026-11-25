@@ -150,6 +150,44 @@ function joined(base: EcashWallet, others: (EcashWallet | null | undefined)[], l
   const { trials: _t, counters: _c, ...rest } = base;
   return { ...rest, ...(trials.length ? { trials } : {}), ...(counters.length ? { counters } : {}) };
 }
+/**
+ * Send the wallet record again where this browser's lanes have gone further than it says. Joined onto the newest
+ * record the relays hold (2026-11-25, the review's second round): a device whose list of mints is older must not send
+ * that list over a newer one with a later date. This browser's copy is written before any relay is asked, and read
+ * again after, so another tab's write in between is not undone. Null where there was nothing to send.
+ */
+async function sendCounters(deps: { signer: NostrSigner; store: KeyValueStore; relays: EcashRelays }, now: number): Promise<LocalCopy | null> {
+  const { signer, store, relays } = deps;
+  const me = signer.getPublicKey();
+  const lanes = await laneCounters(deps);
+  const before = await readLocal(store, signer);
+  if (!before.wallet || covers(before.wallet, joined(before.wallet, [], lanes))) return null;
+  const found = await relays.queryQuorum({ kinds: [WALLET_KIND], authors: [me], limit: 2 }, 4000).catch(() => null);
+  const newest = (found?.outcomes ?? [])
+    .flatMap((o) => o.events)
+    .filter((event) => event.kind === WALLET_KIND && event.pubkey === me && verifyNostrEvent(event))
+    .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
+  let onRelay: EcashWallet | null = null;
+  try {
+    onRelay = newest ? readWallet(signer.nip44Decrypt(me, newest.content)) : null;
+  } catch {
+    onRelay = null;
+  }
+  const local = await readLocal(store, signer);
+  if (!local.wallet) return null;
+  const relayNewer = !!onRelay && !!newest && newest.created_at >= (local.walletAt ?? 0);
+  const wallet = joined(relayNewer ? onRelay! : local.wallet, [local.wallet, onRelay], lanes);
+  const at = datedAfter(now, Math.max(local.walletAt ?? 0, newest?.created_at ?? 0));
+  await writeLocal(store, signer, { ...local, wallet, walletAt: at, walletUnsent: true });
+  const took = await publishWallet(deps, wallet, at);
+  const after = await readLocal(store, signer);
+  if (took && after.walletAt === at) {
+    delete after.walletUnsent;
+    await writeLocal(store, signer, after);
+  }
+  return after;
+}
+
 /** Send the wallet record. True where relays took it. */
 async function publishWallet(deps: { signer: NostrSigner; relays: EcashRelays }, wallet: EcashWallet, at: number): Promise<boolean> {
   const me = deps.signer.getPublicKey();
@@ -202,6 +240,16 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
     return token ? [{ event: event.id, created_at: event.created_at, ...token }] : [];
   });
   const onRelays = liveTokens(records, deleted);
+  // A record whose every proof is in another that stays is hidden from the balance, and would otherwise stay on relays
+  // for ever, to come back once the other is spent (the review's second round): it is deleted.
+  const shown = new Set(onRelays.map((token) => token.event));
+  const held = new Set(onRelays.flatMap((token) => token.proofs.map((proof) => proof.secret)));
+  const supersededIds = new Set(records.flatMap((record) => record.del));
+  const hidden = records.filter((record) => !shown.has(record.event) && !deleted.has(record.event) && !supersededIds.has(record.event) && record.proofs.length > 0 && record.proofs.every((proof) => held.has(proof.secret)));
+  if (hidden.length) {
+    const deletion = signer.signEvent({ kind: 5, created_at: Math.floor(deps.now ?? Date.now() / 1000), tags: [...hidden.map((record) => ["e", record.event]), ["k", String(TOKEN_KIND)]], content: "" });
+    await relays.publishAll(deletion, 6000).catch(() => []);
+  }
 
   // What this browser holds that no relay does: proofs written here and not yet taken by one. They are kept, and
   // sent again now. A proof a relay already has is the relay's: the local copy of it is dropped.
@@ -297,6 +345,14 @@ export async function rollEcash(
   const keep = roll.keep.map((token) => ({ mint: cleanMint(token.mint), proofs: cleanProofs(token.proofs, 5000) }));
   if (keep.some((token) => !token.mint || !token.proofs)) throw new Error("That is not ecash this wallet can keep.");
   const local = await readLocal(store, signer);
+  // A record here whose every proof another record holds goes with this roll, so it isn't left hidden (second round).
+  {
+    const seen = new Set<string>();
+    for (const token of local.tokens.filter((t) => !destroy.has(t.event))) {
+      if (token.proofs.length && token.proofs.every((proof) => seen.has(proof.secret))) destroy.add(token.event);
+      for (const proof of token.proofs) seen.add(proof.secret);
+    }
+  }
   // Many proofs are written as several records, each small enough for any NIP-60 wallet, and any relay, to take.
   // A proof this browser already holds in a record that stays is not written again (finding 6): a restore in one tab
   // of what another tab added and hasn't sent yet would otherwise hold it twice.
@@ -340,22 +396,8 @@ export async function rollEcash(
   }
   // Where this browser's lanes have gone further than the wallet record says (sats just added by the seed), the record
   // is sent again with the counters, so restore elsewhere follows each lane that far (finding 2).
-  if (next.wallet) {
-    const withLanes = joined(next.wallet, [], await laneCounters(deps));
-    if (!covers(next.wallet, withLanes)) {
-      const at = datedAfter(now, next.walletAt);
-      next.wallet = withLanes;
-      if (await publishWallet(deps, withLanes, at)) {
-        next.walletAt = at;
-        delete next.walletUnsent;
-      } else {
-        next.walletAt = at;
-        next.walletUnsent = true;
-      }
-      await writeLocal(store, signer, next);
-    }
-  }
-  return state(next, false);
+  const sent = await sendCounters(deps, now);
+  return state(sent ? { ...next, wallet: sent.wallet, ...(sent.walletAt ? { walletAt: sent.walletAt } : {}), walletUnsent: !!sent.walletUnsent } : next, false);
 }
 
 /**

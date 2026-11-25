@@ -5,8 +5,7 @@
  */
 import type { NostrSigner } from "@bitlogin/core/account";
 import type { KeyValueStore } from "@bitlogin/core/storage";
-import { drawLane, forwardLane, readLane, reserveOutputs, trialOutput, type Lock } from "../worker/ecashLanes.js";
-import { seededBlinded, seededUnblind } from "../worker/ecashSeed.js";
+import { drawLane, forwardLane, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, type Lock } from "../worker/ecashLanes.js";
 import type { SeedWorker } from "./seededMint.js";
 
 /** A stand-in for navigator.locks, which Node hasn't: one lock per name, within this process. */
@@ -22,12 +21,12 @@ export function standInLock(): Lock {
 export function standInSeedWorker(deps: { signer: NostrSigner; store: KeyValueStore; seed: Uint8Array; lock: Lock | null }): SeedWorker {
   const worker = { signer: deps.signer, store: deps.store, seed: () => deps.seed.slice(), lock: deps.lock };
   return {
-    lane: (id) => readLane(worker, id),
+    lane: (id) => seedLane(worker, id),
     draw: (id, lane) => drawLane(worker, id, lane),
     reserve: (id, amounts) => reserveOutputs(worker, id, amounts),
     forward: (id, next) => forwardLane(worker, id, next),
-    blinded: async (id, from, count) => seededBlinded(deps.seed, id, from, count),
-    unblind: async (id, keys, found) => seededUnblind(deps.seed, id, keys, found),
+    blinded: (id, from, count) => seedBlinded(worker, id, from, count),
+    unblind: (id, keyset, found) => seedUnblind(worker, id, keyset, found),
     trialOutput: (id) => trialOutput(worker, id)
   };
 }

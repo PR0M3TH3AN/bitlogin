@@ -140,8 +140,9 @@ Under the lock, nothing was lost.)
 wallet names it as a mint whose sats can't be restored from the key
 alone. How a mint is shown to refuse:
 
-- **What it says of itself (NUT-06):** it must list restore (NUT-09) and
-  deterministic secrets (NUT-13). That is needed, but not enough.
+- **What it says of itself (NUT-06):** it must list restore (NUT-09),
+  deterministic secrets (NUT-13) and proofs of what it signs (NUT-12).
+  That is needed, but not enough.
 - **A trial that can cost one sat** (built in `ecash/mintTrial.ts`,
   2026-11-24). One 1-sat proof of the person's is swapped into an output
   made from a counter kept for trials: the last 4,096 below 2³¹, which a
@@ -207,7 +208,21 @@ relay gone, rule 5 and the mint are enough.
     mint's restore.
   - For restore and the check before use, the worker hands the page
     blinded messages only, at any counter, and turns what the mint signs
-    into finished proofs itself.
+    into finished proofs itself, and only a signature the mint proved it
+    made: each must carry a DLEQ proof (NUT-12), checked in the worker
+    against keys that make the keyset's id (the second review, the same
+    day). Otherwise a page could pass a point of its own and be handed
+    r·K back, enough to take later whatever the mint signs there. A mint
+    whose restore proves nothing is neither tried nor restored from, and
+    the screen says so.
+  - Why not have the worker ask the mint itself, so no signature comes
+    from the page at all: that would open the key-holding worker to any
+    https address (`ecash.md` EC6), the one place keys live.
+  - What remains: an older keyset id is 7 bytes of a hash of its keys.
+    Passing keys of one's own as a mint's would need keys whose hash
+    matches those 56 bits, about 2⁵⁶ tries. Newer ids are the full hash.
+  - Nothing at all is done with the seed where the worker has no lock:
+    not even a lane read or a blinded message.
   - The library takes the outputs as they are (`asCustom`).
   - The page sees what an operation's outputs are, as it already sees
     the proofs, and never the seed. A seed makes every future proof, so

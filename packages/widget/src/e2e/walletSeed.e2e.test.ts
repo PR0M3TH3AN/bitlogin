@@ -77,6 +77,7 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
   let shell: { server: Server; origin: string };
   let refusing: MockMint;
   let signingAgain: MockMint;
+  let unproven: MockMint;
 
   beforeAll(async () => {
     relays = await Promise.all([MockRelay.start(), MockRelay.start(), MockRelay.start()]);
@@ -84,12 +85,14 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
     shell = await serveShell(signIn.origin);
     refusing = await startMockMint();
     signingAgain = await startMockMint({ signsAgain: true });
+    unproven = await startMockMint({ noDleq: true });
   }, 60_000);
   afterAll(async () => {
     signIn?.server.close();
     shell?.server.close();
     await refusing?.close();
     await signingAgain?.close();
+    await unproven?.close();
     await Promise.all(relays.map((r) => r.close()));
   });
 
@@ -114,7 +117,9 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         };
         const open = async (mode: string) => {
           await page.evaluate((m) => ((window as any).nextMode = m), mode);
-          await page.mouse.click(60, 20);
+          // The shell's own button, pressed as the shell's: once the panel is framed it lies over the button, and a
+          // click at the button's place would land in the panel instead of opening it anew.
+          await page.evaluate(() => document.getElementById("open")!.click());
           if (mode !== "wallet") return;
           // Where the panel opens on the account page, the wallet is its own door there, as a person would press it.
           const first = frame().locator('[data-ecash="setup"], [data-ecash="home"], #open-ecash').filter({ visible: true }).first();
@@ -224,6 +229,11 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         await frame().locator('#ecash-mint-form button[type="submit"]').click();
         await frame().locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
         await fund(signingAgain, 3, 7);
+        // A third mint, that doesn't prove what it signs (no DLEQ): never tried, never restored from, and it says so.
+        await frame().locator("#ecash-go-mint").click();
+        await frame().locator("#ecash-mint").fill(unproven.url);
+        await frame().locator('#ecash-mint-form button[type="submit"]').click();
+        await frame().locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
 
         // ---- Before any press: both relay-kept, each with its trial offered, and no trial run by opening.
         await open("wallet");
@@ -231,6 +241,8 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         await expect.poll(async () => (await rowOf(refusing).locator(".seed").textContent()) ?? "", { timeout: 30_000 }).toBe("Relay-kept: your key alone can't restore sats here.");
         expect(await rowOf(signingAgain).locator(".seed").textContent()).toBe("Relay-kept: your key alone can't restore sats here.");
         expect(await rowOf(refusing).locator("button").textContent()).toBe("Try this mint");
+        await expect.poll(async () => (await rowOf(unproven).locator(".seed").textContent()) ?? "", { timeout: 30_000 }).toBe("This mint doesn't prove what it signs, so your key can't restore sats here. They are kept on relays.");
+        expect(await rowOf(unproven).locator("button").count()).toBe(0);
         expect(await frame().locator("#ecash-go-restore").isVisible()).toBe(true);
         const calls = (await panelFrame().evaluate(() => (window as any).workerLog)) as string[];
         expect(calls).not.toContain("ecashKeepTrial");
@@ -273,6 +285,7 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         expect(await frame().locator("#ecash-restore-gap").textContent()).toMatch(/^If a crash left a long gap in a lane/u);
         await frame().locator("#ecash-restore-yes").click();
         await note().filter({ hasText: /^Nothing more was found at your mints\./u }).waitFor({ timeout: 120_000 });
+        expect((await note().textContent())?.trim()).toBe(`Nothing more was found at your mints. Not restored from: ${new URL(unproven.url).host}: it doesn't prove what it signs, so it isn't restored from.`);
         expect((await frame().locator("#ecash-total").textContent())?.trim()).toBe("11");
 
         // ---- Opened again: what the trials found is kept with the wallet, and no trial runs.
@@ -298,7 +311,7 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         };
         for (const tab of tabs) {
           await tab.page.evaluate(() => ((window as any).nextMode = "wallet"));
-          await tab.page.mouse.click(60, 20);
+          await tab.page.evaluate(() => document.getElementById("open")!.click());
           const first = tab.frame().locator('[data-ecash="home"], #open-ecash').filter({ visible: true }).first();
           await first.waitFor({ timeout: 60_000 });
           if ((await first.getAttribute("id")) === "open-ecash") {
@@ -336,7 +349,7 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         // Nothing asked of the mint twice, and every sat there.
         expect(refusing.refusedCount() - refusedBefore).toBe(0);
         await tabs[1]!.page.evaluate(() => ((window as any).nextMode = "wallet"));
-        await tabs[1]!.page.mouse.click(60, 20);
+        await tabs[1]!.page.evaluate(() => document.getElementById("open")!.click());
         const firstAgain = tabs[1]!.frame().locator('[data-ecash="home"], #open-ecash').filter({ visible: true }).first();
         await firstAgain.waitFor({ timeout: 60_000 });
         if ((await firstAgain.getAttribute("id")) === "open-ecash") {

@@ -194,3 +194,66 @@ describe("the review's findings, each failing before its mend", () => {
     expect(await two.wallet.seededMint(mint.url)).toBe(true);
   }, 60_000);
 });
+
+describe("the second review's findings, each failing before its mend", () => {
+  it("1: a mint that doesn't prove its signatures (no DLEQ) is neither tried nor restored from, and says so", async () => {
+    const mint = await mintWith({ noDleq: true });
+    const account = newAccount();
+    const one = device(account);
+    await one.wallet.open();
+    await one.wallet.addMint(mint.url);
+    await add(one.wallet, mint, 2);
+    const signed = mint.signedCount();
+    expect(await one.wallet.tryMint(mint.url)).toMatchObject({ outcome: "not-tried", cost: 0 });
+    expect(mint.signedCount()).toBe(signed);
+    const restored = await one.wallet.restore();
+    expect(restored.found).toBe(0);
+    expect(restored.mints[0]?.trouble).toMatch(/doesn't prove what it signs/u);
+  }, 60_000);
+
+  it("a failed trial whose sat the mint left unspent keeps it", async () => {
+    const mint = await mintWith({ signsAgain: true, swapsWithoutTaking: true });
+    const account = newAccount();
+    const one = device(account);
+    await one.wallet.open();
+    await one.wallet.addMint(mint.url);
+    await add(one.wallet, mint, 1);
+    expect(await one.wallet.tryMint(mint.url)).toEqual({ outcome: "failed", cost: 0 });
+    await one.wallet.check();
+    expect(one.wallet.balance()).toBe(1);
+  }, 60_000);
+
+  it("a record whose every proof another record holds is deleted, not left hidden", async () => {
+    const mint = await mintWith();
+    const account = newAccount();
+    const one = device(account);
+    await one.wallet.open();
+    await one.wallet.addMint(mint.url);
+    await add(one.wallet, mint, 13);
+    // Another device, knowing nothing yet, writes the same proofs again, as an older build could.
+    const two = device(account);
+    await two.store.roll({ destroy: [], keep: [{ mint: mint.url, proofs: one.wallet.state().tokens.flatMap((t) => t.proofs) }] });
+    expect([...account.events.values()].filter((e) => e.kind === TOKEN_KIND)).toHaveLength(2);
+    const three = device(account);
+    await three.wallet.open();
+    expect(three.wallet.balance()).toBe(13);
+    expect([...account.events.values()].filter((e) => e.kind === TOKEN_KIND)).toHaveLength(1);
+  }, 60_000);
+
+  it("a seeded add on a device with an older mint list doesn't send that list over a newer one", async () => {
+    const [m1, m2] = [await mintWith(), await mintWith()];
+    const account = newAccount();
+    const one = await seededWallet(account, m1);
+    const two = device(account);
+    await two.wallet.open();
+    expect(await two.wallet.seededMint(m1.url)).toBe(true);
+    // The first device adds a mint: the relays' record names both. The second still holds the older list.
+    await one.wallet.addMint(m2.url);
+    await add(two.wallet, m1, 5);
+    const three = device(account);
+    await three.wallet.open();
+    expect(three.wallet.state().mints).toEqual([m1.url, m2.url]);
+    // And the counters the second device's add reached are in the record.
+    expect((three.wallet.state().counters ?? []).length).toBeGreaterThan(0);
+  }, 120_000);
+});

@@ -73,8 +73,8 @@ import { cleanCoordinate, sellerOf, UNLOCK_SERVICES } from "../pay/listing.js";
 import { blossomAuth, loadDrive, peekDrive, rankServers, saveDrive, SERVER_LIST_KIND, serversIn, type DriveSave } from "./driveStore.js";
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { keepEcashTrial, loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
-import { ecashSeed, seededBlinded, seededUnblind } from "./ecashSeed.js";
-import { drawLane, forwardLane, readLane, reserveOutputs, trialOutput, workerLock } from "./ecashLanes.js";
+import { ecashSeed } from "./ecashSeed.js";
+import { drawLane, forwardLane, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, workerLock } from "./ecashLanes.js";
 import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
   checkDue,
@@ -97,6 +97,7 @@ import { savePublicSession, clearPublicSession } from "../publicSession.js";
 import { LaneQueue } from "./serialQueue.js";
 import { RelayKeeper } from "./relayKeeper.js";
 import type { VaultConnectionSummary, WorkerNotification } from "./protocol.js";
+import { errorResponse } from "./protocol.js";
 import type {
   WorkerRequest,
   WorldSavePayload,
@@ -2148,23 +2149,21 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const { signer, everydayPrivateKey } = requireUnlocked();
       const deps = { signer, store, seed: () => ecashSeed(everydayPrivateKey), lock: workerLock() };
       const p = payload as { keysetId?: unknown; lane?: unknown; amounts?: unknown; next?: unknown };
-      if (action === "ecashLaneGet") return { state: await readLane(deps, p.keysetId) };
+      if (action === "ecashLaneGet") return { state: await seedLane(deps, p.keysetId) };
       if (action === "ecashDraw") return { state: await drawLane(deps, p.keysetId, p.lane) };
       if (action === "ecashReserve") return await reserveOutputs(deps, p.keysetId, p.amounts);
       if (action === "ecashForward") return { state: await forwardLane(deps, p.keysetId, p.next) };
       return { output: await trialOutput(deps, p.keysetId) };
     }
+    // Blinded messages, and proofs for signatures the mint proved it made (DLEQ, checked here), and only where the
+    // worker has the lock every tab shares (the review's second finding 1).
     case "ecashBlinded":
     case "ecashUnblind": {
-      const { everydayPrivateKey } = requireUnlocked();
-      const p = payload as { keysetId?: unknown; from?: unknown; count?: unknown; keys?: unknown; found?: unknown };
-      const seed = ecashSeed(everydayPrivateKey);
-      try {
-        if (action === "ecashBlinded") return { blinded: seededBlinded(seed, p.keysetId, p.from, p.count) };
-        return { proofs: seededUnblind(seed, p.keysetId, p.keys, p.found).map((proof) => ({ id: proof.id, amount: Number(proof.amount), secret: proof.secret, C: proof.C })) };
-      } finally {
-        seed.fill(0);
-      }
+      const { signer, everydayPrivateKey } = requireUnlocked();
+      const deps = { signer, store, seed: () => ecashSeed(everydayPrivateKey), lock: workerLock() };
+      const p = payload as { keysetId?: unknown; from?: unknown; count?: unknown; keyset?: unknown; found?: unknown };
+      if (action === "ecashBlinded") return { blinded: await seedBlinded(deps, p.keysetId, p.from, p.count) };
+      return { proofs: (await seedUnblind(deps, p.keysetId, p.keyset, p.found)).map((proof) => ({ id: proof.id, amount: Number(proof.amount), secret: proof.secret, C: proof.C })) };
     }
 
     case "ecashPeek":
@@ -2427,9 +2426,7 @@ self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
       (self as unknown as Worker).postMessage(response);
     },
     (err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      const response: WorkerResponse = { id, ok: false, error: error.message, errorName: error.name };
-      (self as unknown as Worker).postMessage(response);
+      (self as unknown as Worker).postMessage(errorResponse(id, err));
     }
   );
 });

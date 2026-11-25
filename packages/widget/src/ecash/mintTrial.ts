@@ -49,6 +49,8 @@ export async function tryMint(deps: TrialDeps): Promise<TrialResult> {
   const keysetId = wallet.keysetId;
   const info = (await wallet.mint.getInfo()) as unknown as { nuts?: Record<string, { supported?: boolean; disabled?: boolean }> };
   if (!supports(info, 9) || !supports(info, 13)) return { keysetId, outcome: "not-tried", why: "This mint doesn't say it can restore what it signed.", cost: 0 };
+  // Restore unblinds only what a mint proves it signed (NUT-12): a mint that doesn't could never be restored from.
+  if (!supports(info, 12)) return { keysetId, outcome: "not-tried", why: "This mint doesn't prove what it signs, so it can't be restored from.", cost: 0 };
   const keyset = wallet.keyChain.getKeyset(keysetId);
   // A mint that charges for each swap isn't tried: the trial would cost its fee twice over, and then more than a sat.
   if (Number(wallet.getFeesForKeyset(1, keysetId)) > 0) return { keysetId, outcome: "not-tried", why: "This mint charges for each swap, so it can't be tried for one sat.", cost: 0 };

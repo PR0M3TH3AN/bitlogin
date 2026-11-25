@@ -8,8 +8,9 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import { WorkerClient } from "./workerClient.js";
-import { drawLane, forwardLane, readCounters, readLane, reserveOutputs, trialOutput, type Lock } from "./ecashLanes.js";
-import { ecashSeed } from "./ecashSeed.js";
+import { createBlindSignature, createDLEQProof, createNewMintKeys, pointFromHex } from "@cashu/cashu-ts";
+import { drawLane, forwardLane, readCounters, readLane, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, type Lock } from "./ecashLanes.js";
+import { ecashSeed, seededBlinded, seededUnblind } from "./ecashSeed.js";
 import { laneStart, TRIAL_FROM } from "../ecash/seedLanes.js";
 
 const KEYSET = "00ad268c4d1f5826";
@@ -67,5 +68,40 @@ describe("the seed's outputs stay with the worker", () => {
     const counters = [];
     for (let i = 0; i < 3; i++) counters.push((await trialOutput(deps, KEYSET)).counter);
     expect(counters).toEqual([TRIAL_FROM, TRIAL_FROM + 1, TRIAL_FROM + 2]);
+  });
+
+  it("unblinds only a signature its mint proved (DLEQ), for the keyset its keys make: no oracle for r·K (fault 1)", () => {
+    const seed = ecashSeed(generatePrivateKey());
+    const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+    const mintKeys = () => {
+      const k = createNewMintKeys(4);
+      return { id: k.keysetId, pub: Object.fromEntries(Object.entries(k.pubKeys).map(([a, p]) => [a, hex(p as Uint8Array)])), priv: k.privKeys as Record<string, Uint8Array> };
+    };
+    const real = mintKeys();
+    const [b] = seededBlinded(seed, real.id, 9, 1);
+    const signed = (keys: ReturnType<typeof mintKeys>, dleq = true) => {
+      const sig = createBlindSignature(pointFromHex(b!.B_), keys.priv["2"]!, keys.id);
+      const proof = createDLEQProof(pointFromHex(b!.B_), keys.priv["2"]!);
+      return { counter: b!.counter, amount: 2, C_: sig.C_.toHex(true), ...(dleq ? { dleq: { e: hex(proof.e), s: hex(proof.s) } } : {}) };
+    };
+    // A point the page chose, with the mint's real keys: refused, so nothing of r·K comes back.
+    const chosen = { counter: b!.counter, amount: 2, C_: pointFromHex(real.pub["2"]!).multiply(7n).toHex(true) };
+    expect(() => seededUnblind(seed, real.id, { keys: real.pub, unit: "sat" }, [chosen])).toThrow();
+    // The mint's real signature with no proof: refused too.
+    expect(() => seededUnblind(seed, real.id, { keys: real.pub, unit: "sat" }, [signed(real, false)])).toThrow();
+    // Proved by a key of the page's own, passed as this keyset's keys: they don't make this keyset's id.
+    const own = mintKeys();
+    expect(() => seededUnblind(seed, real.id, { keys: own.pub, unit: "sat" }, [signed(own)])).toThrow();
+    // Proved by the mint, under its own keys: the proof.
+    const [proof] = seededUnblind(seed, real.id, { keys: real.pub, unit: "sat" }, [signed(real)]);
+    expect(Number(proof!.amount)).toBe(2);
+  });
+
+  it("does nothing with the seed where there is no lock: not even blinded messages or a lane read (fault 1)", async () => {
+    const { deps } = worker();
+    const none = { ...deps, lock: null };
+    await expect(seedLane(none, KEYSET)).rejects.toMatchObject({ code: "no-seed-here" });
+    await expect(seedBlinded(none, KEYSET, 1, 1)).rejects.toMatchObject({ code: "no-seed-here" });
+    await expect(seedUnblind(none, KEYSET, {}, [])).rejects.toMatchObject({ code: "no-seed-here" });
   });
 });

@@ -161,10 +161,17 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
    * is open, behind the balance. Until known, a mint is named as relay-kept.
    */
   let seeded = new Set();
+  /** Mints that don't say they prove what they sign (NUT-12): never tried, never restored from. */
+  let unproven = new Set();
   const learnSeeded = async () => {
     const found = new Set();
-    for (const mint of wallet.state().mints) if (await wallet.seededMint(mint).catch(() => false)) found.add(mint);
+    const cant = new Set();
+    for (const mint of wallet.state().mints) {
+      if (await wallet.seededMint(mint).catch(() => false)) found.add(mint);
+      else if (!(await wallet.mintCanSeed(mint).catch(() => false))) cant.add(mint);
+    }
     seeded = found;
+    unproven = cant;
     if (current === "home") home();
   };
   /** The words under a mint: restorable from the key, or relay-kept, and the trial where it can be pressed. */
@@ -176,6 +183,10 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     if (seeded.has(mint)) {
       line.classList.add("kept");
       line.textContent = here === "yes" ? "Sats added here can be restored from your key." : "Passed the trial. Not used with your key in this browser.";
+      return [line];
+    }
+    if (unproven.has(mint)) {
+      line.textContent = "This mint doesn't prove what it signs, so your key can't restore sats here. They are kept on relays.";
       return [line];
     }
     const failed = (wallet.state().trials ?? []).some((t) => t.mint === mint && t.outcome === "failed");
@@ -231,8 +242,9 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     try {
       const restored = await wallet.restore();
       home();
-      const troubled = restored.mints.filter((m) => m.trouble).map((m) => host(m.mint));
-      $("ecash-note").textContent = `${restored.found > 0 ? `Restored ${sats(restored.found)}.` : "Nothing more was found at your mints."}${troubled.length ? ` Not asked, as they didn't answer: ${troubled.join(", ")}.` : ""}`;
+      // Each mint that couldn't be restored from, and why: one that didn't answer, or one that doesn't prove what it signs.
+      const troubled = restored.mints.filter((m) => m.trouble).map((m) => `${host(m.mint)}: ${/doesn't prove what it signs/u.test(m.trouble) ? "it doesn't prove what it signs, so it isn't restored from" : "it didn't answer"}`);
+      $("ecash-note").textContent = `${restored.found > 0 ? `Restored ${sats(restored.found)}.` : "Nothing more was found at your mints."}${troubled.length ? ` Not restored from: ${troubled.join("; ")}.` : ""}`;
     } catch (err) {
       $("ecash-restore-yes").disabled = false;
       $("ecash-restore-status").hidden = true;
@@ -356,6 +368,8 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       await wallet.addMint(address);
       $("ecash-mint").value = "";
       request ? await goOn() : home();
+      // What the new mint can be (seeded, relay-kept, or never restorable), learned behind the screen as at opening.
+      if (!request) void learnSeeded().catch(() => {});
     } catch (err) {
       fail(err);
     } finally {

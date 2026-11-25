@@ -129,6 +129,8 @@ export class WorkerClient {
       } else {
         const error = new Error(msg.error);
         error.name = msg.errorName ?? "Error";
+        // Its code too, where the worker gave one: what the caller decides by.
+        if (typeof msg.errorCode === "string") (error as Error & { code?: string }).code = msg.errorCode;
         entry.reject(error);
       }
     });
@@ -468,8 +470,8 @@ export class WorkerClient {
   ecashBlinded(keysetId: string, from: number, count: number) {
     return this.call("ecashBlinded", { keysetId, from, count });
   }
-  ecashUnblind(keysetId: string, keys: Record<string, string>, found: WorkerActionMap["ecashUnblind"][0]["found"]) {
-    return this.call("ecashUnblind", { keysetId, keys, found });
+  ecashUnblind(keysetId: string, keyset: WorkerActionMap["ecashUnblind"][0]["keyset"], found: WorkerActionMap["ecashUnblind"][0]["found"]) {
+    return this.call("ecashUnblind", { keysetId, keyset, found });
   }
   ecashTrialOutput(keysetId: string) {
     return this.call("ecashTrialOutput", { keysetId });

@@ -294,6 +294,18 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
       }
       return { found: mints.reduce((n, m) => n + m.sats, 0), mints };
     },
+    /**
+     * Whether a mint says it restores what it signed and proves it (NUT-09, NUT-12, NUT-13): only such a mint can be
+     * tried, or restored from. Asks the mint's info, nothing else.
+     */
+    async mintCanSeed(mint: string): Promise<boolean> {
+      try {
+        const info = (await (await at(mint)).mint.getInfo()) as unknown as { nuts?: Record<string, { supported?: boolean; disabled?: boolean } | undefined> };
+        return [9, 12, 13].every((n) => !!info.nuts?.[String(n)] && info.nuts[String(n)]!.supported !== false && info.nuts[String(n)]!.disabled !== true);
+      } catch {
+        return false;
+      }
+    },
     /** Whether a mint's current keyset is one the seed is used for (rule 4), as the screen names it. */
     async seededMint(mint: string): Promise<boolean> {
       if (!seedParts()) return false;
@@ -317,6 +329,11 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
       let wallet: CashuWallet;
       try {
         wallet = await at(mint);
+        // A mint that doesn't say it restores (NUT-09, NUT-13) and proves what it signs (NUT-12) is not tried, and
+        // nothing is split for it.
+        const info = (await wallet.mint.getInfo()) as unknown as { nuts?: Record<string, { supported?: boolean; disabled?: boolean } | undefined> };
+        const lacks = [9, 12, 13].some((n) => !info.nuts?.[String(n)] || info.nuts[String(n)]!.supported === false || info.nuts[String(n)]!.disabled === true);
+        if (lacks) return { outcome: "not-tried", why: "This mint doesn't say it can restore what it signed and prove it, so it can't be restored from.", cost: 0 };
         // Charging for a swap would make the trial cost more than a sat: not tried, and nothing split for it.
         if (Number(wallet.getFeesForKeyset(1, wallet.keysetId)) > 0) return { outcome: "not-tried", why: "This mint charges for each swap, so it can't be tried for one sat.", cost: 0 };
         // A 1-sat proof to try with: split one off where none is held, and keep the split at once.
@@ -353,7 +370,8 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
       if (result.outcome === "not-tried") return { outcome: "not-tried", why: result.why, cost: 0 };
       // Failed: the proof the trial ended with is spent, and that sat is gone, said once in the history.
       const spent = once as EcashProof | null;
-      if (result.outcome === "failed" && spent) {
+      // A mint that signed again yet left the proof unspent (cost 0) has taken nothing: it stays held.
+      if (result.outcome === "failed" && spent && result.cost > 0) {
         const left = proofsAt(mint).filter((p) => p.secret !== spent.secret);
         state = await store.roll({ destroy: tokensAt(mint).map((t) => t.event), keep: [{ mint, proofs: left }], ...(result.cost ? { history: { direction: "out" as const, amount: result.cost } } : {}) });
       }

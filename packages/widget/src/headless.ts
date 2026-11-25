@@ -471,9 +471,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
           await requirePubkey();
           return (await client.ecashBlinded(keysetId, from, count)).blinded;
         },
-        async unblind(keysetId, keys, found) {
+        async unblind(keysetId, keyset, found) {
           await requirePubkey();
-          return (await client.ecashUnblind(keysetId, keys, found)).proofs as never;
+          return (await client.ecashUnblind(keysetId, keyset, found)).proofs as never;
         },
         async trialOutput(keysetId) {
           await requirePubkey();
