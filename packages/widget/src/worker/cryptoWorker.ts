@@ -74,7 +74,7 @@ import { blossomAuth, loadDrive, peekDrive, rankServers, saveDrive, SERVER_LIST_
 import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { keepEcashTrial, loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
 import { ecashSeed } from "./ecashSeed.js";
-import { drawLane, forwardLane, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, workerLock } from "./ecashLanes.js";
+import { drawLane, forwardLane, repinKeyset, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, workerLock } from "./ecashLanes.js";
 import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
 import {
   checkDue,
@@ -245,7 +245,7 @@ const requestQueue = new LaneQueue();
 const LANE: Record<string, string> = {
   ecashLoad: "ecash", ecashSetMints: "ecash", ecashRoll: "ecash", ecashKeepTrial: "ecash",
   // The seed's outputs and this browser's lanes (docs/ecash-seed-counter.md): no relay, no wait behind a wallet read.
-  ecashLaneGet: "seed", ecashDraw: "seed", ecashReserve: "seed", ecashForward: "seed", ecashBlinded: "seed", ecashUnblind: "seed", ecashTrialOutput: "seed",
+  ecashLaneGet: "seed", ecashDraw: "seed", ecashReserve: "seed", ecashForward: "seed", ecashBlinded: "seed", ecashUnblind: "seed", ecashTrialOutput: "seed", ecashRepin: "seed",
   // Asks relays which mints people recommend, and writes nothing: a line of its own, so it holds up no wallet work.
   ecashMints: "mints",
   driveLoad: "drive", driveSave: "drive", blossomServers: "drive", blossomSetServers: "drive", blossomAuth: "drive",
@@ -2145,15 +2145,18 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
     case "ecashDraw":
     case "ecashReserve":
     case "ecashForward":
-    case "ecashTrialOutput": {
+    case "ecashTrialOutput":
+    case "ecashRepin": {
       const { signer, everydayPrivateKey } = requireUnlocked();
       const deps = { signer, store, seed: () => ecashSeed(everydayPrivateKey), lock: workerLock() };
-      const p = payload as { keysetId?: unknown; lane?: unknown; amounts?: unknown; next?: unknown };
+      const p = payload as { keysetId?: unknown; lane?: unknown; amounts?: unknown; next?: unknown; keyset?: unknown };
+      // The owner's press (the fourth review's 2): the keys checked against the id, then pinned in place of the pin.
+      if (action === "ecashRepin") return await repinKeyset(deps, p.keysetId, p.keyset);
       if (action === "ecashLaneGet") return { state: await seedLane(deps, p.keysetId) };
       if (action === "ecashDraw") return { state: await drawLane(deps, p.keysetId, p.lane) };
-      if (action === "ecashReserve") return await reserveOutputs(deps, p.keysetId, p.amounts);
+      if (action === "ecashReserve") return await reserveOutputs(deps, p.keysetId, p.amounts, p.keyset);
       if (action === "ecashForward") return { state: await forwardLane(deps, p.keysetId, p.next) };
-      return { output: await trialOutput(deps, p.keysetId) };
+      return { output: await trialOutput(deps, p.keysetId, p.keyset) };
     }
     // Blinded messages, and proofs for signatures the mint proved it made (DLEQ, checked here), and only where the
     // worker has the lock every tab shares (the review's second finding 1).
@@ -2382,7 +2385,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",
-  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent", "ecashLaneGet", "ecashDraw", "ecashReserve", "ecashForward", "ecashBlinded", "ecashUnblind", "ecashTrialOutput", "ecashKeepTrial",
+  "ecashLoad", "ecashSetMints", "ecashRoll", "ecashMints", "profileContent", "ecashLaneGet", "ecashDraw", "ecashReserve", "ecashForward", "ecashBlinded", "ecashUnblind", "ecashTrialOutput", "ecashRepin", "ecashKeepTrial",
   "ecashPeek", "drivePeek", "receiptsPeek", "payProfile", "payListing", "unlockAuth", "guestListFind", "guestListSign", "receiptsLoad", "receiptsKeep", "paySettingsLoad", "paySettingsSave",
   "driveLoad", "driveSave", "blossomAuth", "blossomServers", "blossomSetServers",
   "vaultStatus", "vaultList", "vaultSaveNwc", "vaultFindForOrigin", "vaultRevealNwc",

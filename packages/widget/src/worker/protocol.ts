@@ -653,7 +653,7 @@ export type WorkerActionMap = {
   /** Take a lane the mint shows as empty, where this browser has none; the lane kept is returned. */
   ecashDraw: [{ keysetId: string; lane: number }, { state: LaneState }];
   /** Outputs for one operation, at counters reserved from this browser's lane and written down first. */
-  ecashReserve: [{ keysetId: string; amounts: number[] }, { outputs: SeededOutput[]; from: number; next: number }];
+  ecashReserve: [{ keysetId: string; amounts: number[]; keyset: KeysetGiven }, { outputs: SeededOutput[]; from: number; next: number }];
   /** Move this browser's lane forward, never back. */
   ecashForward: [{ keysetId: string; next: number }, { state: LaneState | null }];
   /** Blinded messages at any counters, for restore and the check before use: nothing that unblinds them. */
@@ -661,7 +661,8 @@ export type WorkerActionMap = {
   /** Finished proofs for what a mint signed at this seed's counters, unblinded here. */
   ecashUnblind: [{ keysetId: string; keyset: KeysetGiven; found: FoundAt[] }, { proofs: { id: string; amount: number; secret: string; C: string }[] }];
   /** One output for a trial, at the next trial counter not yet handed out. */
-  ecashTrialOutput: [{ keysetId: string }, { output: SeededOutput }];
+  ecashTrialOutput: [{ keysetId: string; keyset: KeysetGiven }, { output: SeededOutput }];
+  ecashRepin: [{ keysetId: string; keyset: KeysetGiven }, { hash: string; at: number }];
   /** Keep a mint keyset's trial with the wallet record (docs/ecash-seed-counter.md, rule 4). */
   ecashKeepTrial: [{ trial: { mint: string; keysetId: string; outcome: "passed" | "failed" } }, EcashState];
   ecashRoll: [EcashRoll, EcashState];

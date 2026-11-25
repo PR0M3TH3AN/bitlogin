@@ -34,7 +34,7 @@ export interface EcashStore {
 }
 
 /** What a trial of a mint came to, as the screen says it. */
-export type MintTrialOutcome = { outcome: "passed" | "failed"; cost: number } | { outcome: "not-tried"; why: string; cost: 0 };
+export type MintTrialOutcome = { outcome: "passed" | "failed"; cost: number; why?: string } | { outcome: "not-tried"; why: string; cost: 0 };
 
 type Cashu = typeof import("@cashu/cashu-ts");
 type CashuWallet = InstanceType<Cashu["Wallet"]>;
@@ -106,6 +106,11 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
    */
   const locksHere = (): boolean => options.locks ?? typeof (globalThis as { navigator?: { locks?: { request?: unknown } } }).navigator?.locks?.request === "function";
   /** Whether this mint's current keyset has passed the trial (rule 4): only then is anything added there by the seed. */
+  /**
+   * Mints whose keys, as they give them now, aren't the ones pinned for their keyset (the fourth review's 2): found at a
+   * claim, before the mint was asked to sign. Their sats are added relay-kept until the owner re-pins, at a press.
+   */
+  const keysChanged = new Set<string>();
   const passed = (mint: string, keysetId: string): boolean => (state.trials ?? []).some((t) => t.mint === mint && t.keysetId === keysetId && t.outcome === "passed");
   /**
    * The seeded minter for a mint, or null where the seed isn't used for it: no passed trial for its keyset, no seed
@@ -223,8 +228,10 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
             minted = await seeded.add(funding.amount, checked);
           } catch (err) {
             // No lane to be had, or no lock in the worker: nothing was asked of the mint yet, so it is added as before.
+            // Or keys that aren't the pinned ones: refused before the mint was asked to sign, so added as before too.
             const code = (err as { code?: string })?.code;
-            if (code !== "no-lane" && code !== "no-seed-here") throw err;
+            if (code === "pin-mismatch") keysChanged.add(funding.mint);
+            if (code !== "no-lane" && code !== "no-seed-here" && code !== "pin-mismatch") throw err;
           }
         }
         const proofs = plain(minted ?? (await wallet.mintProofsBolt11(funding.amount, checked)));
@@ -236,8 +243,31 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
         state = await store.roll({ destroy: [], keep: [{ mint: funding.mint, proofs }], history: { direction: "in", amount: sumProofs(proofs) } }, sealed);
         return true;
       } catch (err) {
+        // Signed without a proof: said in the worker's own words, which say where the sats are.
+        if ((err as { code?: string })?.code === "no-dleq") throw new EcashError("mint", (err as Error).message);
         throw mintError(err);
       }
+    },
+    /** Whether a claim here found the mint's keys aren't the ones pinned for its keyset. */
+    keysChanged(mint: string): boolean {
+      return keysChanged.has(mint);
+    },
+    /**
+     * The owner's press (the fourth review's 2): pin the keys this mint gives now for its keyset, in place of the pin.
+     * The worker takes them only where they make the keyset's id. Every device takes up the newer pin.
+     */
+    async repinMint(mint: string): Promise<void> {
+      const seed = seedParts();
+      if (!seed) throw new EcashError("no-wallet", "This wallet can't use a seed here.");
+      if (!state.mints.includes(mint)) throw new EcashError("no-wallet", "That mint is not in this wallet.");
+      const { keysetGiven } = await import("./seededMint.js");
+      try {
+        const wallet = await at(mint);
+        await seed.repin(wallet.keysetId, keysetGiven(wallet.keyChain.getKeyset(wallet.keysetId)));
+      } catch (err) {
+        throw mintError(err);
+      }
+      keysChanged.delete(mint);
     },
 
     /**
@@ -378,7 +408,7 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
         state = await store.roll({ destroy: tokensAt(mint).map((t) => t.event), keep: [{ mint, proofs: left }], ...(result.cost ? { history: { direction: "out" as const, amount: result.cost } } : {}) });
       }
       state = await store.keepTrial({ mint, keysetId: result.keysetId, outcome: result.outcome });
-      return { outcome: result.outcome, cost: result.cost };
+      return { outcome: result.outcome, cost: result.cost, ...(result.outcome === "failed" && result.why ? { why: result.why } : {}) };
     },
 
     /** Take in a Cashu token someone gave: it is swapped at its mint for proofs only this wallet knows. */

@@ -180,6 +180,30 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     if (here === "no-seed") return [];
     const line = document.createElement("span");
     line.className = "seed";
+    if (wallet.keysChanged(mint)) {
+      // The fourth review's 2: the keys this mint gives now aren't the ones pinned for its keyset. Re-pinned only at the
+      // owner's press, said in words first, and a moment after the words are shown.
+      line.textContent = "This mint's keys aren't the ones it was first used with here, so sats added now are kept on relays. A mint may change its keys; someone may also be passing other keys off as this mint's.";
+      const repin = document.createElement("button");
+      repin.type = "button";
+      repin.className = "connect-link";
+      repin.textContent = "I trust this mint: use its keys now";
+      let shownAt = performance.now();
+      repin.onclick = async () => {
+        if (performance.now() - shownAt < TOO_SOON_MS) return;
+        repin.disabled = true;
+        try {
+          await wallet.repinMint(mint);
+          $("ecash-note").textContent = "This mint's keys are pinned again. Sats added here from now on can be restored from your key.";
+          home();
+        } catch (err) {
+          repin.disabled = false;
+          shownAt = performance.now();
+          fail(err);
+        }
+      };
+      return [line, repin];
+    }
     if (seeded.has(mint)) {
       line.classList.add("kept");
       line.textContent = here === "yes" ? "Sats added here can be restored from your key." : "Passed the trial. Not used with your key in this browser.";
@@ -190,7 +214,7 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       return [line];
     }
     const failed = (wallet.state().trials ?? []).some((t) => t.mint === mint && t.outcome === "failed");
-    line.textContent = failed ? "Signed the same thing twice when tried, so it stays relay-kept." : "Relay-kept: your key alone can't restore sats here.";
+    line.textContent = failed ? "Failed its trial, so it stays relay-kept." : "Relay-kept: your key alone can't restore sats here.";
     if (failed || here !== "yes") return [line];
     const tryIt = document.createElement("button");
     tryIt.type = "button";
@@ -221,7 +245,7 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
         result.outcome === "passed"
           ? "Passed: nothing spent. Sats you add at this mint from now on can be restored from your key."
           : result.outcome === "failed"
-            ? `This mint signed the same thing twice. ${sats(result.cost)} was spent finding out, and this mint stays relay-kept.`
+            ? `${result.why ?? "This mint signed the same thing twice."} ${sats(result.cost)} was spent finding out, and this mint stays relay-kept.`
             : `Not tried: ${result.why} Nothing was spent.`;
     } catch (err) {
       $("ecash-trial-yes").disabled = false;

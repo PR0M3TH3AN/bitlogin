@@ -66,7 +66,7 @@ describe("an error from the worker", () => {
 
   it("reaches the caller with its code, as the worker sends it (fault 3)", async () => {
     const client = new WorkerClient();
-    const pending = client.ecashReserve("00ad268c4d1f5826", [1]);
+    const pending = client.ecashReserve("00ad268c4d1f5826", [1], { keys: { "1": "02" + "aa".repeat(32) } });
     const worker = FakeWorker.instances[0]!;
     const asked = worker.posted.at(-1) as { id: string; action: string };
     expect(asked.action).toBe("ecashReserve");

@@ -459,9 +459,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
           await requirePubkey();
           return (await client.ecashDraw(keysetId, lane)).state;
         },
-        async reserve(keysetId, amounts) {
+        async reserve(keysetId, amounts, keyset) {
           await requirePubkey();
-          return client.ecashReserve(keysetId, amounts);
+          return client.ecashReserve(keysetId, amounts, keyset);
         },
         async forward(keysetId, next) {
           await requirePubkey();
@@ -475,9 +475,13 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
           await requirePubkey();
           return (await client.ecashUnblind(keysetId, keyset, found)).proofs as never;
         },
-        async trialOutput(keysetId) {
+        async trialOutput(keysetId, keyset) {
           await requirePubkey();
-          return (await client.ecashTrialOutput(keysetId)).output;
+          return (await client.ecashTrialOutput(keysetId, keyset)).output;
+        },
+        async repin(keysetId, keyset) {
+          await requirePubkey();
+          await client.ecashRepin(keysetId, keyset);
         }
       },
       async keepTrial(trial) {

@@ -13,8 +13,9 @@ import type { NostrEvent, NostrFilter, RelayPublishOutcome } from "@bitlogin/cor
 import { keepEcashTrial, loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRelays } from "../worker/ecashStore.js";
 import { Wallet } from "@cashu/cashu-ts";
 import { ecashSeed } from "../worker/ecashSeed.js";
-import { forwardLane, readLane } from "../worker/ecashLanes.js";
+import { adoptPins, forwardLane, readLane } from "../worker/ecashLanes.js";
 import { createEcashWallet, type EcashStore } from "./wallet.js";
+import { laneStart } from "./seedLanes.js";
 import { startMockMint, type MockMint, type MockMintOptions } from "./mockMint.js";
 import { standInLock, standInSeedWorker } from "./seedWorkerStandIn.js";
 
@@ -335,5 +336,27 @@ describe("the third review's findings, each failing before its mend", { timeout:
     // Lane 5 would be drawn first; the record says this account has gone 300 into it.
     const minter = createSeededMint({ wallet: w, seed, random: (() => { let i = 0; return () => (i++ === 0 ? 5.5 / 32 : 0); })(), used: [5] });
     expect((await minter.lane())!.lane).not.toBe(5);
+  }, 60_000);
+
+  it("fourth review 2: a claim at a mint whose keys aren't the pinned ones asks it to sign nothing seeded, keeps the sats, and the owner re-pins", async () => {
+    const mint = await mintWith();
+    const account = newAccount();
+    const one = await seededWallet(account, mint);
+    const w = new Wallet(mint.url, { unit: "sat" });
+    await w.loadMint();
+    // A pin of other keys for this keyset, as another device's record might carry.
+    await adoptPins(one.deps, [{ keysetId: w.keysetId, hash: "ab".repeat(32), at: Math.floor(Date.now() / 1000) + 60 }]);
+    await add(one.wallet, mint, 8);
+    // Held, relay-kept; nothing reserved in the lane (drawn by asking the mint's restore, which signs nothing), so nothing
+    // seeded was put to the mint to sign.
+    expect(one.wallet.balance()).toBe(9);
+    const drawn = (await readLane(one.deps, w.keysetId))!;
+    expect(drawn.next).toBe(laneStart(drawn.lane));
+    expect(one.wallet.keysChanged(mint.url)).toBe(true);
+    // The owner's press: the keys the mint gives now are pinned, and the next add is seeded.
+    await one.wallet.repinMint(mint.url);
+    expect(one.wallet.keysChanged(mint.url)).toBe(false);
+    await add(one.wallet, mint, 2);
+    expect((await readLane(one.deps, w.keysetId))!.next).toBeGreaterThan(laneStart(drawn.lane));
   }, 60_000);
 });

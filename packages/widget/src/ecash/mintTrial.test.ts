@@ -53,6 +53,14 @@ describe("the trial of a mint, at a press", () => {
     expect(Number(result.kept.amount)).toBe(1);
   });
 
+  it("is failed by a mint that leaves the proof off the trial's own signature: a seeded mint is one known to give them (fourth review 1)", async () => {
+    // It says it proves what it signs, and signs the trial's swap without the proof: its 3rd signature, after the 1 and 2 sats.
+    const { wallet, proofs } = await holding({ dleqLeftOff: (n) => n === 3 });
+    const result = await trial(wallet, seed(), one(proofs));
+    expect(result).toMatchObject({ outcome: "failed", cost: 1 });
+    expect((result as { why?: string }).why).toMatch(/didn't prove/u);
+  });
+
   it("is failed by a mint that signs again, at the cost of exactly one sat", async () => {
     const { wallet, proofs } = await holding({ signsAgain: true });
     const result = await trial(wallet, seed(), one(proofs));

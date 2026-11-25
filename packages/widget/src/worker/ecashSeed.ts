@@ -133,7 +133,7 @@ const bytes = (h: string): Uint8Array => {
  * and expiry they are listed with) must be the keyset id asked about. Otherwise a key of the page's own, passed as the
  * mint's, would have its own proofs taken as the mint's.
  */
-function checkKeys(keysetId: string, given: KeysetGiven): Record<string, string> {
+export function checkKeys(keysetId: string, given: KeysetGiven): Record<string, string> {
   const keys = given?.keys;
   if (!keys || typeof keys !== "object" || Object.keys(keys).length === 0 || Object.keys(keys).length > 64) throw new Error("Those are not a keyset's keys.");
   const made = keysetId.startsWith("00")
@@ -152,10 +152,13 @@ function checkKeys(keysetId: string, given: KeysetGiven): Record<string, string>
  * keyset's id. Without that, a page could pass a point of its own choosing and be handed r·K back, enough to take, later,
  * whatever the mint signs at that counter. A mint whose restore gives no proofs is not restored from at all.
  */
-export function seededUnblind(seed: Uint8Array, keysetId: unknown, keyset: unknown, found: unknown, unproved: ReadonlySet<number> = new Set()): Proof[] {
+export function seededUnblind(seed: Uint8Array, keysetId: unknown, keyset: unknown, found: unknown): Proof[] {
   const id = checkKeyset(keysetId);
   const keys = checkKeys(id, keyset as KeysetGiven);
   if (!Array.isArray(found) || found.length > 1000) throw new Error("At most a thousand at a time.");
+  // Each counter once: a mint signs one output at a counter, so one listed again is not a mint's answer.
+  const counters = (found as FoundAt[]).map((f) => f?.counter);
+  if (new Set(counters).size !== counters.length) throw new Error("Each counter is finished once.");
   const derive = createSecretAndBlindingFactorDeriver(seed, id);
   const given = { id, keys };
   return (found as FoundAt[]).map((f) => {
@@ -163,10 +166,8 @@ export function seededUnblind(seed: Uint8Array, keysetId: unknown, keyset: unkno
     const key = keys[String(f.amount)];
     if (typeof key !== "string") throw new Error("This keyset has no key for that amount.");
     const made = at(derive, f.counter);
-    // Without a proof only for a counter this worker reserved moments ago for the operation now being finished
-    // (ecashLanes.ts): a mint's lapse doesn't strand a paid invoice, and no earlier script could have it.
+    // Never without a proof (2026-11-25, the fourth review's 1): not even for a counter reserved a moment ago.
     const proved = typeof f.dleq?.e === "string" && typeof f.dleq?.s === "string";
-    if (!proved && unproved.has(f.counter)) return new OutputData({ amount: Amount.from(f.amount), id, B_: made.B_ }, made.r, made.secret).toProof({ id, amount: Amount.from(f.amount), C_: f.C_ }, given as never);
     if (!proved) throw Object.assign(new Error("This mint doesn't prove what it signs."), { code: "no-dleq" });
     if (!verifyDLEQProof({ e: bytes(f.dleq!.e), s: bytes(f.dleq!.s) }, pointFromHex(made.B_), pointFromHex(f.C_), pointFromHex(key))) throw new Error("That signature isn't proved to be the mint's.");
     return new OutputData({ amount: Amount.from(f.amount), id, B_: made.B_ }, made.r, made.secret).toProof({ id, amount: Amount.from(f.amount), C_: f.C_ }, given as never);

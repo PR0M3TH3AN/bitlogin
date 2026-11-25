@@ -21,8 +21,11 @@ export interface SeedWorker {
   lane(keysetId: string): Promise<LaneState | null>;
   /** Take a lane the mint shows as empty, where this browser has none; the lane kept is returned. */
   draw(keysetId: string, lane: number): Promise<LaneState>;
-  /** Outputs for one operation, at counters the worker reserves and writes down first: blinded messages only. */
-  reserve(keysetId: string, amounts: number[]): Promise<{ outputs: ReservedOutput[]; from: number; next: number }>;
+  /**
+   * Outputs for one operation, at counters the worker reserves and writes down first: blinded messages only. The
+   * keyset's keys are checked against its id and its pin first, before the mint is asked to sign anything.
+   */
+  reserve(keysetId: string, amounts: number[], keyset: KeysetGiven): Promise<{ outputs: ReservedOutput[]; from: number; next: number }>;
   /** Move this browser's lane forward, never back. */
   forward(keysetId: string, next: number): Promise<LaneState | null>;
   /** Blinded messages at any counters: nothing that unblinds them. */
@@ -30,7 +33,9 @@ export interface SeedWorker {
   /** Finished proofs for what a mint signed at this seed's counters and proved it signed, unblinded in the worker. */
   unblind(keysetId: string, keyset: KeysetGiven, found: FoundAt[]): Promise<Proof[]>;
   /** One output for a trial, at the next trial counter not yet handed out: its blinded message only. */
-  trialOutput(keysetId: string): Promise<ReservedOutput>;
+  trialOutput(keysetId: string, keyset: KeysetGiven): Promise<ReservedOutput>;
+  /** The owner's press: pin the keys the mint gives now for this keyset, where they make its id. */
+  repin(keysetId: string, keyset: KeysetGiven): Promise<void>;
 }
 
 export interface SeededMintDeps {
@@ -117,7 +122,7 @@ export function createSeededMint(deps: SeededMintDeps) {
       for (let attempt = 0; attempt < 6; attempt++) {
         // Reserved and written down by the worker, under its lock: from here, a crash burns these counters and nothing
         // more, and no other tab can be handed them.
-        const made = await deps.seed.reserve(id, amounts);
+        const made = await deps.seed.reserve(id, amounts, keysetGiven(deps.wallet.keyChain.getKeyset(id)));
         if (deps.checkFirst !== false) {
           const signed = await signedAmong(deps.wallet, made.outputs);
           if (signed !== null) {
@@ -129,7 +134,14 @@ export function createSeededMint(deps: SeededMintDeps) {
           // The mint signs the blinded messages; the worker finishes them into proofs, checking the mint's proof of
           // each. Nothing that unblinds them was on this page before the mint had signed.
           const { signatures } = await deps.wallet.mint.mintBolt11({ quote: typeof quote === "string" ? quote : quote.quote, outputs: made.outputs.map((o) => ({ amount: o.amount, id: o.id, B_: o.B_ })) } as never);
-          return await deps.seed.unblind(id, keysetGiven(deps.wallet.keyChain.getKeyset(id)), signedFor(made.outputs, signatures));
+          try {
+            return await deps.seed.unblind(id, keysetGiven(deps.wallet.keyChain.getKeyset(id)), signedFor(made.outputs, signatures));
+          } catch (err) {
+            // Signed, but not proved (the fourth review's 1): nothing is finished without the mint's proof. The sats
+            // are at the mint, at this seed's counters, and restore finds them once the mint proves what it signed.
+            if ((err as { code?: string })?.code === "no-dleq") throw Object.assign(new Error("The mint signed these sats but didn't prove it, so BitLogin hasn't finished them. They are at the mint: restoring from your key finds them once it proves them."), { code: "no-dleq" });
+            throw err;
+          }
         } catch (err) {
           if (!alreadySigned(err)) throw err;
           // Refused whole, nothing issued: past the clash, and the same paid invoice claimed again.

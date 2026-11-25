@@ -9,11 +9,19 @@ import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import { WorkerClient } from "./workerClient.js";
 import { createBlindSignature, createDLEQProof, createNewMintKeys, pointFromHex } from "@cashu/cashu-ts";
-import { drawLane, forwardLane, pinKeyset, readCounters, readLane, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, type Lock } from "./ecashLanes.js";
+import { adoptPins, drawLane, forwardLane, pinKeyset, readCounters, readLane, readPins, repinKeyset, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, type Lock } from "./ecashLanes.js";
 import { ecashSeed, seededBlinded, seededUnblind } from "./ecashSeed.js";
 import { laneStart, TRIAL_FROM } from "../ecash/seedLanes.js";
 
-const KEYSET = "00ad268c4d1f5826";
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+/** A mint's keyset, made here: its id, its public keys as the mint lists them, and its private keys to sign with. */
+const mintKeys = () => {
+  const k = createNewMintKeys(4);
+  return { id: k.keysetId, pub: Object.fromEntries(Object.entries(k.pubKeys).map(([a, p]) => [a, hex(p as Uint8Array)])), priv: k.privKeys as Record<string, Uint8Array> };
+};
+const REAL = mintKeys();
+const KEYSET = REAL.id;
+const GIVEN = { keys: REAL.pub, unit: "sat" };
 /** A worker's deps, with a lock that records the names it is taken under. */
 function worker(lock: Lock | null = null) {
   const taken: string[] = [];
@@ -31,12 +39,12 @@ describe("the seed's outputs stay with the worker", () => {
 
   it("hands out outputs only at counters it reserves from this browser's lane, written down first, never twice", async () => {
     const { deps, taken } = worker();
-    await expect(reserveOutputs(deps, KEYSET, [1])).rejects.toMatchObject({ code: "no-lane" });
+    await expect(reserveOutputs(deps, KEYSET, [1], GIVEN)).rejects.toMatchObject({ code: "no-lane" });
     expect(await drawLane(deps, KEYSET, 4)).toEqual({ lane: 4, next: laneStart(4) });
     // Another tab's draw a moment later keeps the lane already drawn.
     expect(await drawLane(deps, KEYSET, 9)).toEqual({ lane: 4, next: laneStart(4) });
-    const a = await reserveOutputs(deps, KEYSET, [1, 2]);
-    const b = await reserveOutputs(deps, KEYSET, [4]);
+    const a = await reserveOutputs(deps, KEYSET, [1, 2], GIVEN);
+    const b = await reserveOutputs(deps, KEYSET, [4], GIVEN);
     expect(a.outputs.map((o) => o.counter)).toEqual([laneStart(4), laneStart(4) + 1]);
     expect(b.outputs.map((o) => o.counter)).toEqual([laneStart(4) + 2]);
     expect(await readLane(deps, KEYSET)).toEqual({ lane: 4, next: laneStart(4) + 3 });
@@ -59,24 +67,19 @@ describe("the seed's outputs stay with the worker", () => {
     const { deps } = worker();
     const none = { ...deps, lock: null };
     await expect(drawLane(none, KEYSET, 1)).rejects.toMatchObject({ code: "no-seed-here" });
-    await expect(reserveOutputs(none, KEYSET, [1])).rejects.toMatchObject({ code: "no-seed-here" });
-    await expect(trialOutput(none, KEYSET)).rejects.toMatchObject({ code: "no-seed-here" });
+    await expect(reserveOutputs(none, KEYSET, [1], GIVEN)).rejects.toMatchObject({ code: "no-seed-here" });
+    await expect(trialOutput(none, KEYSET, GIVEN)).rejects.toMatchObject({ code: "no-seed-here" });
   });
 
   it("hands out each trial counter once, in order from the start of the trial range", async () => {
     const { deps } = worker();
     const counters = [];
-    for (let i = 0; i < 3; i++) counters.push((await trialOutput(deps, KEYSET)).counter);
+    for (let i = 0; i < 3; i++) counters.push((await trialOutput(deps, KEYSET, GIVEN)).counter);
     expect(counters).toEqual([TRIAL_FROM, TRIAL_FROM + 1, TRIAL_FROM + 2]);
   });
 
   it("unblinds only a signature its mint proved (DLEQ), for the keyset its keys make: no oracle for r·K (fault 1)", () => {
     const seed = ecashSeed(generatePrivateKey());
-    const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
-    const mintKeys = () => {
-      const k = createNewMintKeys(4);
-      return { id: k.keysetId, pub: Object.fromEntries(Object.entries(k.pubKeys).map(([a, p]) => [a, hex(p as Uint8Array)])), priv: k.privKeys as Record<string, Uint8Array> };
-    };
     const real = mintKeys();
     const [b] = seededBlinded(seed, real.id, 9, 1);
     const signed = (keys: ReturnType<typeof mintKeys>, dleq = true) => {
@@ -108,20 +111,74 @@ describe("the seed's outputs stay with the worker", () => {
   it("hands out no secret and no blinding factor before the mint has signed: reserve and the trial give blinded messages (third review 1)", async () => {
     const { deps } = worker();
     await drawLane(deps, KEYSET, 4);
-    const made = await reserveOutputs(deps, KEYSET, [1, 2]);
+    const made = await reserveOutputs(deps, KEYSET, [1, 2], GIVEN);
     for (const o of made.outputs) expect(Object.keys(o).sort()).toEqual(["B_", "amount", "counter", "id"]);
-    const trial = await trialOutput(deps, KEYSET);
+    const trial = await trialOutput(deps, KEYSET, GIVEN);
     expect(Object.keys(trial).sort()).toEqual(["B_", "amount", "counter", "id"]);
   });
 
   it("pins a keyset's keys the first time they are used, and refuses other keys under that id after (third review 2)", async () => {
     const { deps } = worker();
-    const keys = { keys: { "1": "02" + "aa".repeat(32) }, unit: "sat" };
-    const other = { keys: { "1": "02" + "bb".repeat(32) }, unit: "sat" };
-    await pinKeyset(deps, KEYSET, keys);
-    await pinKeyset(deps, KEYSET, keys);
-    await expect(pinKeyset(deps, KEYSET, other)).rejects.toThrow(/not the keys/u);
+    const other = mintKeys();
+    await pinKeyset(deps, KEYSET, GIVEN);
+    await pinKeyset(deps, KEYSET, GIVEN);
+    // Other keys under this id don't make it, and are refused before any pin is looked at.
+    await expect(pinKeyset(deps, KEYSET, { keys: other.pub, unit: "sat" })).rejects.toThrow(/not this keyset's/u);
     // Another keyset is its own.
-    await pinKeyset(deps, "00bb268c4d1f5826", other);
+    await pinKeyset(deps, other.id, { keys: other.pub, unit: "sat" });
+  });
+
+  // The fourth review (2026-11-25), each failing before it was mended.
+  it("finishes nothing the mint didn't prove, however fresh the counter: no exception for one just reserved (fourth review 1)", async () => {
+    const { deps } = worker();
+    await drawLane(deps, KEYSET, 3);
+    const made = await reserveOutputs(deps, KEYSET, [2], GIVEN);
+    const o = made.outputs[0]!;
+    const sig = createBlindSignature(pointFromHex(o.B_), REAL.priv["2"]!, REAL.id);
+    // The mint's own signature, a moment after the reserve, with no proof: refused, and so is a point the page chose.
+    await expect(seedUnblind(deps, KEYSET, GIVEN, [{ counter: o.counter, amount: 2, C_: sig.C_.toHex(true) }])).rejects.toMatchObject({ code: "no-dleq" });
+    const chosen = pointFromHex(REAL.pub["2"]!).multiply(7n).toHex(true);
+    await expect(seedUnblind(deps, KEYSET, GIVEN, [{ counter: o.counter, amount: 1, C_: chosen }, { counter: o.counter, amount: 2, C_: chosen }])).rejects.toThrow();
+    // One counter listed twice, with a proof: refused whole.
+    const proof = createDLEQProof(pointFromHex(o.B_), REAL.priv["2"]!);
+    const proved = { counter: o.counter, amount: 2, C_: sig.C_.toHex(true), dleq: { e: hex(proof.e), s: hex(proof.s) } };
+    await expect(seedUnblind(deps, KEYSET, GIVEN, [proved, proved])).rejects.toThrow(/once/u);
+    expect(await seedUnblind(deps, KEYSET, GIVEN, [proved])).toHaveLength(1);
+  });
+
+  it("checks keys against the id before it pins them, and before it makes any output the mint is asked to sign (fourth review 2)", async () => {
+    const { deps } = worker();
+    const garbage = { keys: { "1": "02" + "aa".repeat(32) }, unit: "sat" };
+    // Keys that don't make the id: refused, and nothing pinned.
+    await expect(seedUnblind(deps, KEYSET, garbage, [])).rejects.toThrow(/not this keyset's/u);
+    expect(await readPins(deps)).toEqual({});
+    await drawLane(deps, KEYSET, 5);
+    await expect(reserveOutputs(deps, KEYSET, [1], garbage)).rejects.toThrow(/not this keyset's/u);
+    await expect(trialOutput(deps, KEYSET, garbage)).rejects.toThrow(/not this keyset's/u);
+    // Nothing reserved for it: the lane hasn't moved.
+    expect(await readLane(deps, KEYSET)).toEqual({ lane: 5, next: laneStart(5) });
+    // The real keys pin, at the first reserve.
+    await reserveOutputs(deps, KEYSET, [1], GIVEN);
+    expect(Object.keys(await readPins(deps))).toEqual([KEYSET]);
+  });
+
+  it("lets the owner put a pin on the keys the mint now gives, checked against the id, and the newer pin goes to every device (fourth review 2)", async () => {
+    const { deps } = worker();
+    const old = { keys: { ...REAL.pub, "8": "02" + "cc".repeat(32) }, unit: "sat" };
+    // A pin of other keys, as an older device might have made.
+    await adoptPins(deps, [{ keysetId: KEYSET, hash: "ab".repeat(32), at: 100 }]);
+    await expect(reserveOutputs(deps, KEYSET, [1], GIVEN)).rejects.toMatchObject({ code: "pin-mismatch" });
+    // Re-pinned only to keys that make the id.
+    await expect(repinKeyset(deps, KEYSET, old)).rejects.toThrow(/not this keyset's/u);
+    await repinKeyset(deps, KEYSET, GIVEN);
+    await drawLane(deps, KEYSET, 6);
+    expect((await reserveOutputs(deps, KEYSET, [1], GIVEN)).outputs).toHaveLength(1);
+    const pin = (await readPins(deps))[KEYSET]!;
+    expect(pin.at).toBeGreaterThan(100);
+    // The older record, read again from a relay, doesn't put the old pin back; a newer one would.
+    await adoptPins(deps, [{ keysetId: KEYSET, hash: "ab".repeat(32), at: 100 }]);
+    expect((await readPins(deps))[KEYSET]).toEqual(pin);
+    await adoptPins(deps, [{ keysetId: KEYSET, hash: "cd".repeat(32), at: pin.at + 10 }]);
+    expect((await readPins(deps))[KEYSET]).toEqual({ hash: "cd".repeat(32), at: pin.at + 10 });
   });
 });

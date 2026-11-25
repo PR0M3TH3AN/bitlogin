@@ -116,11 +116,17 @@ export interface EcashCounter {
 }
 const COUNTER_ROW = "bitlogin-counter";
 const PIN_ROW = "bitlogin-keys";
-/** Pins as one list: the first for each keyset stays. */
-export function withPins(...lists: (readonly { keysetId: string; hash: string }[] | undefined)[]): { keysetId: string; hash: string }[] {
-  const by = new Map<string, string>();
-  for (const p of lists.flatMap((l) => l ?? [])) if (!by.has(p.keysetId)) by.set(p.keysetId, p.hash);
-  return [...by].map(([keysetId, hash]) => ({ keysetId, hash })).slice(0, 200);
+/** A keyset's pin, as the wallet record carries it: the keys' hash, and when it was made (0 for one with no date). */
+export interface EcashPin {
+  keysetId: string;
+  hash: string;
+  at?: number;
+}
+/** Pins as one list: the newer for each keyset (an owner's re-pin, the fourth review's 2); the first where as new. */
+export function withPins(...lists: (readonly EcashPin[] | undefined)[]): EcashPin[] {
+  const by = new Map<string, EcashPin>();
+  for (const p of lists.flatMap((l) => l ?? [])) if (!by.has(p.keysetId) || (p.at ?? 0) > (by.get(p.keysetId)!.at ?? 0)) by.set(p.keysetId, { keysetId: p.keysetId, hash: p.hash, ...(p.at ? { at: p.at } : {}) });
+  return [...by.values()].slice(0, 200);
 }
 const COUNTERS_KEPT = 200;
 /** Two lists of counters as one: the higher for each keyset and lane. */
@@ -153,9 +159,9 @@ export interface EcashWallet {
   counters?: EcashCounter[];
   /**
    * A hash of the keys each keyset was first used with (the third review): another device takes these up, so keys
-   * made to match a short keyset id are refused there too. The first written stays.
+   * made to match a short keyset id are refused there too. The newer stays: the owner may re-pin, at a press.
    */
-  pins?: { keysetId: string; hash: string }[];
+  pins?: EcashPin[];
 }
 
 export function writeWallet(wallet: EcashWallet): string {
@@ -164,7 +170,7 @@ export function writeWallet(wallet: EcashWallet): string {
     ...wallet.mints.map((mint) => ["mint", mint]),
     ...(wallet.trials ?? []).map((t) => [TRIAL_ROW, t.mint, t.keysetId, t.outcome, String(t.at)]),
     ...(wallet.counters ?? []).map((c) => [COUNTER_ROW, c.keysetId, String(c.lane), String(c.next)]),
-    ...(wallet.pins ?? []).map((p) => [PIN_ROW, p.keysetId, p.hash])
+    ...(wallet.pins ?? []).map((p) => [PIN_ROW, p.keysetId, p.hash, ...(p.at ? [String(p.at)] : [])])
   ]);
 }
 
@@ -195,9 +201,9 @@ export function readWallet(text: string): EcashWallet | null {
   const mints: string[] = [];
   let trials: EcashTrial[] = [];
   let counters: EcashCounter[] = [];
-  let pins: { keysetId: string; hash: string }[] = [];
+  let pins: EcashPin[] = [];
   for (const row of rows) {
-    if (row[0] === PIN_ROW && typeof row[1] === "string" && KEYSET.test(row[1]) && typeof row[2] === "string" && /^[0-9a-f]{64}$/u.test(row[2])) pins = withPins(pins, [{ keysetId: row[1], hash: row[2] }]);
+    if (row[0] === PIN_ROW && typeof row[1] === "string" && KEYSET.test(row[1]) && typeof row[2] === "string" && /^[0-9a-f]{64}$/u.test(row[2])) pins = withPins(pins, [{ keysetId: row[1], hash: row[2], ...(Number.isSafeInteger(Number(row[3])) && Number(row[3]) > 0 ? { at: Number(row[3]) } : {}) }]);
     if (!Array.isArray(row) || typeof row[0] !== "string") continue;
     if (row[0] === "privkey" && typeof row[1] === "string" && HEX64.test(row[1])) privkey ||= row[1];
     if (row[0] === "mint" && cleanMint(row[1]) && !mints.includes(cleanMint(row[1])) && mints.length < ECASH_LIMITS.mints) mints.push(cleanMint(row[1]));

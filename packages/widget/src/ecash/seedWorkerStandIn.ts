@@ -5,7 +5,7 @@
  */
 import type { NostrSigner } from "@bitlogin/core/account";
 import type { KeyValueStore } from "@bitlogin/core/storage";
-import { drawLane, forwardLane, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, type Lock } from "../worker/ecashLanes.js";
+import { drawLane, forwardLane, repinKeyset, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, type Lock } from "../worker/ecashLanes.js";
 import type { SeedWorker } from "./seededMint.js";
 
 /** A stand-in for navigator.locks, which Node hasn't: one lock per name, within this process. */
@@ -23,10 +23,11 @@ export function standInSeedWorker(deps: { signer: NostrSigner; store: KeyValueSt
   return {
     lane: (id) => seedLane(worker, id),
     draw: (id, lane) => drawLane(worker, id, lane),
-    reserve: (id, amounts) => reserveOutputs(worker, id, amounts),
+    reserve: (id, amounts, keyset) => reserveOutputs(worker, id, amounts, keyset),
     forward: (id, next) => forwardLane(worker, id, next),
     blinded: (id, from, count) => seedBlinded(worker, id, from, count),
     unblind: (id, keyset, found) => seedUnblind(worker, id, keyset, found),
-    trialOutput: (id) => trialOutput(worker, id)
+    trialOutput: (id, keyset) => trialOutput(worker, id, keyset),
+    repin: async (id, keyset) => void (await repinKeyset(worker, id, keyset))
   };
 }

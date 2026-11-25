@@ -35,7 +35,7 @@ export interface TrialDeps {
 
 export type TrialResult =
   | { keysetId: string; outcome: "passed"; cost: 0; kept: Proof }
-  | { keysetId: string; outcome: "failed"; cost: number }
+  | { keysetId: string; outcome: "failed"; cost: number; why?: string }
   | { keysetId: string; outcome: "not-tried"; why: string; cost: 0 };
 
 const supports = (info: { nuts?: Record<string, { supported?: boolean; disabled?: boolean } | undefined> }, n: number) => {
@@ -59,7 +59,7 @@ export async function tryMint(deps: TrialDeps): Promise<TrialResult> {
   // The next trial counter the worker hasn't handed out, asked of the mint first: one another browser used is passed by.
   let made: ReservedOutput | null = null;
   for (let i = 0; i < 8 && !made; i++) {
-    const o = await deps.seed.trialOutput(keysetId);
+    const o = await deps.seed.trialOutput(keysetId, keysetGiven(keyset));
     const { outputs } = await wallet.mint.restore({ outputs: [{ amount: o.amount as never, id: o.id, B_: o.B_ }] });
     if (outputs.length === 0) made = o;
   }
@@ -68,7 +68,15 @@ export async function tryMint(deps: TrialDeps): Promise<TrialResult> {
   // 1. The person's proof, swapped into the trial output; what comes back is kept at once.
   const first = await wallet.mint.swap({ inputs: [deps.proof], outputs: [out] });
   // Finished into a proof by the worker, which checks the mint's proof of it: nothing that unblinds it was here before.
-  const [once] = await deps.seed.unblind(keysetId, keysetGiven(keyset), signedFor([made], first.signatures));
+  // A mint that didn't prove the trial's own signature fails (2026-11-25, the fourth review's 1): it is not known to give
+  // proofs, and nothing it signed without one is finished, so its seeded adds couldn't be. That costs the sat.
+  let once: Proof | undefined;
+  try {
+    [once] = await deps.seed.unblind(keysetId, keysetGiven(keyset), signedFor([made], first.signatures));
+  } catch (err) {
+    if ((err as { code?: string })?.code === "no-dleq") return { keysetId, outcome: "failed", cost: 1, why: "This mint signed the trial's sat but didn't prove it, so the sat couldn't be kept." };
+    throw err;
+  }
   if (!once) throw new Error("The mint's answer could not be finished into a proof.");
   await deps.keep(once);
   // 2. That proof, swapped into the same output again.

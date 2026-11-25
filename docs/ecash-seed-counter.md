@@ -230,14 +230,31 @@ relay gone, rule 5 and the mint are enough.
     signatures into proofs. Otherwise a script that ran once on the page
     could reserve and keep outputs, never use them (the mint would still
     show the lane empty), and take what a later browser added there.
-  - **A mint's lapse doesn't strand a paid invoice:** a counter this
-    worker reserved in the last ten minutes, for the operation being
-    finished, may be finished once without the mint's proof; never
-    twice, never after, never a counter it didn't reserve.
+  - **Nothing is finished without the mint's proof** (the fourth review,
+    2026-11-25): not even a counter reserved a moment ago. An exception
+    for those would let a script reserve and at once ask for any point
+    of its own to be "finished", for every amount, at counters a later
+    add will use. A counter is finished once in a call. The trial
+    itself must be proved: a mint that leaves the proof off the trial's
+    own signature fails it (at the cost of that sat), so a seeded mint
+    is one known to give them. Where a seeded mint lapses later, the add
+    says the sats are at the mint, and restore finds them once the mint
+    proves what it signed.
   - **Each keyset's keys are pinned the first time they are used** (a
-    hash of them, kept in the worker and never replaced), and carried to
-    other devices in the wallet record: keys made later to match a short
-    keyset id are refused.
+    hash of them, kept in the worker), and carried to other devices in
+    the wallet record: keys made later to match a short keyset id are
+    refused. Keys are checked against the id **before** they are pinned,
+    and the worker checks keys and pin before it reserves outputs or a
+    trial output, so the mint is never asked to sign for keys the worker
+    would then refuse to finish with: a claim that meets other keys is
+    added relay-kept, nothing seeded asked of the mint. **The owner may
+    re-pin**, at a press, with words saying a mint may change its keys
+    or someone may pass others off as its: the keys the mint gives now,
+    where they make the id. A pin carries its date; the newer goes to
+    every device.
+  - **This browser's copy is read and written under one lock** for
+    naming the mints and keeping a trial too, and no relay is waited on
+    while it is held: a claim another tab seals meanwhile is kept.
   - **A signature with no proof is left, not fatal:** restore skips it,
     counts it, and the screen says how many.
   - **A lane the wallet record names is never drawn,** whatever the mint

@@ -8,7 +8,7 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import { startMockMint, type MockMint } from "./mockMint.js";
-import { createSeededMint } from "./seededMint.js";
+import { createSeededMint, keysetGiven } from "./seededMint.js";
 import { laneStart, type LaneState } from "./seedLanes.js";
 import { restoreFromMint } from "./seedRestore.js";
 import { ecashSeed } from "../worker/ecashSeed.js";
@@ -114,7 +114,7 @@ describe("restore from the mints, from the key alone", () => {
     await worker.draw(wallet.keysetId, 2);
     // 1,100 one-sat outputs signed, as a long history at one mint leaves them.
     for (let i = 0; i < 11; i++) {
-      const made = await worker.reserve(wallet.keysetId, Array(100).fill(1));
+      const made = await worker.reserve(wallet.keysetId, Array(100).fill(1), keysetGiven(wallet.keyChain.getKeyset(wallet.keysetId)));
       const quote = await wallet.createMintQuoteBolt11(100);
       mint.payAllFunding();
       await wallet.mint.mintBolt11({ quote: quote.quote, outputs: made.outputs.map((o) => ({ amount: o.amount, id: o.id, B_: o.B_ })) } as never);
@@ -128,7 +128,8 @@ describe("restore from the mints, from the key alone", () => {
     mints.push(mint);
     const seed = ecashSeed(generatePrivateKey());
     const a = await browser(mint, seed, 2);
-    await a.add(5);
+    // The add itself finishes nothing the mint didn't prove (the fourth review's 1): it says so, with its code.
+    await expect(a.add(5)).rejects.toMatchObject({ code: "no-dleq" });
     const back = await restore(mint, seed);
     expect(back.skipped).toBe(1);
     expect(total(back.proofs)).toBe(1);

@@ -461,8 +461,8 @@ export class WorkerClient {
   ecashDraw(keysetId: string, lane: number) {
     return this.call("ecashDraw", { keysetId, lane });
   }
-  ecashReserve(keysetId: string, amounts: number[]) {
-    return this.call("ecashReserve", { keysetId, amounts });
+  ecashReserve(keysetId: string, amounts: number[], keyset: WorkerActionMap["ecashUnblind"][0]["keyset"]) {
+    return this.call("ecashReserve", { keysetId, amounts, keyset });
   }
   ecashForward(keysetId: string, next: number) {
     return this.call("ecashForward", { keysetId, next });
@@ -473,8 +473,11 @@ export class WorkerClient {
   ecashUnblind(keysetId: string, keyset: WorkerActionMap["ecashUnblind"][0]["keyset"], found: WorkerActionMap["ecashUnblind"][0]["found"]) {
     return this.call("ecashUnblind", { keysetId, keyset, found });
   }
-  ecashTrialOutput(keysetId: string) {
-    return this.call("ecashTrialOutput", { keysetId });
+  ecashTrialOutput(keysetId: string, keyset: WorkerActionMap["ecashUnblind"][0]["keyset"]) {
+    return this.call("ecashTrialOutput", { keysetId, keyset });
+  }
+  ecashRepin(keysetId: string, keyset: WorkerActionMap["ecashUnblind"][0]["keyset"]) {
+    return this.call("ecashRepin", { keysetId, keyset });
   }
   ecashSetMints(mints: string[]) {
     return this.call("ecashSetMints", { mints });

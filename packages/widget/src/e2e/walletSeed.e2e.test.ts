@@ -275,7 +275,7 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         await note().filter({ hasText: /signed the same thing twice/u }).waitFor({ timeout: 60_000 });
         expect((await note().textContent())?.trim()).toBe("This mint signed the same thing twice. 1 sat was spent finding out, and this mint stays relay-kept.");
         expect((await frame().locator("#ecash-total").textContent())?.trim()).toBe("6");
-        expect(await rowOf(signingAgain).locator(".seed").textContent()).toBe("Signed the same thing twice when tried, so it stays relay-kept.");
+        expect(await rowOf(signingAgain).locator(".seed").textContent()).toBe("Failed its trial, so it stays relay-kept.");
         expect(await rowOf(signingAgain).locator("button").count()).toBe(0);
 
         // ---- Sats added at the mint that passed are seeded: Restore finds nothing this wallet lacks, and says so.
@@ -292,7 +292,7 @@ describe.skipIf(!playwright)("the wallet's seed on its screen", () => {
         await open("wallet");
         await frame().locator('[data-ecash="home"]').waitFor({ state: "visible", timeout: 60_000 });
         await expect.poll(async () => (await rowOf(refusing).locator(".seed").textContent()) ?? "", { timeout: 30_000 }).toBe("Sats added here can be restored from your key.");
-        expect(await rowOf(signingAgain).locator(".seed").textContent()).toBe("Signed the same thing twice when tried, so it stays relay-kept.");
+        expect(await rowOf(signingAgain).locator(".seed").textContent()).toBe("Failed its trial, so it stays relay-kept.");
 
         // ---- Two tabs of this browser, adding at the same moment at the mint that passed (rule 3a). They share this
         // browser's lane: under navigator.locks each is handed its own counters, so the mint never sees one twice.

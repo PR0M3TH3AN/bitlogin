@@ -147,8 +147,8 @@ const state = (copy: LocalCopy, offline: boolean): EcashState => ({
 });
 
 /** This browser's pins of keysets' keys (ecashLanes.ts), as wallet-record rows. */
-async function pinsHere(deps: { signer: NostrSigner; store: KeyValueStore }): Promise<{ keysetId: string; hash: string }[]> {
-  return Object.entries(await readPins(deps).catch(() => ({}) as Record<string, string>)).map(([keysetId, hash]) => ({ keysetId, hash }));
+async function pinsHere(deps: { signer: NostrSigner; store: KeyValueStore }): Promise<{ keysetId: string; hash: string; at?: number }[]> {
+  return Object.entries(await readPins(deps).catch(() => ({}) as Awaited<ReturnType<typeof readPins>>)).map(([keysetId, pin]) => ({ keysetId, hash: pin.hash, ...(pin.at ? { at: pin.at } : {}) }));
 }
 /** This browser's counters, from the worker's lanes (ecashLanes.ts), as wallet-record rows. */
 async function laneCounters(deps: { signer: NostrSigner; store: KeyValueStore }): Promise<EcashCounter[]> {
@@ -161,11 +161,11 @@ function covers(a: EcashWallet | null, b: EcashWallet | null): boolean {
   if (!a) return false;
   if (a.mints.join("\n") !== b.mints.join("\n")) return false;
   if (!(b.trials ?? []).every((t) => (a.trials ?? []).some((u) => u.mint === t.mint && u.keysetId === t.keysetId && u.at >= t.at))) return false;
-  if (!(b.pins ?? []).every((p) => (a.pins ?? []).some((q) => q.keysetId === p.keysetId))) return false;
+  if (!(b.pins ?? []).every((p) => (a.pins ?? []).some((q) => q.keysetId === p.keysetId && (q.at ?? 0) >= (p.at ?? 0)))) return false;
   return (b.counters ?? []).every((c) => (a.counters ?? []).some((d) => d.keysetId === c.keysetId && d.lane === c.lane && d.next >= c.next));
 }
 /** A wallet record with the trials and counters of others joined in: the newer trial, the higher counter. */
-function joined(base: EcashWallet, others: (EcashWallet | null | undefined)[], lanes: readonly EcashCounter[] = [], pinned: readonly { keysetId: string; hash: string }[] = []): EcashWallet {
+function joined(base: EcashWallet, others: (EcashWallet | null | undefined)[], lanes: readonly EcashCounter[] = [], pinned: readonly { keysetId: string; hash: string; at?: number }[] = []): EcashWallet {
   const trials = withTrials(base.trials, ...others.map((o) => o?.trials));
   const counters = withCounters(base.counters, ...others.map((o) => o?.counters), lanes);
   const pins = withPins(pinned, base.pins, ...others.map((o) => o?.pins));
@@ -262,7 +262,7 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
   const localNewer = !!local.wallet && (!newestWallet || (local.walletAt ?? 0) > newestWallet.created_at);
   const base = localNewer ? local.wallet : (onRelay ?? local.wallet);
   // Keysets' keys pinned on another device are taken up here, where none is pinned yet: never replacing one.
-  if (onRelay?.pins?.length) await adoptPins(deps, Object.fromEntries(onRelay.pins.map((p) => [p.keysetId, p.hash]))).catch(() => {});
+  if (onRelay?.pins?.length) await adoptPins(deps, onRelay.pins).catch(() => {});
   const wallet = base ? joined(base, [onRelay, local.wallet], await laneCounters(deps), await pinsHere(deps)) : null;
   const deleted = new Set(mine(deletions.outcomes.flatMap((o) => o.events), 5).flatMap((event) => event.tags.filter((tag) => tag[0] === "e" && typeof tag[1] === "string").map((tag) => tag[1]!)));
   const byId = new Map<string, NostrEvent>();
@@ -351,24 +351,41 @@ export async function loadEcash(deps: { signer: NostrSigner; store: KeyValueStor
 /** A wallet record's date: now, or a second after the record it replaces where the clock says the same or earlier. */
 const datedAfter = (now: number, before: number | undefined): number => Math.max(Math.floor(now), (before ?? 0) + 1);
 
+/**
+ * Once a wallet record is on relays: this browser's copy, read again under the lock, says so, where it is still the
+ * record that was sent (2026-11-25, the fourth review's 3). What another tab wrote meanwhile is kept as it wrote it.
+ */
+async function markSent(deps: { signer: NostrSigner; store: KeyValueStore }, at: number): Promise<LocalCopy> {
+  return withLocal(deps.signer, async () => {
+    const now = await readLocal(deps.store, deps.signer);
+    if (now.walletAt !== at || !now.walletUnsent) return now;
+    const next = { ...now };
+    delete next.walletUnsent;
+    await writeLocal(deps.store, deps.signer, next);
+    return next;
+  });
+}
+
 /** Name the wallet's mints, making the wallet (and a key of its own) where there is none. */
 export async function setEcashMints(deps: { signer: NostrSigner; store: KeyValueStore; relays: EcashRelays; newKey: () => string; now?: number }, mints: unknown): Promise<EcashState> {
-  const { signer, store, relays } = deps;
-  const me = signer.getPublicKey();
+  const { signer, store } = deps;
   const clean = [...new Set((Array.isArray(mints) ? mints : []).map(cleanMint).filter(Boolean))];
   if (clean.length === 0 || clean.length > ECASH_LIMITS.mints) throw new Error("Name between one and five mints, each an https address.");
-  const local = await readLocal(store, signer);
-  // The mints change; the trials made of them stay, for whichever of them are still named.
-  const trials = (local.wallet?.trials ?? []).filter((t) => clean.includes(t.mint));
-  const wallet = joined({ privkey: local.wallet?.privkey ?? deps.newKey(), mints: clean, ...(trials.length ? { trials } : {}) }, [{ privkey: "", mints: [], ...(local.wallet?.counters ? { counters: local.wallet.counters } : {}), ...(local.wallet?.pins ? { pins: local.wallet.pins } : {}) }], await laneCounters(deps), await pinsHere(deps));
-  const at = datedAfter(deps.now ?? Date.now() / 1000, local.walletAt);
-  const next: LocalCopy = { wallet, tokens: local.tokens, walletAt: at, walletUnsent: true };
-  await writeLocal(store, signer, next);
+  const lanes = await laneCounters(deps);
+  const pinned = await pinsHere(deps);
+  // Read and written as one, under the lock; no relay is waited on while it is held.
+  const { wallet, at } = await withLocal(signer, async () => {
+    const local = await readLocal(store, signer);
+    // The mints change; the trials made of them stay, for whichever of them are still named.
+    const trials = (local.wallet?.trials ?? []).filter((t) => clean.includes(t.mint));
+    const wallet = joined({ privkey: local.wallet?.privkey ?? deps.newKey(), mints: clean, ...(trials.length ? { trials } : {}) }, [{ privkey: "", mints: [], ...(local.wallet?.counters ? { counters: local.wallet.counters } : {}), ...(local.wallet?.pins ? { pins: local.wallet.pins } : {}) }], lanes, pinned);
+    const at = datedAfter(deps.now ?? Date.now() / 1000, local.walletAt);
+    await writeLocal(store, signer, { ...local, wallet, walletAt: at, walletUnsent: true });
+    return { wallet, at };
+  });
   const took = await publishWallet(deps, wallet, at);
   if (!took) throw new Error("The wallet was saved in this browser, but no relay took it. Try again when you are online.");
-  delete next.walletUnsent;
-  await writeLocal(store, signer, next);
-  return state(next, false);
+  return state(await markSent(deps, at), false);
 }
 
 export interface EcashRoll {
@@ -472,21 +489,24 @@ export async function rollEcash(
  * on relays, so every device knows whether that mint is used with the seed. Newest wins for a mint and keyset.
  */
 export async function keepEcashTrial(deps: { signer: NostrSigner; store: KeyValueStore; relays: EcashRelays; now?: number }, trial: unknown): Promise<EcashState> {
-  const { signer, store, relays } = deps;
-  const me = signer.getPublicKey();
+  const { signer, store } = deps;
   const t = trial as Partial<EcashTrial> | null;
   const mint = cleanMint(t?.mint);
   if (!mint || typeof t?.keysetId !== "string" || !/^[0-9a-f]{16}$|^[0-9a-f]{66}$/u.test(t.keysetId) || (t.outcome !== "passed" && t.outcome !== "failed")) throw new Error("That is not a trial of a mint.");
-  const local = await readLocal(store, signer);
-  if (!local.wallet || !local.wallet.mints.includes(mint)) throw new Error("That mint is not in this wallet.");
-  const now = datedAfter(deps.now ?? Date.now() / 1000, local.walletAt);
-  const wallet = joined({ ...local.wallet, trials: withTrial(local.wallet.trials, { mint, keysetId: t.keysetId, outcome: t.outcome, at: now }) }, [], await laneCounters(deps), await pinsHere(deps));
-  // Kept here first, marked as not yet on a relay: where no relay takes it, it is sent again at the next opening.
-  const next: LocalCopy = { wallet, tokens: local.tokens, walletAt: now, walletUnsent: true };
-  await writeLocal(store, signer, next);
-  if (await publishWallet(deps, wallet, now)) {
-    delete next.walletUnsent;
-    await writeLocal(store, signer, next);
-  }
-  return state(next, false);
+  const keysetId = t.keysetId;
+  const outcome = t.outcome;
+  const lanes = await laneCounters(deps);
+  const pinned = await pinsHere(deps);
+  // Kept here first, marked as not yet on a relay, under the lock (the fourth review's 3): where no relay takes it, it
+  // is sent again at the next opening.
+  const { wallet, at } = await withLocal(signer, async () => {
+    const local = await readLocal(store, signer);
+    if (!local.wallet || !local.wallet.mints.includes(mint)) throw new Error("That mint is not in this wallet.");
+    const at = datedAfter(deps.now ?? Date.now() / 1000, local.walletAt);
+    const wallet = joined({ ...local.wallet, trials: withTrial(local.wallet.trials, { mint, keysetId, outcome, at }) }, [], lanes, pinned);
+    await writeLocal(store, signer, { ...local, wallet, walletAt: at, walletUnsent: true });
+    return { wallet, at };
+  });
+  if (await publishWallet(deps, wallet, at)) return state(await markSent(deps, at), false);
+  return state(await withLocal(signer, () => readLocal(store, signer)), false);
 }
