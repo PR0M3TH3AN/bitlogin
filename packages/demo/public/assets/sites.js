@@ -100,6 +100,10 @@ const draw = () => {
         item.append(el("p", entry.site, "connect-site"));
         if (words.known) item.append(el("p", `BitLogin knows this address: it is ${words.known}.`, "connect-small"));
       }
+      if (entry.device) {
+        // A headset signed in from this phone (docs/pair-a-headset.md): its own grant, signed out on its own.
+        item.append(el("p", `A headset${entry.deviceLabel ? ` (${entry.deviceLabel})` : ""}, signed in from this phone on ${new Date(entry.at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long" })}.`));
+      }
       item.append(el("p", `As ${me && me.pubkey === entry.pubkey ? me.name || "the account signed in here" : `another account (${shortKey(entry.pubkey)})`}.`));
       if (entry.refused) {
         item.append(el("p", "It had been allowed more than any site may now have, so BitLogin ended it."));
@@ -114,7 +118,10 @@ const draw = () => {
       }
       item.append(el("p", `Allowed ${day(entry.at)}. ${words.ended ? "" : `Ends ${day(entry.until)} at the latest. `}${words.lasts}`, "connect-small"));
       const row = el("div", "", "cta-row");
-      if (!words.ended && !words.family) {
+      if (entry.device && !words.ended) {
+        item.append(el("p", "If you think someone has read this headset's storage, sign it out, then make a new account: BitLogin can't change an account's key yet.", "connect-small"));
+      }
+      if (!words.ended && !words.family && !entry.device) {
         const open = el("a", "Open it to sign out", "btn secondary");
         // The address was read as an http(s) origin before it was ever kept. No link back to this page is given.
         open.href = entry.site;
@@ -122,25 +129,29 @@ const draw = () => {
         open.rel = "noopener noreferrer";
         row.append(open);
       }
-      const remove = el("button", words.ended ? "Remove from this list" : "Take it back", "btn secondary");
+      const remove = el("button", words.ended ? "Remove from this list" : entry.device ? "Sign out this headset" : "Take it back", "btn secondary");
       remove.type = "button";
       remove.addEventListener("click", async () => {
         if (!words.ended) {
           remove.disabled = true;
-          say("Taking it back.");
-          if (!(await publish({ site: entry.site }, entry.pubkey))) {
+          say(entry.device ? "Signing the headset out." : "Taking it back.");
+          if (!(await publish(entry.device ? { device: entry.device } : { site: entry.site }, entry.pubkey))) {
             remove.disabled = false;
             return;
           }
           say(
-            words.family
+            entry.device
+              ? "Signed out: that headset, and no other device. It stops when its signer next checks, usually within a day, and at once if it is signed out in the world itself."
+              : words.family
               ? `Taken back: every site at ${words.family}. Each stops when its signer next checks, usually within a day. To stop one this minute, open it and sign out there.`
               : `Taken back: ${entry.site}. It stops when its signer next checks, usually within a day. To stop it this minute, open it and sign out there.`
           );
         }
         // What the record now ends goes from the list with it: a family takes its sites' own grants with it, and a
         // site of a family takes the family's grant (docs/site-family.md SF6).
+        // A headset's sign-out ends that headset alone.
         const ended = (other) =>
+          entry.device ? other.device === entry.device :
           other.pubkey === entry.pubkey && (other.site === entry.site || (!words.ended && (inFamily(other.site, entry.site) || inFamily(entry.site, other.site))));
         saveAllowed(loadAllowed(Date.now() / 1000).filter((other) => !ended(other)));
         draw();

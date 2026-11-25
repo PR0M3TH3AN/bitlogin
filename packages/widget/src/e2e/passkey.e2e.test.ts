@@ -89,7 +89,7 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
       }
       // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
       // signer reads it. Each is given the mock relays, as the account page is.
-      if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/signer/index.html") {
+      if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/pair/index.html" || relative === "/signer/index.html") {
         body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}"${unlockNamed ? ` data-unlock-service="${unlockNamed}"` : ""}>`);
       }
       res.writeHead(200, {
@@ -4262,4 +4262,151 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       300_000
     );
   }
+  it(
+    "a headset is signed in from a phone: the number it shows is tapped on the phone, and a wrong one signs nothing in (pair-a-headset.md)",
+    async () => {
+      // Relays as real ones are: an ephemeral note is passed on to whoever listens, and kept by none.
+      for (const relay of relays) relay.keepsEphemeral = false;
+      const QUEST = "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/35.1 Chrome/126.0 VR Safari/537.36";
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN) window.heard.push({ origin: e.origin, data: e.data }); });
+  window.post = (message) => frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, ...message }, SIGNIN);
+  window.ask = (message, wait = 4000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    window.post({ id, ...message });
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      // The world's pages are "public" and BitLogin's this machine's: the check on that is off for the test only.
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        // The phone: an account, signed in on BitLogin's own page.
+        const phone = await browser.newContext();
+        const account = await phone.newPage();
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, `phone-${Date.now().toString(36)}`);
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+        const npub = ((await widget.locator(".pubkey").textContent()) ?? "").trim();
+
+        // The headset: a world, with nobody signed in, in a browser that says it is a Quest's.
+        const headset = await browser.newContext({ userAgent: QUEST });
+        await headset.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: worldPage }));
+        const world = async (host: string) => {
+          const page = await headset.newPage();
+          await page.goto(`https://${host}/`);
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          return page;
+        };
+        const said = (page: import("playwright").Page, id: string) => page.evaluate((i) => (window as any).heard.map((m: any) => m.data).filter((d: any) => d.id === i), id) as Promise<Record<string, any>[]>;
+        const waitSaid = (page: import("playwright").Page, id: string, t: string, more = "") =>
+          page.waitForFunction(([i, k, m]) => (window as any).heard.some((h: any) => h.data?.id === i && h.data.t === k && (!m || h.data[m] !== undefined)), [id, t, more] as const, { timeout: 60_000 });
+
+        const h1 = await world("h1.bitblocks.network");
+        await h1.evaluate(() => (window as any).post({ t: "pair", id: "p1" }));
+        await waitSaid(h1, "p1", "pairing");
+        const shown = (await said(h1, "p1")).find((d) => d.t === "pairing")!;
+        expect(shown.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/u);
+        expect(shown.url).toBe(`${origin}/pair/#${shown.code}`);
+        expect(shown.expires).toBeGreaterThan(Date.now() / 1000 + 200);
+
+        // The phone opens the QR's address: asked first whether they hold the headset, and the code leaves the address.
+        const pair = await phone.newPage();
+        const pageErrors: string[] = [];
+        pair.on("pageerror", (err) => pageErrors.push(String(err)));
+        pair.on("console", (m) => m.type() === "error" && pageErrors.push(m.text()));
+        await pair.goto(shown.url);
+        await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 }).catch((err) => {
+          throw new Error(`no question on /pair: ${pageErrors.join(" | ").slice(0, 600)} | ${(err as Error).message.slice(0, 60)}`);
+        });
+        expect(await pair.locator("#step-holding").textContent()).toContain("Did you just press Sign in on a headset you are holding?");
+        expect(new URL(pair.url()).hash).toBe("");
+        await pair.waitForTimeout(1000);
+        await pair.locator("#holding-yes").click();
+        await pair.locator("#step-number").waitFor({ state: "visible", timeout: 60_000 });
+        // The headset shows the number the phone sent, and the phone offers it among three.
+        await waitSaid(h1, "p1", "pairing", "number");
+        const number = (await said(h1, "p1")).find((d) => d.t === "pairing" && d.number !== undefined)!.number as number;
+        const choices = (await pair.locator("#numbers button").allTextContents()).map(Number);
+        expect(choices).toHaveLength(3);
+        expect(choices).toContain(number);
+        await pair.waitForTimeout(1000);
+        await pair.locator("#numbers button", { hasText: String(number) }).click();
+        await pair.locator("#step-ask").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await pair.locator("#ask-device").textContent()).toBe("A headset (Meta Quest Browser)");
+        expect(await pair.locator("#ask-site").textContent()).toBe("at https://h1.bitblocks.network");
+        expect(await pair.locator("#ask-code").textContent()).toBe(`Code ${shown.code}`);
+        expect(await pair.locator("#ask-family").textContent()).toBe("Stay signed in at every bitblocks.network site");
+        expect(await pair.locator("#step-ask").textContent()).toContain("Only sign in a headset you are holding.");
+        await pair.waitForTimeout(1000);
+        await pair.locator("#ask-site-only").click();
+        await pair.locator("#said").filter({ hasText: "Sent." }).waitFor({ timeout: 60_000 });
+
+        // The headset is signed in, as the phone's account, with nothing typed in it.
+        await waitSaid(h1, "p1", "paired");
+        const state = await h1.evaluate(() => (window as any).ask({ t: "state" }));
+        expect(state).toMatchObject({ unlocked: true, remembered: true });
+        expect(encodeNpub(state.pubkey)).toBe(npub);
+        const note = await h1.evaluate(() => (window as any).ask({ t: "sign", event: { kind: 1, content: "from a headset", tags: [] } }));
+        expect(note).toMatchObject({ t: "signed", event: { kind: 1, pubkey: state.pubkey } });
+        // Kept, as an Allow is: loaded again, still signed in. And it can't be paired over now: an account is signed in.
+        await h1.reload();
+        await h1.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        expect(await h1.evaluate(() => (window as any).ask({ t: "state" }))).toMatchObject({ unlocked: true, pubkey: state.pubkey });
+        expect(await h1.evaluate(() => (window as any).ask({ t: "pair" }))).toMatchObject({ t: "refused" });
+
+        // On the phone's list: that headset, signed out on its own.
+        const sites = await phone.newPage();
+        await sites.goto(`${origin}/sites/`);
+        const row = sites.locator("#sites li", { hasText: "A headset (Meta Quest Browser)" });
+        await row.waitFor({ timeout: 30_000 });
+        expect(await row.textContent()).toContain("BitLogin can't change an account's key yet.");
+        expect(await row.locator("button").textContent()).toBe("Sign out this headset");
+
+        // Another headset world, its code typed in by hand (no question first), and the wrong number tapped.
+        const h2 = await world("h2.bitblocks.network");
+        await h2.evaluate(() => (window as any).post({ t: "pair", id: "p2" }));
+        await waitSaid(h2, "p2", "pairing");
+        const second = (await said(h2, "p2")).find((d) => d.t === "pairing")!;
+        await pair.goto(`${origin}/pair/`);
+        await pair.locator("#step-code").waitFor({ state: "visible", timeout: 30_000 });
+        await pair.locator("#code").fill(second.code.toLowerCase().replace("-", " "));
+        await pair.locator("#find").click();
+        await pair.locator("#step-number").waitFor({ state: "visible", timeout: 60_000 });
+        await waitSaid(h2, "p2", "pairing", "number");
+        const right = (await said(h2, "p2")).find((d) => d.t === "pairing" && d.number !== undefined)!.number as number;
+        const wrong = (await pair.locator("#numbers button").allTextContents()).map(Number).find((n) => n !== right)!;
+        await pair.waitForTimeout(1000);
+        await pair.locator("#numbers button", { hasText: String(wrong) }).click();
+        await pair.locator("#said").filter({ hasText: "isn't the number the headset shows" }).waitFor({ timeout: 30_000 });
+        await waitSaid(h2, "p2", "pairing-expired");
+        expect((await said(h2, "p2")).find((d) => d.t === "pairing-expired")).toMatchObject({ why: "refused" });
+        expect(await h2.evaluate(() => (window as any).ask({ t: "state" }))).toMatchObject({ unlocked: false });
+
+        // A code no headset shows: said plainly.
+        await pair.goto(`${origin}/pair/`);
+        await pair.locator("#code").fill("ZZZZ-ZZZZ");
+        await pair.locator("#find").click();
+        await pair.locator("#said").filter({ hasText: "No headset is showing that code." }).waitFor({ timeout: 30_000 });
+
+        // "Sign out this headset": published, for that device alone.
+        await sites.reload();
+        await sites.locator("#sites li", { hasText: "A headset (Meta Quest Browser)" }).locator("button").click();
+        await sites.locator("#said").filter({ hasText: "Signed out: that headset, and no other device." }).waitFor({ timeout: 60_000 });
+      } finally {
+        for (const relay of relays) relay.keepsEphemeral = true;
+        await browser.close();
+      }
+    },
+    300_000
+  );
 });

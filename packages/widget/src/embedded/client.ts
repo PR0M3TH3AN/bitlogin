@@ -128,6 +128,13 @@ export interface BitLoginClient {
    * For an application, only where the set the user approved signs the pass's kind (27300). Throws where refused.
    */
   roomPass(session: string): Promise<NostrEvent>;
+  /**
+   * Sign this device in from the person's phone (docs/pair-a-headset.md), for a headset where nothing can be typed.
+   * `onCode` is told the code and the address to show (draw `url` as a QR), and again once the phone has found it,
+   * with the `number` the phone asks the person to tap. `done` is true once signed in; false where the code ran out,
+   * the phone said no, or `cancel()` was called. Only where nobody is signed in here, or it is a guest.
+   */
+  pair(onCode: (shown: BitLoginPairing) => void): { done: Promise<boolean>; cancel(): void };
   getPublicKey(): Promise<string>;
   signEvent(event: UnsignedEvent): Promise<NostrEvent>;
   nip44: { encrypt(peer: string, plaintext: string): Promise<string>; decrypt(peer: string, ciphertext: string): Promise<string> };
@@ -190,6 +197,16 @@ export interface AskOptions {
   show?: () => boolean | Promise<boolean>;
 }
 
+/** What a pairing shows: the code, the address of BitLogin's /pair with it (for a QR), until when, and the number. */
+export interface BitLoginPairing {
+  code: string;
+  url: string;
+  /** In seconds. */
+  expires: number;
+  /** Shown beside the code once the phone found it: "Your phone asks: 47". */
+  number?: number;
+}
+
 export class BitLoginRefused extends Error {
   constructor(what: string) {
     // The signer never says why (§SW5): locked, not allowed, over a limit and malformed all look the same.
@@ -239,6 +256,7 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
   const waiting = new Map<string, { resolve(value: Record<string, unknown>): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   let stopped = false;
 
+  const streams = new Map<string, (d: Record<string, unknown>) => void>();
   const newId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
 
   const take = (d: Record<string, unknown>) => {
@@ -272,6 +290,9 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
     if (d.t === "ready") return void frameIsUp();
     if (d.t === "state") take(d);
     if (typeof d.id !== "string") return;
+    // A pairing hears more than one answer to its one ask.
+    const stream = streams.get(d.id);
+    if (stream) return stream(d);
     const pending = waiting.get(d.id);
     if (!pending) return;
     waiting.delete(d.id);
@@ -393,6 +414,35 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
     },
     async signOut() {
       await request({ t: "lock" });
+    },
+    pair(onCode) {
+      const id = newId();
+      let finish: (ok: boolean) => void = () => {};
+      const done = new Promise<boolean>((resolve) => {
+        finish = (ok) => {
+          streams.delete(id);
+          resolve(ok);
+        };
+      });
+      streams.set(id, (d) => {
+        if (d.t === "pairing" && typeof d.code === "string" && typeof d.url === "string" && d.url.startsWith(`${at}/pair/#`) && typeof d.expires === "number") {
+          onCode({ code: d.code, url: d.url, expires: d.expires, ...(typeof d.number === "number" ? { number: d.number } : {}) });
+          return;
+        }
+        if (d.t === "paired") return finish(true);
+        if (d.t === "pairing-expired" || d.t === "refused") return finish(false);
+      });
+      void introduce()
+        .then(() => post({ t: "pair", id }))
+        .catch(() => finish(false));
+      return {
+        done,
+        cancel() {
+          if (!streams.has(id)) return;
+          post({ t: "pairCancel", id });
+          finish(false);
+        }
+      };
     },
     async propose(event, options) {
       if (!ASKED_KINDS.includes(event.kind)) return null;

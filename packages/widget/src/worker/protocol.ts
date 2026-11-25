@@ -2,6 +2,7 @@
 import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
 import type { RebroadcastResult, RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
 import type { AppPermissions } from "../embedded/permissions.js";
+import type { PairOffer } from "../embedded/pair.js";
 import type { Profile } from "../embedded/profile.js";
 import type { WorldMore } from "../embedded/follows.js";
 import type { ReadMessage, WrittenMessage } from "../embedded/messages.js";
@@ -212,6 +213,8 @@ export interface TakeBackPayload {
   site?: string;
   /** Every site, on every device: "sign out of every site". */
   all?: boolean;
+  /** One device a phone paired, by its id (docs/pair-a-headset.md): "Sign out this headset". */
+  device?: string;
 }
 export interface TakeBackResult {
   /** Enough relays accepted the record for it to be found. False: nothing was taken back. */
@@ -579,6 +582,15 @@ export type WorkerActionMap = {
   handoffAccept: [HandoffSealed, HandoffAcceptResult];
   signerKeep: [SignerKeepPayload, { kept: boolean }];
   signerRestore: [SignerSitePayload, SignerRestoreResult];
+  /** A headset signed in from a phone (docs/pair-a-headset.md): its side, in its signer frame. */
+  pairBegin: [{ site: string; device: string }, { code: string; expires: number }];
+  pairPoll: [Record<string, never>, { status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; everydayPublicKey?: string; site?: string; profile?: Profile; remember?: boolean; family?: string }];
+  pairCancel: [Record<string, never>, Record<string, never>];
+  /** And the phone's, at BitLogin's own /pair. */
+  pairFind: [{ code: string }, { offers: PairOffer[] }];
+  pairFound: [{ offer: string }, { number: number }];
+  pairEnd: [{ offer: string }, Record<string, never>];
+  pairAnswer: [{ offer: string; number: number; family?: string }, { device: string }];
   /** Whether a guest account is kept here for a family, by its public key alone (docs/guest-accounts.md G3). */
   guestStatus: [{ family: string }, { pubkey?: string }];
   signerTouch: [SignerTouchPayload, Record<string, never>];

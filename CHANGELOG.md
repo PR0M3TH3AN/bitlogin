@@ -6,6 +6,15 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-25
+
+- **A headset is signed in from the person's phone** (`docs/pair-a-headset.md`):
+  a world sends `pair` to its signer frame and shows the code and a QR of
+  `/pair/#CODE`; the phone, signed in to BitLogin, finds it, has the person
+  tap the number the headset shows, and sends what Allow sends. Nothing is
+  typed in the headset. An application uses `client.pair(onCode)`. The
+  phone's list of sites signs one headset out alone.
+
 ## 2026-11-22
 
 - **A world's owner can change its guest list and block list** from inside

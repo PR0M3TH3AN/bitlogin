@@ -257,6 +257,12 @@ export type SignerRequest =
    * under its domain. Written as BitLogin writes a family, or "" where it isn't one. It approves nothing: the signer
    * takes it only for its own family, one BitLogin knows, and the window offers it beside "Just this one".
    */
+  /**
+   * A headset asking to be signed in from a phone (docs/pair-a-headset.md): the signer answers `pairing` with a code
+   * and an address to show, then `paired`, or `pairing-expired`. Only where nobody is signed in, or it is a guest.
+   */
+  | { t: "pair"; id: string }
+  | { t: "pairCancel"; id: string }
   | { t: "wantFamily"; id: string; family: string; /** And a guest account, where nobody is signed in here (docs/guest-accounts.md). */ guest?: true }
   /** Follow or unfollow one person: the visitor's newest follow list as the world found it (or null), and the one change. */
   | { t: "follow"; id: string; list: unknown; add?: string; remove?: string }
@@ -303,6 +309,12 @@ export type SignerReply =
       guest?: true;
     }
   | { t: "signed"; id: string; event: NostrEvent }
+  /** A pairing under way: the code and address to show, until when, and, once a phone found it, its number. */
+  | { t: "pairing"; id: string; code: string; url: string; expires: number; number?: number }
+  /** The phone signed this headset in: the signer is unlocked, and says so in `state` too. */
+  | { t: "paired"; id: string }
+  /** The code ran out, or the phone said no (a wrong number, or "Not this one"): `why` says which. */
+  | { t: "pairing-expired"; id: string; why?: "refused" }
   /** Answers `propose` and `wallet` at once: the question is waiting for the person. Show BitLogin's panel or window. */
   | { t: "asking"; id: string }
   /** Answers `wallet`, once the person agreed: the connection this world may use. */
@@ -341,6 +353,8 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   const d = data as Record<string, unknown>;
   if (d.nswp !== SIGNER_PROTOCOL || d.v !== PROTOCOL_VERSION || typeof d.id !== "string" || !ID.test(d.id)) return null;
   if (d.t === "state") return { t: "state", id: d.id };
+  if (d.t === "pair") return { t: "pair", id: d.id };
+  if (d.t === "pairCancel") return { t: "pairCancel", id: d.id };
   if (d.t === "lock") return { t: "lock", id: d.id };
   if (d.t === "sign" && d.event && typeof d.event === "object") return { t: "sign", id: d.id, event: d.event };
   if (d.t === "propose" && d.event && typeof d.event === "object") return { t: "propose", id: d.id, event: d.event };

@@ -22,6 +22,7 @@ import type { AppPermissions } from "./embedded/permissions.js";
 import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
 import type { RankedMint } from "./ecash/mints.js";
+import type { PairOffer } from "./embedded/pair.js";
 import type { DriveSave, DriveState, RankedServer } from "./worker/driveStore.js";
 import type { KeptReceipt, ReceiptsState } from "./worker/receiptStore.js";
 import type { OpenOrder, PaySettings } from "./worker/paySettings.js";
@@ -107,7 +108,7 @@ export interface HeadlessSigner {
    * (docs/take-back.md). Publishes the record every embedded signer obeys.
    * `ok` false means nothing was taken back.
    */
-  takeBack(what: { site: string } | { all: true }): Promise<{ ok: boolean; accepted: number; of: number }>;
+  takeBack(what: { site: string } | { all: true } | { device: string }): Promise<{ ok: boolean; accepted: number; of: number }>;
   /**
    * The account's files (docs/files.md), for BitLogin's own pages: the index of folders, a permission note for
    * one file at one server, and the list of servers. A full session only. A page that asks must be BitLogin's own.
@@ -250,6 +251,18 @@ export interface HeadlessSigner {
   forgetSignerGrant(site: string): Promise<void>;
   /** Whether a guest account is kept here for a family: its public key, or null (docs/guest-accounts.md). */
   guestStatus(family: string): Promise<string | null>;
+  /**
+   * A headset signed in from a phone (docs/pair-a-headset.md). In the embedded signer: begin (a code to show), and
+   * ask how it stands; once paired, what arrived is as `acceptHandoff` gives it. On BitLogin's own /pair: find the
+   * offer by its code, send the number to match, end it, or answer it.
+   */
+  pairBegin(site: string, device: string): Promise<{ code: string; expires: number }>;
+  pairPoll(): Promise<{ status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; got?: Awaited<ReturnType<HeadlessSigner["acceptHandoff"]>> }>;
+  pairCancel(): Promise<void>;
+  pairFind(code: string): Promise<PairOffer[]>;
+  pairFound(offer: string): Promise<number>;
+  pairEnd(offer: string): Promise<void>;
+  pairAnswer(offer: string, number: number, family?: string): Promise<{ device: string }>;
   /** In the embedded signer: keep, and read back, the receipts BitLogin's own page handed it for this site (docs/paying.md). */
   holdReceipts(site: string, receipts: NostrEvent[]): Promise<void>;
   heldReceipts(site: string): Promise<NostrEvent[]>;
@@ -536,6 +549,34 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async guestStatus(family) {
       return (await client.guestStatus(family)).pubkey ?? null;
+    },
+    async pairBegin(site, device) {
+      return client.pairBegin(site, device);
+    },
+    async pairPoll() {
+      const res = await client.pairPoll();
+      if (res.status !== "paired" || !res.everydayPublicKey) return { status: res.status, ...(res.number !== undefined ? { number: res.number } : {}) };
+      pubkey = res.everydayPublicKey;
+      return { status: "paired", got: { pubkey, ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}), ...(res.family ? { family: res.family } : {}) } };
+    },
+    async pairCancel() {
+      await client.pairCancel();
+    },
+    async pairFind(code) {
+      await requirePubkey();
+      return (await client.pairFind(code)).offers;
+    },
+    async pairFound(offer) {
+      await requirePubkey();
+      return (await client.pairFound(offer)).number;
+    },
+    async pairEnd(offer) {
+      await requirePubkey();
+      await client.pairEnd(offer);
+    },
+    async pairAnswer(offer, number, family) {
+      await requirePubkey();
+      return client.pairAnswer(offer, number, family);
     },
     async logout() {
       await client.logout();
