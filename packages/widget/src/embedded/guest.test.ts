@@ -8,7 +8,7 @@ import type { KeyValueStore } from "@bitlogin/core/storage";
 import { getPublicKeyHex } from "@bitlogin/core/crypto";
 import { deriveEverydayPrivateKey } from "@bitlogin/core/account";
 import { recoveryPhraseToSeed } from "@bitlogin/core/crypto";
-import { readSignerRequest, prepareForGuest } from "./policy.js";
+import { readSignerRequest, prepareForGuest, passAllowed } from "./policy.js";
 import { buildRoomPass } from "./profile.js";
 import { forgetGuest, loadGuest, makeGuest } from "../worker/guestRecord.js";
 
@@ -86,5 +86,18 @@ describe("a guest account", () => {
     await expect(makeGuest(store, SITE)).rejects.toThrow();
     await forgetGuest(store, FAMILY);
     expect(await loadGuest(store, FAMILY)).toBeNull();
+  });
+
+  it("a room pass: for a world or a guest, and for an application only where its approved set signs the pass's kind", () => {
+    expect(passAllowed(null)).toBe(true);
+    const app = (sign: number[]) => ({ name: "App", sign, appData: [], proofs: [], read: [], peers: [] });
+    expect(passAllowed(app([1, 27300]))).toBe(true);
+    expect(passAllowed(app([1, 30078]))).toBe(false);
+  });
+
+  it("a site asks for a pass with its session key alone: it can't add or take away what the pass says", () => {
+    const wrap = (m: Record<string, unknown>) => ({ nswp: "nswp-signer", v: 1, ...m });
+    const session = "bb".repeat(32);
+    expect(readSignerRequest(wrap({ t: "pass", id: "p1", session, tags: [["nswp:guest", "0"]], guest: false }))).toEqual({ t: "pass", id: "p1", session });
   });
 });

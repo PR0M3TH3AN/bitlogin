@@ -129,6 +129,16 @@ export function prepareForSite(input: unknown, site: string, nowSeconds: number)
   return prepare(input, site, nowSeconds, (kind) => signClass(kind) === "ordinary");
 }
 
+/** The room pass's kind (NSWP-12; profile.ts ROOM_PASS_KIND). */
+const PASS_KIND = 27300;
+/**
+ * Whether a room pass may be made for this signer (2026-11-25): for a world or a guest, and for an application only
+ * where the set the user approved already signs the pass's kind. It widens nothing the person didn't read.
+ */
+export function passAllowed(app: { sign: readonly number[] } | null): boolean {
+  return !app || app.sign.includes(PASS_KIND);
+}
+
 /**
  * What a guest account's signer signs with no press (docs/guest-accounts.md G4, the owner's word of 2026-11-25): a
  * note and a reaction, as any site may, and its bag (NSWP-17: kind 37308, `d` "bag"), and nothing else.

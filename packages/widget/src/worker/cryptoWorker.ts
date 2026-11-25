@@ -56,7 +56,7 @@ import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock,
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
 import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
 import { isLocalAddress, isSignInAddress, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
-import { createSignGate, HELD_MOST, prepareForGuest, signClass } from "../embedded/policy.js";
+import { createSignGate, HELD_MOST, passAllowed, prepareForGuest, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
 import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
 import { ACHIEVEMENT_LIMITS, achievementForWorld } from "../embedded/achievements.js";
@@ -1234,11 +1234,11 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
     }
 
     // A room pass (NSWP kind 27300) for the site this session serves, and for no other. The site, the time, how
-    // long it lasts and the profile are all this worker's own: what is asked for is a session public key. Not
-    // for an application: an application is held to the set the user read, and a pass is not in one.
+    // long it lasts and the profile are all this worker's own: what is asked for is a session public key. For an
+    // application only where the set the user read already signs the pass's kind (passAllowed); for a guest, said.
     case "roomPass": {
       const { signer } = requireUnlocked();
-      if (!session.signerOnly || session.app || !session.site) throw new Error("refused");
+      if (!session.signerOnly || !passAllowed(session.app ? session.app.permissions : null) || !session.site) throw new Error("refused");
       const pass = buildRoomPass({
         session: (payload as RoomPassPayload).session,
         site: session.site,
