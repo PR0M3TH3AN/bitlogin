@@ -8,6 +8,14 @@ would plausibly want. Newest first.
 
 ## 2026-11-25
 
+- **VR way's first part is built, behind `VR_WAY`, which is off** (`docs/vr-way.md`).
+  Where a person chooses it at the pairing, a world's signer frame answers
+  `walletState`, `walletReceive`, `walletClaim`, `walletSend`, `walletTake`,
+  `filesList`, `fileOpen`, `fileSave` and `vrOff`, with a `confirm` for
+  anything that moves money or a file. The embedded signer's
+  `connect-src` gains `https:`, narrowed in the page to the person's own
+  mints and file servers.
+
 - **A headset's own key (Way 2) is built, behind `DEVICE_KEYS`, which is off.**
   Nothing changes for any site until it is turned on. Then a headset's pass
   is signed by its own key with the account's grant (kind 27305) beside it,

@@ -39,6 +39,8 @@ export interface HeadlessSignerOptions {
   discoveryRelays?: string[];
   /** Way 2's switch, for tests only: the worker takes it only where BitLogin runs at a local address. */
   deviceKeys?: boolean;
+  /** VR way's switch, for tests only: taken only where BitLogin runs at a local address. */
+  vrWay?: boolean;
 }
 
 export interface HeadlessSigner {
@@ -110,7 +112,7 @@ export interface HeadlessSigner {
    * (docs/take-back.md). Publishes the record every embedded signer obeys.
    * `ok` false means nothing was taken back.
    */
-  takeBack(what: { site: string } | { all: true } | { device: string }): Promise<{ ok: boolean; accepted: number; of: number }>;
+  takeBack(what: { site: string; /** VR way only: the sign-in stays. */ vr?: true } | { all: true } | { device: string }): Promise<{ ok: boolean; accepted: number; of: number }>;
   /**
    * The account's files (docs/files.md), for BitLogin's own pages: the index of folders, a permission note for
    * one file at one server, and the list of servers. A full session only. A page that asks must be BitLogin's own.
@@ -174,7 +176,9 @@ export interface HeadlessSigner {
    * In the embedded signer: ask the user's relays whether this site was
    * taken back, if it is time to. "ended" means the grant is gone.
    */
-  checkTakenBack(site: string): Promise<"ok" | "ended" | "stale">;
+  checkTakenBack(site: string): Promise<"ok" | "ended" | "stale" | "vr-off">;
+  /** VR way turned off in the world itself: at once, and kept. */
+  vrOff(): Promise<void>;
   /**
    * In a session that arrived by a hand-off for a site that declared no
    * permissions: a room pass (NSWP kind 27300) for that site, naming the
@@ -215,7 +219,7 @@ export interface HeadlessSigner {
    */
   acceptHandoff(
     sealed: { senderPublicKey: string; payload: string }
-  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean; family?: string; more?: WorldMore[]; /** Way 2: the headset's own key; `pubkey` is then the account's, and this the grant. */ deviceGrant?: NostrEvent; devicePubkey?: string }>;
+  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean; family?: string; more?: WorldMore[]; /** Way 2: the headset's own key; `pubkey` is then the account's, and this the grant. */ deviceGrant?: NostrEvent; devicePubkey?: string; /** VR way, chosen at the pairing. */ vr?: true }>;
   /**
    * For a session an application was approved for (docs/sign-in-window.md
    * §SW9.5). Each rejects unless the session carries a permission set that
@@ -246,7 +250,7 @@ export interface HeadlessSigner {
     family?: string,
     /** Make the family's guest account where nobody is signed in here and none is kept (docs/guest-accounts.md). */
     guest?: boolean
-  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; more?: WorldMore[]; permissions?: AppPermissions; signedSensitive?: number[]; guest?: boolean; /** Way 2: kept with the headset's own key. */ deviceGrant?: NostrEvent; devicePubkey?: string } | null>;
+  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; more?: WorldMore[]; permissions?: AppPermissions; signedSensitive?: number[]; guest?: boolean; /** Way 2: kept with the headset's own key. */ deviceGrant?: NostrEvent; devicePubkey?: string; /** VR way, kept with the grant. */ vr?: true } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
@@ -271,7 +275,7 @@ export interface HeadlessSigner {
   pairFind(code: string): Promise<PairOffer[]>;
   pairFound(offer: string): Promise<number>;
   pairEnd(offer: string): Promise<void>;
-  pairAnswer(offer: string, number: number, family?: string): Promise<{ device: string; /** Way 2: the headset's own key, public half. */ deviceKey?: string }>;
+  pairAnswer(offer: string, number: number, family?: string, /** VR way, chosen on the phone. */ vr?: boolean): Promise<{ device: string; /** Way 2: the headset's own key, public half. */ deviceKey?: string }>;
   /** Way 2, on the phone: sign a headset's own key out, on the account's list of devices signed out. */
   signOutDevice(deviceKey: string): Promise<{ ok: boolean; accepted: number; of: number }>;
   /** In the embedded signer: keep, and read back, the receipts BitLogin's own page handed it for this site (docs/paying.md). */
@@ -296,7 +300,8 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
   await client.configure({
     vaultRelayUrls: options.vaultRelays ?? [],
     discoveryRelayUrls: options.discoveryRelays ?? [],
-    ...(options.deviceKeys === true ? { deviceKeys: true } : {})
+    ...(options.deviceKeys === true ? { deviceKeys: true } : {}),
+    ...(options.vrWay === true ? { vrWay: true } : {})
   });
 
   let pubkey: string | null = null;
@@ -513,7 +518,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       const res = await client.handoffAccept(sealed);
       // Way 2: the session holds the headset's own key; who is signed in is the account the grant is from.
       pubkey = res.identity ?? res.everydayPublicKey;
-      return { pubkey, ...(res.deviceGrant ? { deviceGrant: res.deviceGrant, devicePubkey: res.everydayPublicKey } : {}), ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}), ...(res.family ? { family: res.family } : {}), ...(res.more?.length ? { more: res.more } : {}) };
+      return { pubkey, ...(res.deviceGrant ? { deviceGrant: res.deviceGrant, devicePubkey: res.everydayPublicKey } : {}), ...(res.vr ? { vr: true as const } : {}), ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}), ...(res.family ? { family: res.family } : {}), ...(res.more?.length ? { more: res.more } : {}) };
     },
     async appEncrypt(peerPublicKey, text, scheme = "nip44") {
       return (await client.appEncrypt({ peerPublicKey, text, scheme })).text;
@@ -537,6 +542,7 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       return {
         pubkey,
         ...(res.deviceGrant ? { deviceGrant: res.deviceGrant, devicePubkey: res.everydayPublicKey } : {}),
+        ...(res.vr ? { vr: true as const } : {}),
         until: res.until,
         ...(res.name ? { name: res.name } : {}),
         ...(res.profile ? { profile: res.profile } : {}),
@@ -597,13 +603,16 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       await requirePubkey();
       await client.pairEnd(offer);
     },
+    async vrOff() {
+      await client.vrOff();
+    },
     async signOutDevice(deviceKey) {
       await requirePubkey();
       return client.devicesOut(deviceKey);
     },
-    async pairAnswer(offer, number, family) {
+    async pairAnswer(offer, number, family, vr) {
       await requirePubkey();
-      return client.pairAnswer(offer, number, family);
+      return client.pairAnswer(offer, number, family, vr);
     },
     async logout() {
       await client.logout();

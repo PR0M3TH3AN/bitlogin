@@ -22,6 +22,8 @@ export interface ConfigurePayload {
   discoveryRelayUrls?: string[];
   /** Way 2's switch, for tests: taken only where BitLogin itself runs at a local address, never on a live one. */
   deviceKeys?: boolean;
+  /** VR way's switch, for tests: taken only where BitLogin itself runs at a local address. */
+  vrWay?: boolean;
 }
 
 export interface RegisterPayload {
@@ -217,6 +219,8 @@ export interface TakeBackPayload {
   all?: boolean;
   /** One device a phone paired, by its id (docs/pair-a-headset.md): "Sign out this headset". */
   device?: string;
+  /** With `site`: turn VR way off there, and leave the sign-in standing. */
+  vr?: boolean;
 }
 export interface TakeBackResult {
   /** Enough relays accepted the record for it to be found. False: nothing was taken back. */
@@ -227,7 +231,7 @@ export interface TakeBackResult {
 export interface SignerCheckResult {
   /** "ok": carry on. "ended": the site was taken back; the grant is gone. "stale": too long unchecked, and no
    *  relay answered: locked until one does. */
-  state: "ok" | "ended" | "stale";
+  state: "ok" | "ended" | "stale" | "vr-off";
 }
 
 export interface HandoffSealed {
@@ -252,6 +256,8 @@ export interface HandoffAcceptResult {
   /** Way 2: the key handed over is the headset's own; this is the account's grant for it, and whose account it is. */
   deviceGrant?: NostrEvent;
   identity?: string;
+  /** VR way, chosen at the pairing. */
+  vr?: true;
 }
 
 /** A world's session public key. Everything else in a room pass is the worker's own (§SW16). */
@@ -358,6 +364,8 @@ export interface SignerRestoreResult {
   /** Way 2: a headset's own key, kept with the account's grant for it, and whose account it is. */
   deviceGrant?: NostrEvent;
   identity?: string;
+  /** VR way, kept with the grant. */
+  vr?: true;
   everydayPublicKey?: string;
   until?: number;
   name?: string;
@@ -600,11 +608,13 @@ export type WorkerActionMap = {
   headsetCancel: [Record<string, never>, Record<string, never>];
   /** Way 2, on the phone: sign a headset's own key out, on the account's list of devices signed out (kind 37312). */
   devicesOut: [{ deviceKey: string }, { ok: boolean; accepted: number; of: number }];
+  /** VR way turned off in the world itself: at once, and kept. */
+  vrOff: [Record<string, never>, Record<string, never>];
   /** And the phone's, at BitLogin's own /pair. */
   pairFind: [{ code: string }, { offers: PairOffer[] }];
   pairFound: [{ offer: string }, { number: number }];
   pairEnd: [{ offer: string }, Record<string, never>];
-  pairAnswer: [{ offer: string; number: number; family?: string }, { device: string }];
+  pairAnswer: [{ offer: string; number: number; family?: string; vr?: boolean }, { device: string; deviceKey?: string }];
   /** Whether a guest account is kept here for a family, by its public key alone (docs/guest-accounts.md G3). */
   guestStatus: [{ family: string }, { pubkey?: string }];
   signerTouch: [SignerTouchPayload, Record<string, never>];

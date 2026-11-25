@@ -277,12 +277,20 @@ describe("widget security policy", () => {
     const signer = ruleFor("/signer/(.*)");
     const csp = signer.get("Content-Security-Policy") ?? "";
     // It may be framed by an https site. It loads nothing from anywhere else. Beyond its own files it reaches
-    // relays, over TLS, and nothing else: to ask whether its site was taken back (docs/take-back.md). That was
-    // `connect-src 'self'` alone until the owner agreed to open it for this, on 2026-11-19.
+    // relays, over TLS: to ask whether its site was taken back (docs/take-back.md). That was `connect-src 'self'`
+    // alone until the owner agreed to open it for this, on 2026-11-19. And https, for VR way (the owner's "Yes,
+    // allow it", 2026-11-25): narrowed in the page by its fetch guard to the person's own mints and file servers, in a
+    // session with VR way on, and to nothing otherwise (embedded/vrWay.ts, vrSigner.ts).
     expect(csp).toContain("frame-ancestors https:");
     expect(csp).toContain("default-src 'none'");
-    expect(csp).toMatch(/(^|; )connect-src 'self' wss:(;|$)/u);
-    expect(csp).not.toMatch(/connect-src[^;]*(https:|http:|ws:|\*)/u);
+    expect(csp).toMatch(/(^|; )connect-src 'self' wss: https:(;|$)/u);
+    expect(csp).not.toMatch(/connect-src[^;]*(http:|ws: |ws:;|\*)/u);
+    const signerPage = readFileSync(new URL("./embedded/signer.ts", import.meta.url), "utf8");
+    const vrPage = readFileSync(new URL("./embedded/vrSigner.ts", import.meta.url), "utf8");
+    // The guard is put over the frame's fetch as the signer starts, VR way or not: so with it off, nothing is reached.
+    expect(signerPage).toContain("const vrHandler = createVrHandler(");
+    expect(vrPage).toContain("globalThis.fetch = guard.wrap(globalThis.fetch.bind(globalThis));");
+    expect(vrPage.indexOf("installVrGuard();")).toBeGreaterThan(vrPage.indexOf("export function createVrHandler("));
     expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'");
     expect(csp).not.toContain(" 'unsafe-eval'");
     expect(csp).not.toMatch(/style-src|img-src|font-src/u);
@@ -304,8 +312,8 @@ describe("widget security policy", () => {
     // The window finds the signer through window.opener. Cross-Origin-Opener-Policy: same-origin would cut that.
     expect(connect.has("Cross-Origin-Opener-Policy")).toBe(false);
     // It may also reach a mint, over TLS (docs/ecash.md): the ecash wallet lives on this page and the panel, and
-    // a mint is an https address the person chooses. No other page may: the account page, the embedded signer
-    // and every worker keep `connect-src 'self' wss:`.
+    // a mint is an https address the person chooses. The embedded signer may too, behind its guard, for VR way
+    // (above). No other page may: the account page and every worker keep `connect-src 'self' wss:`.
     expect(connect.get("Content-Security-Policy")).toMatch(/(^|; )connect-src 'self' wss: https:(;|$)/u);
     expect(everything.get("Content-Security-Policy")).toMatch(/(^|; )connect-src 'self' wss:(;|$)/u);
     // In every other respect it is a page like any other: it is never framed, and has the same policy.

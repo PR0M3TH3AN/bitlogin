@@ -53,7 +53,8 @@ import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSessionState, clearSessionSlot, keptSlot } from "./sessionCache.js";
 import { describe as describeKept, forget as forgetKept, keep as keepKept, loadKept, saveKept } from "./keptAccounts.js";
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
-import { DEVICE_ACTIONS, openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
+import { DEVICE_ACTIONS, openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, VR_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
+import { VR_WAY } from "../embedded/vrWay.js";
 import { DEVICE_GRANT_MAX_SEC, DEVICE_KEYS, DEVICES_OUT_D, DEVICES_OUT_KIND, deviceGrantTemplate, devicesOutTemplate, FROM_PHONE, isDeviceOut, readDevicesOut } from "../embedded/deviceGrant.js";
 import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
 import { isLocalAddress, isSignInAddress, knownAppName, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
@@ -86,6 +87,7 @@ import {
   checkLearned,
   cleanRelays,
   isTakenBack,
+  isVrTakenBack,
   mergeTakenBack,
   newestTakeBackEvent,
   NOTHING_TAKEN_BACK,
@@ -204,6 +206,8 @@ interface SessionState {
    * it serves passes and the grant's own checks, and nothing else: "Do this from your phone."
    */
   deviceGrant: NostrEvent | null;
+  /** VR way, chosen at the pairing: the wallet's and the files' own actions are open to this signer frame too. */
+  vr: boolean;
   /** For a signer-only session serving a world: what the user let it do beyond a note and a reaction, by name. */
   more: readonly string[];
 }
@@ -232,6 +236,7 @@ const session: SessionState = {
   guest: null,
   device: null,
   deviceGrant: null,
+  vr: false,
   more: []
 };
 
@@ -245,6 +250,8 @@ let headsetPairing: HeadsetPairing | null = null;
 /** Way 1: the offer BitLogin's own /headset/ page makes, for the world's signer. */
 /** Way 2's switch: off, as `DEVICE_KEYS`; a test may turn it on where BitLogin runs at a local address. */
 let deviceKeysHere = DEVICE_KEYS;
+/** VR way's switch: off, as `VR_WAY`; a test may turn it on where BitLogin runs at a local address. */
+let vrWayHere = VR_WAY;
 let pageOffer: HeadsetPairing | null = null;
 let phonePaired: { phone: PhonePairing; offers: Map<string, PairOffer>; numbers: Map<string, number> } | null = null;
 
@@ -413,6 +420,7 @@ function clearSession(): void {
   session.guest = null;
   session.device = null;
   session.deviceGrant = null;
+  session.vr = false;
   session.more = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
@@ -767,7 +775,8 @@ function adoptNip46Client(client: Nip46Client, userPubkey: string): void {
 }
 
 async function handle(action: string, payload: unknown, id = ""): Promise<unknown> {
-  if (session.signerOnly && !SIGNER_ONLY_ACTIONS.has(action)) {
+  // VR way: where the person chose it at the pairing, the wallet's and the files' own actions too, and nothing more.
+  if (session.signerOnly && !SIGNER_ONLY_ACTIONS.has(action) && !(session.vr && VR_ACTIONS.has(action))) {
     throw new Error("This session can only sign. Sign in at your own BitLogin page for anything else.");
   }
   // Way 2: a headset holding its own key makes passes, keeps and checks its grant, and nothing else.
@@ -948,6 +957,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
               ...(g.memberOf ? { memberOf: g.memberOf } : {}),
               ...(session.device ? { device: session.device } : {}),
               ...(session.deviceGrant ? { deviceGrant: session.deviceGrant } : {}),
+              ...(session.vr ? { vr: true } : {}),
               ...(g.permissions ? { permissions: g.permissions, signedSensitive: [] } : {})
             },
             now
@@ -1003,6 +1013,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       session.memberOf = !family && grant.memberOf ? grant.memberOf : null;
       session.device = grant.device ?? null;
       session.deviceGrant = grant.deviceGrant ?? null;
+      session.vr = grant.vr === true;
       session.profile = grant.profile ?? null;
       session.remember = true;
       session.grantAt = grantedAt(grant);
@@ -1013,6 +1024,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
         restored: true,
         everydayPublicKey: session.signer.getPublicKey(),
         ...(grant.deviceGrant ? { deviceGrant: grant.deviceGrant, identity: grant.deviceGrant.pubkey } : {}),
+        ...(grant.vr ? { vr: true } : {}),
         until: grant.until,
         ...(grant.name ? { name: grant.name } : {}),
         ...(grant.profile ? { profile: grant.profile } : {}),
@@ -1185,7 +1197,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
     case "pairAnswer": {
       const { everydayPrivateKey } = requireUnlocked();
       if (session.signerOnly) throw new Error("A headset is signed in from BitLogin's own page only.");
-      const p = payload as { offer?: unknown; number?: unknown; family?: unknown };
+      const p = payload as { offer?: unknown; number?: unknown; family?: unknown; vr?: unknown };
       const offer = phonePaired?.offers.get(String(p.offer ?? ""));
       if (!phonePaired || !offer) throw new Error("That headset isn't being paired here.");
       // Only an offer from BitLogin's own headset page, naming the world's signer (Way 1). One drawn in a world, of the
@@ -1206,7 +1218,11 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       // Way 2: the headset gets a key of its own, D, and the account's grant for it, never the account's key. The grant
       // is for its family where the person chose that, else its site; thirty days for one BitLogin knows, seven for
       // another, and one day while the lock is on (the headset keeps it for the visit only).
-      const own = deviceKeysHere ? generatePrivateKey() : null;
+      // VR way, chosen on the phone: the account's own key (a device key can't open the wallet or files), and only
+      // where VR way is offered at all.
+      const vr = p.vr === true;
+      if (vr && !vrWayHere) throw new Error("VR way isn't offered yet.");
+      const own = deviceKeysHere && !vr ? generatePrivateKey() : null;
       let deviceGrant: NostrEvent | null = null;
       if (own) {
         const family = typeof p.family === "string" ? p.family : null;
@@ -1224,7 +1240,8 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
           at: Date.now() / 1000,
           relays: session.relays,
           device,
-          ...(deviceGrant ? { deviceGrant } : {})
+          ...(deviceGrant ? { deviceGrant } : {}),
+          ...(vr ? { vr: true } : {})
         });
         await phonePaired.phone.answer(offer, sealed);
       } finally {
@@ -1234,6 +1251,20 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const deviceKey = own ? getPublicKeyHex(own) : null;
       if (own) wipe(own);
       return { device, ...(deviceKey ? { deviceKey } : {}) };
+    }
+
+    // VR way turned off in the world itself (the safe direction, so a press in VR may do it): at once, and kept.
+    case "vrOff": {
+      requireUnlocked();
+      if (!session.signerOnly || !session.vr) return {};
+      session.vr = false;
+      const keptAs = session.family ?? session.site;
+      const grant = keptAs ? await loadSignerGrant(store, keptAs, Date.now() / 1000) : null;
+      if (grant?.vr) {
+        const { vr: _off, ...rest } = grant;
+        await saveSignerGrant(store, rest, Date.now() / 1000);
+      }
+      return {};
     }
 
     // Way 2, on the phone: sign a headset's own key out, on the account's public list of devices signed out (kind
@@ -1294,10 +1325,12 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       session.memberOf = opened.app ? opened.family : null;
       session.device = opened.device ?? null;
       session.deviceGrant = opened.deviceGrant ?? null;
+      session.vr = opened.vr === true;
       session.more = opened.deviceGrant ? [] : opened.more;
       return {
         everydayPublicKey: session.signer.getPublicKey(),
         ...(opened.deviceGrant ? { deviceGrant: opened.deviceGrant, identity: opened.deviceGrant.pubkey } : {}),
+        ...(opened.vr ? { vr: true } : {}),
         ...(opened.app ? { app: opened.app } : {}),
         ...(opened.site ? { site: opened.site } : {}),
         ...(opened.profile ? { profile: opened.profile } : {}),
@@ -1348,7 +1381,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const p = payload as TakeBackPayload;
       const me = signer.getPublicKey();
       const now = Date.now() / 1000;
-      const what = p.all === true ? ({ all: true } as const) : typeof p.device === "string" ? { device: p.device } : { site: String(p.site ?? "") };
+      const what = p.all === true ? ({ all: true } as const) : typeof p.device === "string" ? { device: p.device } : { site: String(p.site ?? ""), ...(p.vr === true ? { vr: true as const } : {}) };
       const finder = readPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
       let mine: string[];
       try {
@@ -1443,6 +1476,13 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
         await deleteSignerGrant(store, site);
         clearSession();
         return { state: "ended" };
+      }
+      // VR way turned off on BitLogin's page: the grant stays, and its VR way goes, here and kept.
+      if (record && grant.vr && isVrTakenBack(record, site, at)) {
+        session.vr = false;
+        const { vr: _off, ...rest } = grant;
+        await saveSignerGrant(store, { ...rest, checkedAt: Math.floor(now) }, now);
+        return { state: "vr-off" };
       }
       // Otherwise the round counts as a check only if it could have found one (takeBack.ts, checkLearned).
       const learned = checkLearned({
@@ -1818,6 +1858,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       if (p.discoveryRelayUrls?.length) discoveryRelayUrls = p.discoveryRelayUrls;
       // Way 2's switch, off: a test turns it on only where BitLogin runs at a local address (never a live one).
       if (p.deviceKeys === true && isLocalAddress(selfOrigin())) deviceKeysHere = true;
+      if (p.vrWay === true && isLocalAddress(selfOrigin())) vrWayHere = true;
       // The list this device already accepted applies at once; looking for a
       // newer one happens in the background and must never delay sign-in.
       applyRelaySets(relaySetsFor(await loadCachedBootstrapList(store)));
@@ -2647,7 +2688,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
-  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "headsetBegin", "headsetPoll", "headsetCancel", "devicesOut", "pairFind", "pairFound", "pairEnd", "pairAnswer",
+  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "headsetBegin", "headsetPoll", "headsetCancel", "devicesOut", "vrOff", "pairFind", "pairFound", "pairEnd", "pairAnswer",
   "signerKeep", "signerRestore", "guestStatus", "signerTouch", "signerForget", "signerHold", "signerHeld",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",

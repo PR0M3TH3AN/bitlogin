@@ -34,6 +34,8 @@ import { NostrSigner } from "../../../core/src/account/signer.js";
 import { sealMessage } from "../embedded/messages.js";
 import { PAIRING_PAUSED, PAUSED_WORDS } from "../embedded/pair.js";
 import { checkDeviceGrant, DEVICES_OUT_KIND, FROM_PHONE, readDevicesOut } from "../embedded/deviceGrant.js";
+import { VR_CHOICES } from "../embedded/vrWay.js";
+import { VR_REFUSED } from "../embedded/vrSigner.js";
 import { startMockMint } from "../ecash/mockMint.js";
 import { startMockUnlock } from "../pay/mockUnlock.js";
 import { NostrSigner } from "@bitlogin/core/account";
@@ -70,6 +72,8 @@ try {
 let unlockNamed = "";
 /** Way 2's switch, for one test: told to the phone's /pair/ page, whose worker takes it only at a local address. */
 let deviceKeysOn = false;
+/** VR way's switch, for one test: told to /pair/ and /headset/, whose workers take it only at a local address. */
+let vrWayOn = false;
 function startServer(relayUrls: string[]): Promise<{ server: Server; origin: string }> {
   const relayList = relayUrls.join(",");
   const server = createServer(async (req, res) => {
@@ -94,7 +98,7 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
       // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
       // signer reads it. Each is given the mock relays, as the account page is.
       if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/pair/index.html" || relative === "/headset/index.html" || relative === "/signer/index.html") {
-        body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}"${unlockNamed ? ` data-unlock-service="${unlockNamed}"` : ""}${deviceKeysOn && relative === "/pair/index.html" ? ' data-device-keys="on"' : ""}>`);
+        body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}"${unlockNamed ? ` data-unlock-service="${unlockNamed}"` : ""}${deviceKeysOn && relative === "/pair/index.html" ? ' data-device-keys="on"' : ""}${vrWayOn && (relative === "/pair/index.html" || relative === "/headset/index.html") ? ' data-vr-way="on"' : ""}>`);
       }
       res.writeHead(200, {
         "content-type": MIME[extname(filePath)] ?? "application/octet-stream",
@@ -4680,6 +4684,105 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         expect(readDevicesOut(lists[0], state.pubkey).map((d) => d.device)).toContain(passed.event.pubkey);
       } finally {
         deviceKeysOn = false;
+        for (const relay of relays) relay.keepsEphemeral = true;
+        await browser.close();
+      }
+    },
+    300_000
+  );
+
+  it(
+    "VR way (switch on in this test only): chosen on the phone at the pairing, the world's frame answers the wallet and files, reaches nothing else over https, and turns off in VR",
+    async () => {
+      for (const relay of relays) relay.keepsEphemeral = false;
+      vrWayOn = true;
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<button id="phone">Sign In using Phone</button>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN) window.heard.push(e.data); });
+  document.getElementById("phone").onclick = () => { window.opened = window.open(SIGNIN + "/headset/", "bitlogin-headset", "popup"); };
+  window.ask = (message, wait = 15000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        const phone = await browser.newContext();
+        const account = await phone.newPage();
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, `vrway-${Date.now().toString(36)}`);
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+
+        const headset = await browser.newContext();
+        await headset.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: worldPage }));
+        const world = await headset.newPage();
+        await world.goto("https://w3.bitblocks.network/");
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        const [page] = await Promise.all([headset.waitForEvent("page"), world.locator("#phone").click()]);
+        await page.locator("#code").filter({ hasText: /^[0-9A-Z]{4}-[0-9A-Z]{4}$/u }).waitFor({ timeout: 60_000 });
+        // The headset's own page shows the two lines the phone asks about.
+        expect(await page.locator("#vr-lines").textContent()).toContain(VR_CHOICES.inside.line);
+        const code = ((await page.locator("#code").textContent()) ?? "").trim();
+        const pair = await phone.newPage();
+        await pair.goto(`${origin}/pair/#${code}`);
+        await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 });
+        await pair.waitForTimeout(1000);
+        await pair.locator("#holding-yes").click();
+        await pair.locator("#step-number").waitFor({ state: "visible", timeout: 60_000 });
+        await page.locator("#number-line").waitFor({ state: "visible", timeout: 30_000 });
+        const number = ((await page.locator("#number").textContent()) ?? "").trim();
+        await pair.waitForTimeout(1000);
+        await pair.locator("#numbers button", { hasText: number }).click();
+        await pair.locator("#step-ask").waitFor({ state: "visible", timeout: 30_000 });
+        // The choice: two presses of equal weight, none chosen, and no sign-in until one is.
+        expect(await pair.locator("#vr-inside").textContent()).toBe(VR_CHOICES.inside.label);
+        expect(await pair.locator("#vr-out").textContent()).toBe(VR_CHOICES.out.label);
+        expect(await pair.locator("#vr-inside").getAttribute("class")).toBe(await pair.locator("#vr-out").getAttribute("class"));
+        expect(await pair.locator("#ask-family").isDisabled()).toBe(true);
+        await pair.waitForTimeout(1000);
+        await pair.locator("#vr-inside").click();
+        expect(await pair.locator("#ask-family").isDisabled()).toBe(false);
+        await pair.locator("#ask-family").click();
+        await pair.locator("#said").filter({ hasText: "Sent." }).waitFor({ timeout: 60_000 });
+        await page.waitForEvent("close", { timeout: 60_000 });
+
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "state" && m.unlocked), null, { timeout: 30_000 });
+        expect(await world.evaluate(() => (window as any).ask({ t: "state" }))).toMatchObject({ unlocked: true, vr: ["wallet", "files"] });
+        // The wallet and files, answered from BitLogin's own code in the frame, for the kit to draw.
+        expect(await world.evaluate(() => (window as any).ask({ t: "walletState" }))).toMatchObject({ t: "wallet-state", balance: 0, mints: [] });
+        expect(await world.evaluate(() => (window as any).ask({ t: "walletReceive", sats: 21 }))).toMatchObject({ t: "refused", words: "Add a mint on BitLogin's own page first." });
+        expect((await world.evaluate(() => (window as any).ask({ t: "filesList" }))).t).toBe("files");
+        // A confirm the frame never made is no confirm.
+        expect(await world.evaluate(() => (window as any).ask({ t: "confirmed", confirm: "ab".repeat(12), yes: true }))).toMatchObject({ t: "refused", words: "Nothing was done." });
+        // The frame reaches nothing over https but the person's own mints and servers.
+        const signerFrame = world.frames().find((f) => f.url().startsWith(`${origin}/signer/`))!;
+        expect(await signerFrame.evaluate(() => fetch("https://stranger.example/").then(() => "reached", (e) => String(e.message)))).toBe("That address isn't one of your mints or file servers.");
+        // The phone's list shows it, with its way to turn VR off.
+        const sites = await phone.newPage();
+        await sites.goto(`${origin}/sites/`);
+        await sites.locator("#sites li button", { hasText: "Turn off BitLogin inside VR" }).waitFor({ timeout: 30_000 });
+        // Off, pressed in VR: at once, and asked again it is refused in words.
+        expect(await world.evaluate(() => (window as any).ask({ t: "vrOff" }))).not.toHaveProperty("vr");
+        expect(await world.evaluate(() => (window as any).ask({ t: "walletState" }))).toMatchObject({ t: "refused", words: VR_REFUSED });
+        // Loaded again, it stays off: still signed in.
+        await world.reload();
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        const after = await world.evaluate(() => (window as any).ask({ t: "state" }));
+        expect(after).toMatchObject({ unlocked: true });
+        expect(after.vr).toBeUndefined();
+      } finally {
+        vrWayOn = false;
         for (const relay of relays) relay.keepsEphemeral = true;
         await browser.close();
       }

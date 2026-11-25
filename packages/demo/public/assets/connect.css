@@ -115,3 +115,5 @@ body.panel [data-window-only] { display: none !important; }
 .headset-code { text-align: center; font: 2.2rem ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .14em; margin: .4rem 0; }
 .headset-number { text-align: center; font-size: 1.6rem; }
 .headset-number strong { font-size: 2.6rem; font-variant-numeric: tabular-nums; }
+/* VR way's two presses on the phone: the one chosen is marked, and neither is the default. */
+#ask-vr .btn[aria-pressed="true"] { outline: 3px solid var(--fg); outline-offset: 2px; }

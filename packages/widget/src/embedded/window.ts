@@ -25,6 +25,7 @@ export { familyDomain, familyOf, inFamily, knownFamily };
 export { SIGN_LIMITS, type Asked } from "./policy.js";
 export { deviceLabel, normalizeCode, numberChoices, pairUrl, PAIRING_PAUSED, PAUSED_WORDS, type PairOffer } from "./pair.js";
 export { renderQrSvg } from "../qr.js";
+export { VR_CHOICES, vrAllowedFor } from "./vrWay.js";
 export { describeAsked, type AskedWords } from "./careful.js";
 export { applyChange, keepersOf, readOwnerList, resolveOwnerList, scopeOf, type GuestChange } from "./guests.js";
 export { askLockDevice } from "../lockDevice.js";

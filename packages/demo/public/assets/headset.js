@@ -3,7 +3,7 @@
 // only, never in the world, which can't draw over this page's address bar. It finds the world's signer through its
 // opener, as the sign-in window does: the site is that signer's (the browser's word), and the phone seals the hand-off
 // to that signer's one-time key. This page passes it on, sealed: it never holds the key.
-import { deviceLabel, findEmbeddedSigner, pairUrl, renderQrSvg } from "../vendor/bitlogin/bitlogin-window.js";
+import { deviceLabel, findEmbeddedSigner, pairUrl, renderQrSvg, VR_CHOICES } from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 
 const $ = (id) => document.getElementById(id);
@@ -55,6 +55,12 @@ const begin = async () => {
     $("number-line").hidden = true;
     const minutes = Math.max(1, Math.round((offer.expires - Date.now() / 1000) / 60));
     $("lasts").textContent = `The code lasts ${minutes} minutes and works once.`;
+    // VR way: the same two lines the phone asks about, read here while the code is up.
+    if (document.documentElement.dataset.vrWay === "on") {
+      $("vr-inside-line").textContent = `${VR_CHOICES.inside.label}: ${VR_CHOICES.inside.line}`;
+      $("vr-out-line").textContent = `${VR_CHOICES.out.label}: ${VR_CHOICES.out.line}`;
+      $("vr-lines").hidden = false;
+    }
     $("step-code").hidden = false;
     say("");
     look();

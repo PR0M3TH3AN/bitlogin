@@ -378,6 +378,9 @@ export class WorkerClient {
   headsetPoll() {
     return this.call("headsetPoll", {});
   }
+  vrOff() {
+    return this.call("vrOff", {});
+  }
   devicesOut(deviceKey: string) {
     return this.call("devicesOut", { deviceKey });
   }
@@ -393,8 +396,8 @@ export class WorkerClient {
   pairEnd(offer: string) {
     return this.call("pairEnd", { offer });
   }
-  pairAnswer(offer: string, number: number, family?: string) {
-    return this.call("pairAnswer", { offer, number, ...(family ? { family } : {}) });
+  pairAnswer(offer: string, number: number, family?: string, vr?: boolean) {
+    return this.call("pairAnswer", { offer, number, ...(family ? { family } : {}), ...(vr ? { vr: true } : {}) });
   }
   signerTouch(payload: SignerTouchPayload) {
     return this.call("signerTouch", payload);

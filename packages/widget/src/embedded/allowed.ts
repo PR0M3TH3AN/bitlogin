@@ -61,6 +61,8 @@ export interface AllowedSite {
   deviceLabel?: string;
   /** Way 2: the headset's own key, public half, which "Sign out this headset" puts on the list of devices signed out. */
   deviceKey?: string;
+  /** VR way, chosen at the pairing: "Turn off BitLogin inside VR" is offered beside it. */
+  vr?: true;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/u;
@@ -87,7 +89,7 @@ function readEntry(input: unknown): AllowedSite | null {
   if (e.device !== undefined && !device) return null;
   const deviceKey = device && typeof e.deviceKey === "string" && HEX64.test(e.deviceKey) ? e.deviceKey : undefined;
   const label = device && typeof e.deviceLabel === "string" && e.deviceLabel.length <= 48 && /^[\p{L}\p{N} ._()-]+$/u.test(e.deviceLabel) ? e.deviceLabel : undefined;
-  return { site, ...(members.length ? { members } : {}), pubkey: e.pubkey, at: Math.floor(e.at), until: Math.floor(e.until), remembered: e.remembered === true, ...(wants && !refused ? { wants } : {}), ...(refused ? { refused: true as const, ...(hadNames.length ? { hadNames } : {}) } : {}), ...(device ? { device, ...(label ? { deviceLabel: label } : {}), ...(deviceKey ? { deviceKey } : {}) } : {}) };
+  return { site, ...(members.length ? { members } : {}), pubkey: e.pubkey, at: Math.floor(e.at), until: Math.floor(e.until), remembered: e.remembered === true, ...(wants && !refused ? { wants } : {}), ...(refused ? { refused: true as const, ...(hadNames.length ? { hadNames } : {}) } : {}), ...(device ? { device, ...(label ? { deviceLabel: label } : {}), ...(deviceKey ? { deviceKey } : {}), ...(e.vr === true ? { vr: true as const } : {}) } : {}) };
 }
 
 /** The record as it was stored, read again: anything that is not an entry is dropped, and so is one long ended. Newest first. */

@@ -29,6 +29,7 @@ import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
 import { grantSite } from "./signerGrant.js";
 import { cleanMore, type WorldMore } from "../embedded/follows.js";
 import { checkDeviceGrant } from "../embedded/deviceGrant.js";
+import { vrAllowedFor } from "../embedded/vrWay.js";
 import type { NostrEvent } from "@bitlogin/core/nostr";
 
 /**
@@ -55,6 +56,13 @@ export const HANDOFF_PURPOSE = "bitlogin:signer-handoff:v1";
  * wallet: those are the phone's ("Do this from your phone").
  */
 export const DEVICE_ACTIONS: ReadonlySet<string> = new Set(["configure", "getPublicKey", "getSessionStatus", "logout", "handoffBegin", "handoffAccept", "roomPass", "signerCheck", "signerForget", "signerKeep", "signerRestore", "signerTouch"]);
+
+/**
+ * VR way: what a signer frame may also ask where the person chose it at the pairing. The wallet's own records and the
+ * files' (read and kept, as BitLogin's pages do), and the read of their pay limit. Never the wallet's or the files'
+ * settings, nor anything of the account: those stay on BitLogin's page.
+ */
+export const VR_ACTIONS: ReadonlySet<string> = new Set(["ecashLoad", "ecashPeek", "ecashRoll", "driveLoad", "drivePeek", "driveSave", "blossomAuth", "blossomServers", "paySettingsLoad", "vrOff"]);
 
 export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "configure",
@@ -130,7 +138,7 @@ export function sealHandoff(
   senderPrivateKey: Uint8Array,
   app?: { site: unknown; permissions: unknown },
   /** The site the hand-off is for, as the window was told by the signer, and the person's own profile. */
-  also: { site?: unknown; profile?: unknown; /** The user ticked "remember" in the window. */ remember?: unknown; /** The lock is on: nothing is kept for any site. */ visitOnly?: boolean; /** When Allow was pressed, in seconds, by the sealing worker's clock. */ at?: number; /** The user's own write relays (NIP-65). */ relays?: unknown; /** The user allowed every site of this family (docs/site-family.md). */ family?: unknown; /** What the user let this world do beyond a note and a reaction, by name. */ more?: unknown; /** A device signed in from a phone (docs/pair-a-headset.md): a random id, so it can be signed out alone. */ device?: unknown; /** Way 2: the key handed over is the headset's own, D, and this is the account's grant for it (kind 27305). */ deviceGrant?: unknown } = {}
+  also: { site?: unknown; profile?: unknown; /** The user ticked "remember" in the window. */ remember?: unknown; /** The lock is on: nothing is kept for any site. */ visitOnly?: boolean; /** When Allow was pressed, in seconds, by the sealing worker's clock. */ at?: number; /** The user's own write relays (NIP-65). */ relays?: unknown; /** The user allowed every site of this family (docs/site-family.md). */ family?: unknown; /** What the user let this world do beyond a note and a reaction, by name. */ more?: unknown; /** A device signed in from a phone (docs/pair-a-headset.md): a random id, so it can be signed out alone. */ device?: unknown; /** Way 2: the key handed over is the headset's own, D, and this is the account's grant for it (kind 27305). */ deviceGrant?: unknown; /** VR way: the person chose, at the pairing, to have their wallet and files drawn in VR here. */ vr?: unknown } = {}
 ): SealedHandoff {
   if (!HEX64.test(recipientPublicKey)) throw new Error("The hand-off has no usable recipient key.");
   if (everydayPrivateKey.length !== 32) throw new Error("No identity is unlocked in this session.");
@@ -159,12 +167,15 @@ export function sealHandoff(
   // set), and never for a family (sites the user has not seen). Refused whole, never sealed as less.
   const more = cleanMore(also.more);
   if (also.more !== undefined && (more.length === 0 || !forSite || sealedApp || family)) throw new Error("That is not something this site may be let do.");
+  // VR way: only with the account's own key (never a device key), never for an application, and only for a family
+  // or a site BitLogin knows. Refused whole, never sealed as less.
+  if (also.vr !== undefined && (also.vr !== true || also.deviceGrant !== undefined || sealedApp || !forSite || !vrAllowedFor(forSite, family || undefined))) throw new Error("VR way isn't offered for this.");
   // Way 2: the key is the headset's own, and the grant must be for it and for this site, or nothing is sealed.
   if (also.deviceGrant !== undefined && !checkDeviceGrant(also.deviceGrant, { device: getPublicKeyHex(everydayPrivateKey), site: forSite, now: Date.now() / 1000 }).ok) throw new Error("That device grant isn't for this key and this site.");
   // A signer wipes the key it was given when it is destroyed. It is given a copy: the caller's is the caller's to wipe.
   const sender = new NostrSigner(senderPrivateKey.slice());
   try {
-    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}), ...(forSite ? { site: forSite } : {}), ...(profile ? { profile } : {}), ...(remember ? { remember: true } : {}), ...(typeof also.at === "number" && Number.isFinite(also.at) ? { at: Math.floor(also.at) } : {}), ...(cleanRelays(also.relays).length ? { relays: cleanRelays(also.relays) } : {}), ...(family ? { family } : {}), ...(more.length ? { more } : {}), ...(typeof also.device === "string" && DEVICE.test(also.device) ? { device: also.device } : {}), ...(also.deviceGrant !== undefined ? { deviceGrant: also.deviceGrant } : {}) });
+    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}), ...(forSite ? { site: forSite } : {}), ...(profile ? { profile } : {}), ...(remember ? { remember: true } : {}), ...(typeof also.at === "number" && Number.isFinite(also.at) ? { at: Math.floor(also.at) } : {}), ...(cleanRelays(also.relays).length ? { relays: cleanRelays(also.relays) } : {}), ...(family ? { family } : {}), ...(more.length ? { more } : {}), ...(typeof also.device === "string" && DEVICE.test(also.device) ? { device: also.device } : {}), ...(also.deviceGrant !== undefined ? { deviceGrant: also.deviceGrant } : {}), ...(also.vr === true ? { vr: true } : {}) });
     return { senderPublicKey: sender.getPublicKey(), payload: sender.nip44Encrypt(recipientPublicKey, plaintext) };
   } finally {
     sender.destroy();
@@ -189,7 +200,7 @@ export function openHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Arr
 export function openAppHandoff(
   sealed: SealedHandoff,
   recipientPrivateKey: Uint8Array
-): { key: Uint8Array; app: HandoffApp | null; /** The site it was sealed for, or null where it names none. */ site: string | null; profile: Profile | null; /** Whether it may be kept across page loads. */ remember: boolean; /** When it was allowed, in seconds, or null where it does not say. */ at: number | null; /** The user's own write relays, cleaned. */ relays: string[]; /** The family of sites it is kept for, or null for this site alone. */ family: string | null; /** What this world was let do beyond a note and a reaction. */ more: WorldMore[]; /** The device it signs in, where a phone paired one. */ device?: string; /** Way 2: the account's grant for the key handed over, which is the headset's own. */ deviceGrant?: NostrEvent } {
+): { key: Uint8Array; app: HandoffApp | null; /** The site it was sealed for, or null where it names none. */ site: string | null; profile: Profile | null; /** Whether it may be kept across page loads. */ remember: boolean; /** When it was allowed, in seconds, or null where it does not say. */ at: number | null; /** The user's own write relays, cleaned. */ relays: string[]; /** The family of sites it is kept for, or null for this site alone. */ family: string | null; /** What this world was let do beyond a note and a reaction. */ more: WorldMore[]; /** The device it signs in, where a phone paired one. */ device?: string; /** Way 2: the account's grant for the key handed over, which is the headset's own. */ deviceGrant?: NostrEvent; /** VR way, chosen at the pairing. */ vr?: true } {
   if (!sealed || !HEX64.test(sealed.senderPublicKey) || typeof sealed.payload !== "string") {
     throw new Error("That is not a signer hand-off.");
   }
@@ -202,7 +213,7 @@ export function openAppHandoff(
   } finally {
     recipient.destroy();
   }
-  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown; site?: unknown; profile?: unknown; remember?: unknown; at?: unknown; relays?: unknown; family?: unknown; more?: unknown; device?: unknown; deviceGrant?: unknown };
+  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown; site?: unknown; profile?: unknown; remember?: unknown; at?: unknown; relays?: unknown; family?: unknown; more?: unknown; device?: unknown; deviceGrant?: unknown; vr?: unknown };
   try {
     parsed = JSON.parse(plaintext) as typeof parsed;
   } catch {
@@ -241,7 +252,7 @@ export function openAppHandoff(
     key.fill(0);
     throw new Error("The hand-off carries something this site may not be let do.");
   }
-  const device: { device?: string; deviceGrant?: NostrEvent } = typeof parsed.device === "string" && DEVICE.test(parsed.device) ? { device: parsed.device } : {};
+  const device: { device?: string; deviceGrant?: NostrEvent; vr?: true } = typeof parsed.device === "string" && DEVICE.test(parsed.device) ? { device: parsed.device } : {};
   // Way 2: a grant that isn't for this key and this site is refused whole, the key with it.
   if (parsed.deviceGrant !== undefined) {
     // Not for an application, and for exactly what the hand-off is kept as: its family where it has one, else its site.
@@ -251,6 +262,14 @@ export function openAppHandoff(
       throw new Error("The hand-off's device grant isn't for this key and this site.");
     }
     device.deviceGrant = parsed.deviceGrant as NostrEvent;
+  }
+  // VR way: as it was sealed, or refused whole.
+  if (parsed.vr !== undefined) {
+    if (parsed.vr !== true || parsed.deviceGrant !== undefined || parsed.app !== undefined || !named || !vrAllowedFor(named, family || undefined)) {
+      key.fill(0);
+      throw new Error("The hand-off asks for VR way where it isn't offered.");
+    }
+    device.vr = true;
   }
   if (parsed.app === undefined) return { key, app: null, site: named, profile, remember, at, relays, family, more, ...device };
   const a = parsed.app as { site?: unknown; permissions?: unknown } | null;

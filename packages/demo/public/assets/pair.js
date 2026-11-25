@@ -3,7 +3,7 @@
 // number to show, and asks the person to tap the same: only then is "Sign in this headset?" put, and the yes sends
 // the headset what Allow sends a site, sealed to the headset's one-time key, by BitLogin's worker. This page never
 // holds a key. Everything an offer says is written as text, never as markup.
-import { familyDomain, familyOf, knownAppName, knownFamily, normalizeCode, numberChoices, recordAllowed, SIGN_LIMITS } from "../vendor/bitlogin/bitlogin-window.js";
+import { familyDomain, familyOf, knownAppName, knownFamily, normalizeCode, numberChoices, recordAllowed, SIGN_LIMITS, VR_CHOICES, vrAllowedFor } from "../vendor/bitlogin/bitlogin-window.js";
 import { createHeadlessSigner } from "../vendor/bitlogin/bitlogin-headless.js";
 import { readCachedSession } from "../vendor/bitlogin/bitlogin-session.js";
 
@@ -34,8 +34,13 @@ const relays = {
   vaultRelays: relayList(document.documentElement.dataset.vaultRelays),
   discoveryRelays: relayList(document.documentElement.dataset.discoveryRelays),
   // Way 2's switch, for tests: the worker takes it only where BitLogin runs at a local address.
-  ...(document.documentElement.dataset.deviceKeys === "on" ? { deviceKeys: true } : {})
+  ...(document.documentElement.dataset.deviceKeys === "on" ? { deviceKeys: true } : {}),
+  // VR way's switch, for tests, the same way.
+  ...(document.documentElement.dataset.vrWay === "on" ? { vrWay: true } : {})
 };
+/** VR way: offered where its switch is on, for a family or a site BitLogin knows. Chosen here, never in a world. */
+const vrOn = document.documentElement.dataset.vrWay === "on";
+let vrChoice = null;
 
 // The code from the address, and then out of it: it is not left in the history, or shown to a screen reader again.
 const fromLink = normalizeCode(decodeURIComponent(location.hash.slice(1)));
@@ -137,6 +142,17 @@ const ask = () => {
   $("ask-family").hidden = !offerFamily;
   if (offerFamily) $("ask-family").textContent = `Stay signed in at every ${familyDomain(family)} site`;
   $("ask-site-only").textContent = offerFamily ? "Just this site" : "Sign in";
+  // VR way: two presses of equal weight, no default. Sign-in waits until one is pressed.
+  const offerVr = vrOn && vrAllowedFor(offer.site, family && knownFamily(family) ? family : undefined);
+  vrChoice = offerVr ? null : "out";
+  $("ask-vr").hidden = !offerVr;
+  if (offerVr) {
+    $("vr-inside").textContent = VR_CHOICES.inside.label;
+    $("vr-out").textContent = VR_CHOICES.out.label;
+    $("vr-line").textContent = `${VR_CHOICES.inside.label}: ${VR_CHOICES.inside.line} ${VR_CHOICES.out.label}: ${VR_CHOICES.out.line}`;
+    for (const id of ["vr-inside", "vr-out"]) $(id).setAttribute("aria-pressed", "false");
+  }
+  $("ask-family").disabled = $("ask-site-only").disabled = offerVr;
   show("step-ask");
 };
 
@@ -145,12 +161,13 @@ const answer = async (asFamily) => {
   show(null);
   say("Signing the headset in.");
   try {
-    const { device, deviceKey } = await worker.pairAnswer(offer.id, number, asFamily ? family : undefined);
+    const inVr = vrChoice === "inside";
+    const { device, deviceKey } = await worker.pairAnswer(offer.id, number, asFamily ? family : undefined, inVr);
     const at = Math.floor(Date.now() / 1000);
     const remembered = !lockOn;
     const known = asFamily ? knownFamily(family) : knownAppName(offer.site) !== null;
     const until = at + (remembered ? (known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec);
-    recordAllowed({ site: asFamily ? family : offer.site, ...(asFamily ? { members: [offer.site] } : {}), pubkey: me.pubkey, at, until, remembered, device, ...(deviceKey ? { deviceKey } : {}), ...(offer.device !== "a device" ? { deviceLabel: offer.device } : {}) });
+    recordAllowed({ site: asFamily ? family : offer.site, ...(asFamily ? { members: [offer.site] } : {}), pubkey: me.pubkey, at, until, remembered, device, ...(deviceKey ? { deviceKey } : {}), ...(inVr ? { vr: true } : {}), ...(offer.device !== "a device" ? { deviceLabel: offer.device } : {}) });
     end(`Sent. The headset signs in at ${offer.site} in a moment. You can sign it out from Sites you allowed.`);
   } catch {
     end("That didn't work, and nothing was signed in. Start again on the headset.");
@@ -164,3 +181,17 @@ $("ask-no").addEventListener("click", async () => {
   await worker.pairEnd(offer.id).catch(() => {});
   end("Nothing was signed in, and the headset was told.");
 });
+
+// VR way's two presses: either is a choice, and either can be pressed again before signing in.
+for (const [id, choice] of [["vr-inside", "inside"], ["vr-out", "out"]]) {
+  $(id).addEventListener("click", () => {
+    if (!shownLongEnough()) return;
+    vrChoice = choice;
+    $("vr-inside").setAttribute("aria-pressed", String(choice === "inside"));
+    $("vr-out").setAttribute("aria-pressed", String(choice === "out"));
+    $("vr-line").textContent = choice === "inside" ? VR_CHOICES.inside.line : VR_CHOICES.out.line;
+    $("ask-family").disabled = false;
+    // Inside VR is for a family, or a site BitLogin knows: for any other site alone it can't be.
+    $("ask-site-only").disabled = choice === "inside" && knownAppName(offer.site) === null;
+  });
+}

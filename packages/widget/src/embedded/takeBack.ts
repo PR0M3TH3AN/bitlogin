@@ -54,6 +54,11 @@ export interface TakenBack {
    * random `device` id its hand-off carried, so it can be signed out alone. Absent in a record that names none.
    */
   devices?: { device: string; before: number }[];
+  /**
+   * VR way turned off, for a site or a family, and when (NSWP everything-in-vr; the take-back's `vr` scope): the grant
+   * stays, signed in, and its VR way ends. Absent in a record that names none.
+   */
+  vr?: { site: string; before: number }[];
 }
 
 export const NOTHING_TAKEN_BACK: TakenBack = { allBefore: 0, sites: [] };
@@ -82,10 +87,18 @@ export function readTakenBack(input: unknown): TakenBack | null {
     if (typeof e.device !== "string" || !DEVICE.test(e.device) || !before) continue;
     devices.set(e.device, Math.max(devices.get(e.device) ?? 0, before));
   }
-  return { allBefore: time(r.all_before), sites: [...newest].map(([site, before]) => ({ site, before })), ...(devices.size ? { devices: [...devices].map(([device, before]) => ({ device, before })) } : {}) };
+  const vr = new Map<string, number>();
+  for (const entry of Array.isArray(r.vr) ? r.vr.slice(0, TAKE_BACK_LIMITS.sites * 2) : []) {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    const site = listedSite(e.site);
+    const before = time(e.before);
+    if (!site || site !== e.site || !before) continue;
+    vr.set(site, Math.max(vr.get(site) ?? 0, before));
+  }
+  return { allBefore: time(r.all_before), sites: [...newest].map(([site, before]) => ({ site, before })), ...(devices.size ? { devices: [...devices].map(([device, before]) => ({ device, before })) } : {}), ...(vr.size ? { vr: [...vr].map(([site, before]) => ({ site, before })) } : {}) };
 }
 
-export const writeTakenBack = (record: TakenBack): string => JSON.stringify({ v: 1, all_before: record.allBefore, sites: record.sites, ...(record.devices?.length ? { devices: record.devices } : {}) });
+export const writeTakenBack = (record: TakenBack): string => JSON.stringify({ v: 1, all_before: record.allBefore, sites: record.sites, ...(record.devices?.length ? { devices: record.devices } : {}), ...(record.vr?.length ? { vr: record.vr } : {}) });
 
 /**
  * Two records as one: nothing either says is taken back is ever given back
@@ -109,12 +122,23 @@ export function mergeTakenBack(a: TakenBack, b: TakenBack, nowSeconds: number): 
     .filter((entry) => entry.before > allBefore && entry.before + TAKE_BACK_LIMITS.entrySec > nowSeconds)
     .sort((x, y) => y.before - x.before)
     .slice(0, TAKE_BACK_LIMITS.sites);
-  return { allBefore, sites, ...(devices.length ? { devices } : {}) };
+  const byVr = new Map<string, number>();
+  for (const { site, before } of [...(a.vr ?? []), ...(b.vr ?? [])]) byVr.set(site, Math.max(byVr.get(site) ?? 0, before));
+  const vr = [...byVr]
+    .map(([site, before]) => ({ site, before }))
+    .filter((entry) => entry.before > allBefore && entry.before + TAKE_BACK_LIMITS.entrySec > nowSeconds)
+    .sort((x, y) => y.before - x.before)
+    .slice(0, TAKE_BACK_LIMITS.sites);
+  return { allBefore, sites, ...(devices.length ? { devices } : {}), ...(vr.length ? { vr } : {}) };
 }
 
 /** Take one site back, a family, or everything, as of now. */
-export function takeBack(record: TakenBack, what: { site: string } | { all: true } | { device: string }, nowSeconds: number): TakenBack {
+export function takeBack(record: TakenBack, what: { site: string; vr?: true } | { all: true } | { device: string }, nowSeconds: number): TakenBack {
   const now = Math.floor(nowSeconds);
+  if ("site" in what && what.vr === true) {
+    const site = listedSite(what.site);
+    return site ? mergeTakenBack(record, { allBefore: 0, sites: [], vr: [{ site, before: now }] }, now) : record;
+  }
   if ("all" in what) return mergeTakenBack(record, { allBefore: now, sites: [] }, now);
   if ("device" in what) return DEVICE.test(what.device) ? mergeTakenBack(record, { allBefore: 0, sites: [], devices: [{ device: what.device, before: now }] }, now) : record;
   const site = listedSite(what.site);
@@ -128,6 +152,12 @@ export function takeBack(record: TakenBack, what: { site: string } | { all: true
  * thing, when it is a family the site is in, or, for a family's grant, when
  * it is a site of that family.
  */
+/** Whether VR way, in a grant made at `grantedAt` and kept for `site` (an origin or a family), is turned off by this record. */
+export function isVrTakenBack(record: TakenBack, site: string, grantedAt: number): boolean {
+  const family = readFamily(site);
+  return (record.vr ?? []).some((entry) => entry.before >= grantedAt && (entry.site === site || (family ? inFamily(entry.site, family) : !!readFamily(entry.site) && inFamily(site, entry.site))));
+}
+
 export function isTakenBack(record: TakenBack, site: string, grantedAt: number, device?: string): boolean {
   if (record.allBefore >= grantedAt) return true;
   // A device signed out alone, where the grant names that device.

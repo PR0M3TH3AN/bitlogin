@@ -34,6 +34,8 @@ import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
 import { knownFamily } from "./family.js";
 import { deviceLabel, PAIRING_PAUSED, pairUrl } from "./pair.js";
 import { FROM_PHONE } from "./deviceGrant.js";
+import { createVrHandler, isVrAsk, VR_REFUSED } from "./vrSigner.js";
+import { VR_PARTS } from "./vrWay.js";
 import { familyOf } from "./publicSuffix.js";
 import { APP_LIMITS, buyingOpenAt, isLocalAddress, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import type { Profile } from "./profile.js";
@@ -88,6 +90,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
    */
   let deviceGrant: NostrEvent | null = null;
   let devicePub: string | null = null;
+  /** VR way, chosen at the pairing: the world's kit draws the wallet and files from what this frame answers. */
+  let vr = false;
   let name: string | null = null;
   /** Their own signed profile, as BitLogin's worker read it out of the sealed hand-off or the kept grant (§SW16). */
   let profile: Profile | null = null;
@@ -183,6 +187,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     held = [];
     deviceGrant = null;
     devicePub = null;
+    vr = false;
     was?.destroy();
   };
   /**
@@ -195,6 +200,12 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (!was || !pubkey || !remembered || !site) return;
     const found = await was.checkTakenBack(site).catch(() => "ok" as const);
     if (found === "ok" || headless !== was) return;
+    // VR way turned off on BitLogin's page: still signed in, and nothing more is drawn in VR.
+    if (found === "vr-off") {
+      vr = false;
+      vrHandler.reset();
+      return say(state());
+    }
     drop();
     say(state());
   };
@@ -227,6 +238,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     guest = false;
     deviceGrant = null;
     devicePub = null;
+    vr = false;
     forgetHeld();
     if (was) void (forSite ? was.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => was.destroy());
   };
@@ -245,6 +257,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (!kept) return;
     guest = kept.guest === true;
     deviceGrant = kept.deviceGrant ?? null;
+    vr = kept.vr === true;
     devicePub = kept.devicePubkey ?? null;
     pubkey = kept.pubkey;
     name = kept.name ?? null;
@@ -291,9 +304,13 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       ...(pubkey && !app && more.length ? { more } : {}),
       // What can be asked for here at all, said locked or unlocked. Not to an application: it is held to its set.
       ...(!app ? { offers: [...WORLD_MORE] } : {}),
-      ...(pubkey && deviceGrant ? { device: true as const } : {})
+      ...(pubkey && deviceGrant ? { device: true as const } : {}),
+      ...(pubkey && vr ? { vr: [...VR_PARTS] } : {})
     };
   };
+
+  /** VR way's answers (vrSigner.ts), from this frame's own session. */
+  const vrHandler = createVrHandler({ signer: () => headless, site: () => site, say });
 
   const fromSite = async (e: MessageEvent) => {
     const from = cleanOrigin(e.origin);
@@ -390,6 +407,20 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     if (!headless || !pubkey) return refuse();
     // Way 2: a headset holding its own key makes passes and nothing else, and says so in words a world can show.
     if (deviceGrant && ask.t !== "pass") return say({ t: "refused", id: ask.id, words: FROM_PHONE });
+    // VR way: off can be pressed in VR, the safe direction. On again only at a pairing.
+    if (ask.t === "vrOff") {
+      if (vr) {
+        vr = false;
+        vrHandler.reset();
+        await headless.vrOff().catch(() => {});
+      }
+      return say(state(ask.id));
+    }
+    // VR way's asks, only where the person chose it at the pairing.
+    if (isVrAsk(ask)) {
+      if (!vr || app) return say({ t: "refused", id: ask.id, words: VR_REFUSED });
+      return vrHandler.handle(ask);
+    }
 
     if (ask.t === "have") {
       // Answered from what BitLogin's page handed over: the person's receipts for this site's own listings, and
@@ -536,6 +567,7 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     // Signed in as an account by BitLogin's own page: no longer the guest, here.
     guest = false;
     deviceGrant = got.deviceGrant ?? null;
+    vr = got.vr === true;
     devicePub = got.devicePubkey ?? null;
     app = got.app?.permissions ?? null;
     more = app || got.family ? [] : (got.more ?? []);

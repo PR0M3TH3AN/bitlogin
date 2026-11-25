@@ -68,7 +68,7 @@ const publish = async (what, pubkey) => {
       say("That site was allowed as another account. Sign in as that account to take it back. Nothing was taken back.");
       return false;
     }
-    const result = await session.takeBack(what.deviceKey ? { device: what.device } : what);
+    const result = await session.takeBack(what.deviceKey ? { device: what.device } : what.vr ? { site: what.site, vr: true } : what);
     // Way 2: a headset holding its own key is signed out on the account's public list too, which worlds read.
     if (result.ok && what.deviceKey) {
       const listed = await session.signOutDevice(what.deviceKey);
@@ -126,6 +126,23 @@ const draw = () => {
       }
       item.append(el("p", `Allowed ${day(entry.at)}. ${words.ended ? "" : `Ends ${day(entry.until)} at the latest. `}${words.lasts}`, "connect-small"));
       const row = el("div", "", "cta-row");
+      if (entry.vr && !words.ended) {
+        // VR way, chosen at the pairing: turned off here, for every device, at the headset's next check.
+        const off = el("button", "Turn off BitLogin inside VR", "btn secondary");
+        off.type = "button";
+        off.addEventListener("click", async () => {
+          off.disabled = true;
+          say("Turning off BitLogin inside VR.");
+          if (!(await publish({ site: entry.site, vr: true }, entry.pubkey))) {
+            off.disabled = false;
+            return;
+          }
+          say("Turned off: BitLogin isn't drawn inside VR there any more. The headset stops at its next check, usually within a day, or at once if you turn it off in the world.");
+          saveAllowed(loadAllowed(Date.now() / 1000).map((other) => (other === entry || (other.site === entry.site && other.device === entry.device) ? (({ vr: _vr, ...rest }) => rest)(other) : other)));
+          draw();
+        });
+        row.append(off);
+      }
       if (entry.device && !words.ended) {
         item.append(el("p", "If you think someone has read this headset's storage, sign it out, then make a new account: BitLogin can't change an account's key yet.", "connect-small"));
       }

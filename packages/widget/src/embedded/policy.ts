@@ -262,6 +262,21 @@ export type SignerRequest =
    * and an address to show, then `paired`, or `pairing-expired`. Only where nobody is signed in, or it is a guest.
    */
   | { t: "pair"; id: string }
+  /**
+   * VR way (NSWP everything-in-vr; names given): where the person chose it at the pairing, the world's kit draws the
+   * wallet and files from these. Money and files move only after a `confirm` the signer makes, `confirmed` by the kit.
+   */
+  | { t: "walletState"; id: string }
+  | { t: "walletReceive"; id: string; sats: number; mint?: string }
+  | { t: "walletClaim"; id: string; quote: string }
+  | { t: "walletSend"; id: string; invoice: string }
+  | { t: "walletToken"; id: string; sats: number }
+  | { t: "walletTake"; id: string; token: string }
+  | { t: "filesList"; id: string }
+  | { t: "fileOpen"; id: string; file: string }
+  | { t: "fileSave"; id: string; name: string; type: string; bytes: Uint8Array; private: boolean }
+  | { t: "confirmed"; id: string; confirm: string; yes: boolean }
+  | { t: "vrOff"; id: string }
   | { t: "pairCancel"; id: string }
   | { t: "wantFamily"; id: string; family: string; /** And a guest account, where nobody is signed in here (docs/guest-accounts.md). */ guest?: true }
   /** Follow or unfollow one person: the visitor's newest follow list as the world found it (or null), and the one change. */
@@ -300,6 +315,8 @@ export type SignerReply =
       offers?: WorldMore[];
       /** Way 2: this headset holds a key of its own; its passes come with the account's grant (`device` in `signed`). */
       device?: true;
+      /** VR way, chosen at the pairing: what the world's kit may draw in VR from this frame's answers. */
+      vr?: string[];
       /** In answer to `want` only: whether that set may be shown to the user at this address. False approves
        *  nothing and true approves nothing: it says whether asking is worth it. */
       taken?: boolean;
@@ -342,7 +359,14 @@ export type SignerReply =
   | { t: "found"; id: string; d: string }
   /** Answers `open`: what was kept, in which slot, and when. */
   | { t: "opened"; id: string; slot: string; data: string; at: number }
-  | { t: "refused"; id: string; /** Words a world can show, where there are some: "Do this from your phone." */ words?: string };
+  | { t: "refused"; id: string; /** Words a world can show, where there are some: "Do this from your phone." */ words?: string }
+  // VR way's answers (NSWP everything-in-vr; names given). Amounts are BitLogin's own reading.
+  | { t: "wallet-state"; id: string; balance: number; mints: { mint: string; sats: number }[]; claimed?: boolean }
+  | { t: "invoice"; id: string; invoice: string; quote: string; sats: number }
+  | { t: "token"; id: string; token: string }
+  | { t: "files"; id: string; files: { id: string; name: string; size: number; type: string; private: boolean; folder: string }[] }
+  /** Put to the kit to draw, and answered by its press (`confirmed`), once, after the press guard and within a minute. */
+  | { t: "confirm"; id: string; confirm: string; what: "pay" | "take" | "save"; sats?: number; fee?: number; mint?: string; name?: string; size?: number; private?: boolean };
 
 const ID = /^[0-9a-z-]{1,40}$/iu;
 const HEX64 = /^[0-9a-f]{64}$/u;
@@ -356,6 +380,19 @@ export function readSignerRequest(data: unknown): SignerRequest | null {
   if (d.nswp !== SIGNER_PROTOCOL || d.v !== PROTOCOL_VERSION || typeof d.id !== "string" || !ID.test(d.id)) return null;
   if (d.t === "state") return { t: "state", id: d.id };
   if (d.t === "pair") return { t: "pair", id: d.id };
+  // VR way's asks: read here as any ask is; whether VR way is on, and the confirm, are the signer's.
+  if (d.t === "walletState" || d.t === "filesList" || d.t === "vrOff") return { t: d.t, id: d.id };
+  if (d.t === "walletReceive" && cleanSats(d.sats)) return { t: "walletReceive", id: d.id, sats: cleanSats(d.sats)!, ...(typeof d.mint === "string" && d.mint.length <= 300 ? { mint: d.mint } : {}) };
+  if (d.t === "walletClaim" && typeof d.quote === "string" && d.quote.length > 0 && d.quote.length <= 200) return { t: "walletClaim", id: d.id, quote: d.quote };
+  if (d.t === "walletSend" && cleanInvoice(d.invoice)) return { t: "walletSend", id: d.id, invoice: cleanInvoice(d.invoice) };
+  if (d.t === "walletToken" && cleanSats(d.sats)) return { t: "walletToken", id: d.id, sats: cleanSats(d.sats)! };
+  if (d.t === "walletTake" && typeof d.token === "string" && /^cashu[AB][A-Za-z0-9_\-=+/]{10,20000}$/u.test(d.token.trim())) return { t: "walletTake", id: d.id, token: d.token.trim() };
+  if (d.t === "fileOpen" && typeof d.file === "string" && /^[A-Za-z0-9_-]{1,80}$/u.test(d.file)) return { t: "fileOpen", id: d.id, file: d.file };
+  if (d.t === "fileSave") {
+    const offered = readOfferedFile(d);
+    return offered ? { t: "fileSave", id: d.id, ...offered, private: d.private !== false } : null;
+  }
+  if (d.t === "confirmed" && typeof d.confirm === "string" && /^[0-9a-f]{24}$/u.test(d.confirm)) return { t: "confirmed", id: d.id, confirm: d.confirm, yes: d.yes === true };
   if (d.t === "pairCancel") return { t: "pairCancel", id: d.id };
   if (d.t === "lock") return { t: "lock", id: d.id };
   if (d.t === "sign" && d.event && typeof d.event === "object") return { t: "sign", id: d.id, event: d.event };
