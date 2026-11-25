@@ -157,3 +157,26 @@ describe("a session that arrived by a hand-off", () => {
     }
   });
 });
+
+describe("a hand-off with a device grant (Way 2: the headset's own key)", () => {
+  it("carries the device key and its grant, opened only where the grant is for that key and that site", async () => {
+    const { NostrSigner } = await import("@bitlogin/core/account");
+    const { generatePrivateKey, getPublicKeyHex } = await import("@bitlogin/core/crypto");
+    const { deviceGrantTemplate } = await import("../embedded/deviceGrant.js");
+    const site = "https://w1.bitblocks.network";
+    const identity = new NostrSigner(generatePrivateKey());
+    const D = generatePrivateKey();
+    const grantFor = (device: string, origin = site) => identity.signEvent(deviceGrantTemplate({ device, origin, expires: Math.floor(Date.now() / 1000) + 3600, label: "Meta Quest Browser" }));
+    const recipient = generatePrivateKey();
+    const to = getPublicKeyHex(recipient);
+    const seal = (key: Uint8Array, grant: unknown, forSite = site) => sealHandoff(key, to, generatePrivateKey(), undefined, { site: forSite, remember: true, deviceGrant: grant });
+    const opened = openAppHandoff(seal(D, grantFor(getPublicKeyHex(D))), recipient);
+    expect(getPublicKeyHex(opened.key)).toBe(getPublicKeyHex(D));
+    expect(opened.deviceGrant?.pubkey).toBe(identity.getPublicKey());
+    // A grant for another key, or another site, is refused whole: nothing opens.
+    expect(() => openAppHandoff(seal(D, grantFor(getPublicKeyHex(generatePrivateKey()))), recipient)).toThrow();
+    expect(() => openAppHandoff(seal(D, grantFor(getPublicKeyHex(D), "https://other.example")), recipient)).toThrow();
+    // Sealing refuses one too: the phone never sends a key with a grant that isn't its own.
+    expect(() => seal(D, grantFor(getPublicKeyHex(generatePrivateKey())))).toThrow();
+  });
+});

@@ -53,9 +53,10 @@ import { IndexedDbKeyValueStore } from "../storage/indexedDbStore.js";
 import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSessionState, clearSessionSlot, keptSlot } from "./sessionCache.js";
 import { describe as describeKept, forget as forgetKept, keep as keepKept, loadKept, saveKept } from "./keptAccounts.js";
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
-import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
+import { DEVICE_ACTIONS, openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
+import { DEVICE_GRANT_MAX_SEC, DEVICE_KEYS, DEVICES_OUT_D, DEVICES_OUT_KIND, deviceGrantTemplate, devicesOutTemplate, FROM_PHONE, isDeviceOut, readDevicesOut } from "../embedded/deviceGrant.js";
 import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
-import { isLocalAddress, isSignInAddress, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
+import { isLocalAddress, isSignInAddress, knownAppName, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
 import { createSignGate, HELD_MOST, passAllowed, prepareForGuest, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
 import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
@@ -198,6 +199,11 @@ interface SessionState {
   guest: string | null;
   /** For a signer-only session: the device a phone paired, by its random id (docs/pair-a-headset.md), or null. */
   device: string | null;
+  /**
+   * Way 2: the key this session holds is the headset's own, and this is the account's grant for it (kind 27305). Then
+   * it serves passes and the grant's own checks, and nothing else: "Do this from your phone."
+   */
+  deviceGrant: NostrEvent | null;
   /** For a signer-only session serving a world: what the user let it do beyond a note and a reaction, by name. */
   more: readonly string[];
 }
@@ -225,6 +231,7 @@ const session: SessionState = {
   memberOf: null,
   guest: null,
   device: null,
+  deviceGrant: null,
   more: []
 };
 
@@ -236,6 +243,8 @@ let headsetPairing: HeadsetPairing | null = null;
 /** On the phone: the pairing under way, by the offers it found, and the throwaway key that speaks for it. */
 /** The phone's side: the offers found for the code it was given, and the number it sent each to show. */
 /** Way 1: the offer BitLogin's own /headset/ page makes, for the world's signer. */
+/** Way 2's switch: off, as `DEVICE_KEYS`; a test may turn it on where BitLogin runs at a local address. */
+let deviceKeysHere = DEVICE_KEYS;
 let pageOffer: HeadsetPairing | null = null;
 let phonePaired: { phone: PhonePairing; offers: Map<string, PairOffer>; numbers: Map<string, number> } | null = null;
 
@@ -403,6 +412,7 @@ function clearSession(): void {
   session.memberOf = null;
   session.guest = null;
   session.device = null;
+  session.deviceGrant = null;
   session.more = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
@@ -760,6 +770,8 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
   if (session.signerOnly && !SIGNER_ONLY_ACTIONS.has(action)) {
     throw new Error("This session can only sign. Sign in at your own BitLogin page for anything else.");
   }
+  // Way 2: a headset holding its own key makes passes, keeps and checks its grant, and nothing else.
+  if (session.deviceGrant && !DEVICE_ACTIONS.has(action)) throw Object.assign(new Error(FROM_PHONE), { code: "from-phone" });
   // With the lock on, a session nobody has used for a while locks itself before anything more is done with it.
   if (lockKey && action !== "configure" && Date.now() - lastUsed > LOCK_LIMITS.idleSec * 1000) lockNow();
   if (!NOT_USE.has(action)) lastUsed = Date.now();
@@ -925,7 +937,8 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
               site: g.site,
               everydayPrivateKey,
               // The application's own grant for as long as the signer worked out for it; the family's by its own name.
-              until: session.app && family && g.site === family ? Math.floor(now) + keepSecFor(family) : p.until,
+              // Way 2: never past the account's grant for the headset's own key.
+              until: Math.min(session.app && family && g.site === family ? Math.floor(now) + keepSecFor(family) : p.until, session.deviceGrant ? Number(session.deviceGrant.tags.find((t) => t[0] === "expiration")?.[1]) || 0 : Infinity),
               ...(p.name ? { name: p.name } : {}),
               ...(session.profile && !session.app ? { profile: session.profile } : {}),
               at: session.grantAt ?? Math.floor(now),
@@ -934,6 +947,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
               ...(g.more ? { more: g.more } : {}),
               ...(g.memberOf ? { memberOf: g.memberOf } : {}),
               ...(session.device ? { device: session.device } : {}),
+              ...(session.deviceGrant ? { deviceGrant: session.deviceGrant } : {}),
               ...(g.permissions ? { permissions: g.permissions, signedSensitive: [] } : {})
             },
             now
@@ -988,6 +1002,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       session.family = family;
       session.memberOf = !family && grant.memberOf ? grant.memberOf : null;
       session.device = grant.device ?? null;
+      session.deviceGrant = grant.deviceGrant ?? null;
       session.profile = grant.profile ?? null;
       session.remember = true;
       session.grantAt = grantedAt(grant);
@@ -997,6 +1012,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       return {
         restored: true,
         everydayPublicKey: session.signer.getPublicKey(),
+        ...(grant.deviceGrant ? { deviceGrant: grant.deviceGrant, identity: grant.deviceGrant.pubkey } : {}),
         until: grant.until,
         ...(grant.name ? { name: grant.name } : {}),
         ...(grant.profile ? { profile: grant.profile } : {}),
@@ -1187,8 +1203,19 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       if (p.family !== undefined && (typeof p.family !== "string" || !readFamily(p.family) || !inFamily(offer.site, p.family) || !knownFamily(p.family))) throw new Error("Not that site's family.");
       const device = bytesToHex(randomBytes(16));
       const sender = generatePrivateKey();
+      // Way 2: the headset gets a key of its own, D, and the account's grant for it, never the account's key. The grant
+      // is for its family where the person chose that, else its site; thirty days for one BitLogin knows, seven for
+      // another, and one day while the lock is on (the headset keeps it for the visit only).
+      const own = deviceKeysHere ? generatePrivateKey() : null;
+      let deviceGrant: NostrEvent | null = null;
+      if (own) {
+        const family = typeof p.family === "string" ? p.family : null;
+        const known = family ? knownFamily(family) : knownAppName(offer.site) !== null;
+        const lasts = lockKey ? 86400 : known ? DEVICE_GRANT_MAX_SEC : 7 * 86400;
+        deviceGrant = session.signer!.signEvent(deviceGrantTemplate({ device: getPublicKeyHex(own), origin: family ?? offer.site, expires: Math.floor(Date.now() / 1000) + lasts, label: offer.device }));
+      }
       try {
-        const sealed = sealHandoff(everydayPrivateKey, offer.to ?? offer.key, sender, undefined, {
+        const sealed = sealHandoff(own ?? everydayPrivateKey, offer.to ?? offer.key, sender, undefined, {
           site: offer.site,
           ...(session.profile ? { profile: session.profile } : {}),
           remember: true,
@@ -1196,14 +1223,49 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
           ...(lockKey ? { visitOnly: true } : {}),
           at: Date.now() / 1000,
           relays: session.relays,
-          device
+          device,
+          ...(deviceGrant ? { deviceGrant } : {})
         });
         await phonePaired.phone.answer(offer, sealed);
       } finally {
         wipe(sender);
       }
       phonePaired = null;
-      return { device };
+      const deviceKey = own ? getPublicKeyHex(own) : null;
+      if (own) wipe(own);
+      return { device, ...(deviceKey ? { deviceKey } : {}) };
+    }
+
+    // Way 2, on the phone: sign a headset's own key out, on the account's public list of devices signed out (kind
+    // 37312), joined onto the newest list found. Worlds read it, and so does the headset's own signer.
+    case "devicesOut": {
+      const { signer } = requireUnlocked();
+      if (session.signerOnly) throw new Error("A headset is signed out from BitLogin's own page only.");
+      const deviceKey = String((payload as { deviceKey?: unknown }).deviceKey ?? "");
+      if (!/^[0-9a-f]{64}$/u.test(deviceKey)) throw new Error("That is not a device's key.");
+      const me = signer.getPublicKey();
+      const finder = readPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
+      let mine: string[];
+      try {
+        mine = writeRelaysFrom((await finder.queryQuorum({ kinds: [RELAY_LIST_KIND], authors: [me], limit: 2 }, 4000)).outcomes.flatMap((o) => o.events), me);
+      } finally {
+        finder.closeAll();
+      }
+      const relayUrls = [...new Set([...mine, ...vaultRelayUrls])].slice(0, 16);
+      const pool = readPool(relayUrls);
+      try {
+        const found = await pool.queryQuorum({ kinds: [DEVICES_OUT_KIND], authors: [me], "#d": [DEVICES_OUT_D], limit: 2 }, 5000);
+        // With no relay answering, the list another device signed could not be carried forward.
+        if (found.respondedCount === 0) return { ok: false, accepted: 0, of: relayUrls.length };
+        const newest = found.outcomes.flatMap((o) => o.events).filter((e) => e.kind === DEVICES_OUT_KIND && e.pubkey === me).sort((a, b) => b.created_at - a.created_at)[0];
+        const now = Math.floor(Date.now() / 1000);
+        const event = signer.signEvent({ ...devicesOutTemplate(newest ? readDevicesOut(newest, me) : [], [{ device: deviceKey, before: now }]), created_at: Math.max(now, (newest?.created_at ?? 0) + 1) });
+        const outcomes = await pool.publishAll(event, 6000);
+        const accepted = outcomes.filter((o) => o.result.ok).length;
+        return { ok: accepted >= Math.min(2, relayUrls.length), accepted, of: relayUrls.length };
+      } finally {
+        pool.closeAll();
+      }
     }
 
     case "handoffAccept": {
@@ -1231,9 +1293,11 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       session.family = opened.app ? null : opened.family;
       session.memberOf = opened.app ? opened.family : null;
       session.device = opened.device ?? null;
-      session.more = opened.more;
+      session.deviceGrant = opened.deviceGrant ?? null;
+      session.more = opened.deviceGrant ? [] : opened.more;
       return {
         everydayPublicKey: session.signer.getPublicKey(),
+        ...(opened.deviceGrant ? { deviceGrant: opened.deviceGrant, identity: opened.deviceGrant.pubkey } : {}),
         ...(opened.app ? { app: opened.app } : {}),
         ...(opened.site ? { site: opened.site } : {}),
         ...(opened.profile ? { profile: opened.profile } : {}),
@@ -1335,6 +1399,28 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const at = grantedAt(grant);
       const due = checkDue(now, at, grant.checkedAt ?? 0);
       if (due === "fresh") return { state: "ok" };
+      // Way 2: a headset's own key can't open the account's sealed take-back. It reads the account's public list of
+      // devices signed out (kind 37312) instead, and ends where the list names its key.
+      if (grant.deviceGrant) {
+        const identity = grant.deviceGrant.pubkey;
+        const pool = readPool([...new Set([...cleanRelays(grant.relays), ...vaultRelayUrls])].slice(0, 12));
+        let found: Awaited<ReturnType<RelayPool["queryQuorum"]>>;
+        try {
+          found = await pool.queryQuorum({ kinds: [DEVICES_OUT_KIND], authors: [identity], "#d": [DEVICES_OUT_D], limit: 2 }, 5000);
+        } finally {
+          pool.closeAll();
+        }
+        if (session.signer !== signer) return { state: "ok" };
+        const newest = found.outcomes.flatMap((o) => o.events).filter((e) => readDevicesOut(e, identity).length || e.kind === DEVICES_OUT_KIND).sort((a, b) => b.created_at - a.created_at)[0];
+        if (newest && isDeviceOut(readDevicesOut(newest, identity), me, at)) {
+          await deleteSignerGrant(store, site);
+          clearSession();
+          return { state: "ended" };
+        }
+        if (found.respondedCount === 0) return { state: due === "overdue" ? "stale" : "ok" };
+        await saveSignerGrant(store, { ...grant, checkedAt: Math.floor(now) }, now);
+        return { state: "ok" };
+      }
       const relayUrls = [...new Set([...cleanRelays(grant.relays), ...vaultRelayUrls])].slice(0, 12);
       const pool = readPool(relayUrls);
       let records: Awaited<ReturnType<RelayPool["queryQuorum"]>>;
@@ -1730,6 +1816,8 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       hostDiscoveryRelays = Boolean(p.discoveryRelayUrls?.length);
       if (p.vaultRelayUrls?.length) vaultRelayUrls = p.vaultRelayUrls;
       if (p.discoveryRelayUrls?.length) discoveryRelayUrls = p.discoveryRelayUrls;
+      // Way 2's switch, off: a test turns it on only where BitLogin runs at a local address (never a live one).
+      if (p.deviceKeys === true && isLocalAddress(selfOrigin())) deviceKeysHere = true;
       // The list this device already accepted applies at once; looking for a
       // newer one happens in the background and must never delay sign-in.
       applyRelaySets(relaySetsFor(await loadCachedBootstrapList(store)));
@@ -2559,7 +2647,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
-  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "headsetBegin", "headsetPoll", "headsetCancel", "pairFind", "pairFound", "pairEnd", "pairAnswer",
+  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "headsetBegin", "headsetPoll", "headsetCancel", "devicesOut", "pairFind", "pairFound", "pairEnd", "pairAnswer",
   "signerKeep", "signerRestore", "guestStatus", "signerTouch", "signerForget", "signerHold", "signerHeld",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",

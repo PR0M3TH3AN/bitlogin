@@ -33,6 +33,7 @@ import { bestReceipt, localService, readReceipt, receiptGood, UNLOCK_SERVICES, t
 import { createHeadlessSigner, type HeadlessSigner } from "../headless.js";
 import { knownFamily } from "./family.js";
 import { deviceLabel, PAIRING_PAUSED, pairUrl } from "./pair.js";
+import { FROM_PHONE } from "./deviceGrant.js";
 import { familyOf } from "./publicSuffix.js";
 import { APP_LIMITS, buyingOpenAt, isLocalAddress, knownAppName, limitClass, mayHold, prepareForApp, type AppPermissions } from "./permissions.js";
 import type { Profile } from "./profile.js";
@@ -81,6 +82,12 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
   let site = cleanOrigin((location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins?.[0] ?? "");
   let headless: HeadlessSigner | null = null;
   let pubkey: string | null = null;
+  /**
+   * Way 2: this headset holds a key of its own, D, never the account's. `pubkey` is the account; D signs passes, with
+   * the account's grant beside them, and everything else is the phone's.
+   */
+  let deviceGrant: NostrEvent | null = null;
+  let devicePub: string | null = null;
   let name: string | null = null;
   /** Their own signed profile, as BitLogin's worker read it out of the sealed hand-off or the kept grant (§SW16). */
   let profile: Profile | null = null;
@@ -174,6 +181,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     remembered = false;
     app = null;
     held = [];
+    deviceGrant = null;
+    devicePub = null;
     was?.destroy();
   };
   /**
@@ -216,6 +225,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     app = null;
     more = [];
     guest = false;
+    deviceGrant = null;
+    devicePub = null;
     forgetHeld();
     if (was) void (forSite ? was.forgetSignerGrant(forSite) : Promise.resolve()).catch(() => {}).finally(() => was.destroy());
   };
@@ -233,6 +244,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     const kept = await (await load()).restoreSignerGrant(site, familyOf(site) || undefined, makeGuest);
     if (!kept) return;
     guest = kept.guest === true;
+    deviceGrant = kept.deviceGrant ?? null;
+    devicePub = kept.devicePubkey ?? null;
     pubkey = kept.pubkey;
     name = kept.name ?? null;
     profile = kept.profile ?? null;
@@ -277,7 +290,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       // A world is told what more it was let do, so it asks for nothing that isn't there.
       ...(pubkey && !app && more.length ? { more } : {}),
       // What can be asked for here at all, said locked or unlocked. Not to an application: it is held to its set.
-      ...(!app ? { offers: [...WORLD_MORE] } : {})
+      ...(!app ? { offers: [...WORLD_MORE] } : {}),
+      ...(pubkey && deviceGrant ? { device: true as const } : {})
     };
   };
 
@@ -374,6 +388,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     const refuse = () => say({ t: "refused", id: ask.id });
     if (pubkey && Date.now() / 1000 >= until) lock();
     if (!headless || !pubkey) return refuse();
+    // Way 2: a headset holding its own key makes passes and nothing else, and says so in words a world can show.
+    if (deviceGrant && ask.t !== "pass") return say({ t: "refused", id: ask.id, words: FROM_PHONE });
 
     if (ask.t === "have") {
       // Answered from what BitLogin's page handed over: the person's receipts for this site's own listings, and
@@ -478,8 +494,9 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
       if (!passAllowed(app) || ask.session === pubkey || !passGate.take(Date.now())) return refuse();
       try {
         const pass = await headless.roomPass(ask.session);
-        if (pass.pubkey !== pubkey) return refuse();
-        say({ t: "signed", id: ask.id, event: pass });
+        // Signed by the account, or (Way 2) by the headset's own key, with the account's grant for it beside it.
+        if (pass.pubkey !== (deviceGrant ? devicePub : pubkey)) return refuse();
+        say({ t: "signed", id: ask.id, event: pass, ...(deviceGrant ? { device: deviceGrant } : {}) });
         void headless.touchSignerGrant(site, gate.times(), undefined, passGate.times()).catch(() => {});
       } catch {
         refuse();
@@ -518,6 +535,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     profile = got.profile ?? null;
     // Signed in as an account by BitLogin's own page: no longer the guest, here.
     guest = false;
+    deviceGrant = got.deviceGrant ?? null;
+    devicePub = got.devicePubkey ?? null;
     app = got.app?.permissions ?? null;
     more = app || got.family ? [] : (got.more ?? []);
     gates = appGates();
@@ -539,6 +558,8 @@ export function startEmbeddedSigner(options: EmbeddedSignerOptions = {}): Embedd
     // was read can't be unread, so the say is not left standing for a month.
     const longest = known && !more.includes("messages") ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec;
     until = Math.floor(Date.now() / 1000) + (got.remember ? longest : SIGN_LIMITS.visitSec);
+    // Way 2: never past the account's grant for the headset's own key.
+    if (deviceGrant) until = Math.min(until, Number(deviceGrant.tags.find((t) => t[0] === "expiration")?.[1]) || 0);
     remembered = got.remember === true && (await signer.keepSignerGrant({ site, until, ...(name ? { name } : {}) }).catch(() => false));
     if (!remembered) until = Math.min(until, Math.floor(Date.now() / 1000) + SIGN_LIMITS.visitSec);
     // What an account before this one held here is written over: nothing of theirs is left for this one.

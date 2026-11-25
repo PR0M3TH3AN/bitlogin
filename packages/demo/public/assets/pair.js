@@ -32,7 +32,9 @@ const end = (text) => {
 const relayList = (value) => (value || "").split(",").map((url) => url.trim()).filter(Boolean);
 const relays = {
   vaultRelays: relayList(document.documentElement.dataset.vaultRelays),
-  discoveryRelays: relayList(document.documentElement.dataset.discoveryRelays)
+  discoveryRelays: relayList(document.documentElement.dataset.discoveryRelays),
+  // Way 2's switch, for tests: the worker takes it only where BitLogin runs at a local address.
+  ...(document.documentElement.dataset.deviceKeys === "on" ? { deviceKeys: true } : {})
 };
 
 // The code from the address, and then out of it: it is not left in the history, or shown to a screen reader again.
@@ -143,12 +145,12 @@ const answer = async (asFamily) => {
   show(null);
   say("Signing the headset in.");
   try {
-    const { device } = await worker.pairAnswer(offer.id, number, asFamily ? family : undefined);
+    const { device, deviceKey } = await worker.pairAnswer(offer.id, number, asFamily ? family : undefined);
     const at = Math.floor(Date.now() / 1000);
     const remembered = !lockOn;
     const known = asFamily ? knownFamily(family) : knownAppName(offer.site) !== null;
     const until = at + (remembered ? (known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec) : SIGN_LIMITS.visitSec);
-    recordAllowed({ site: asFamily ? family : offer.site, ...(asFamily ? { members: [offer.site] } : {}), pubkey: me.pubkey, at, until, remembered, device, ...(offer.device !== "a device" ? { deviceLabel: offer.device } : {}) });
+    recordAllowed({ site: asFamily ? family : offer.site, ...(asFamily ? { members: [offer.site] } : {}), pubkey: me.pubkey, at, until, remembered, device, ...(deviceKey ? { deviceKey } : {}), ...(offer.device !== "a device" ? { deviceLabel: offer.device } : {}) });
     end(`Sent. The headset signs in at ${offer.site} in a moment. You can sign it out from Sites you allowed.`);
   } catch {
     end("That didn't work, and nothing was signed in. Start again on the headset.");

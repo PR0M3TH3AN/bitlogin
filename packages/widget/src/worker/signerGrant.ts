@@ -15,6 +15,9 @@
  * off by the site it is embedded in. The asking site cannot read it.
  */
 import type { KeyValueStore } from "@bitlogin/core/storage";
+import type { NostrEvent } from "@bitlogin/core/nostr";
+import { getPublicKeyHex } from "@bitlogin/core/crypto";
+import { deviceGrantHolds } from "../embedded/deviceGrant.js";
 import { APP_LIMITS, knownAppName, mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 import { knownFamily, readFamily } from "../embedded/family.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
@@ -69,6 +72,11 @@ export interface SignerGrant {
   memberOf?: string;
   /** The device a phone paired, by its random id (docs/pair-a-headset.md): a take-back may name it alone. */
   device?: string;
+  /**
+   * Way 2: the key kept is the headset's own, and this is the account's grant for it (kind 27305). Checked again on
+   * every load: for this key, under this name (site or family), in date. A grant that isn't ends what is kept.
+   */
+  deviceGrant?: NostrEvent;
   /** The user's own write relays, where a signer looks for their take-back record. */
   relays?: string[];
   /** When their relays were last asked, and answered, whether this site was taken back. In seconds. */
@@ -146,6 +154,7 @@ export async function saveSignerGrant(store: GrantStore, grant: SignerGrant, now
       ...(typeof grant.at === "number" ? { at: Math.floor(grant.at) } : {}),
       ...(!readFamily(site) && readFamily(grant.memberOf) ? { memberOf: readFamily(grant.memberOf) } : {}),
       ...(typeof grant.device === "string" && /^[0-9a-f]{32}$/u.test(grant.device) ? { device: grant.device } : {}),
+      ...(grant.deviceGrant ? { deviceGrant: grant.deviceGrant } : {}),
       ...(cleanRelays(grant.relays).length ? { relays: cleanRelays(grant.relays) } : {}),
       ...(typeof grant.checkedAt === "number" ? { checkedAt: Math.floor(grant.checkedAt) } : {}),
       ...(typeof grant.seenAt === "number" ? { seenAt: Math.floor(grant.seenAt) } : {}),
@@ -174,7 +183,7 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
     if (sealed.v !== 1 || typeof sealed.iv !== "string" || typeof sealed.ciphertext !== "string") return null;
     const key = await store.getOrCreateDeviceKey(GRANT_DEVICE_KEY);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(fromBase64(sealed.iv)) }, key, buffer(fromBase64(sealed.ciphertext)));
-    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; more?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown; memberOf?: unknown; device?: unknown };
+    const p = JSON.parse(new TextDecoder().decode(plain)) as { site?: unknown; key?: unknown; until?: unknown; name?: unknown; profile?: unknown; signed?: unknown; permissions?: unknown; signedSensitive?: unknown; signedPass?: unknown; more?: unknown; at?: unknown; relays?: unknown; checkedAt?: unknown; seenAt?: unknown; memberOf?: unknown; device?: unknown; deviceGrant?: unknown };
     const when = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
     const profile = readProfile(p.profile);
     // A set that no longer reads as one (a rule tightened since it was kept) ends the grant: the user is asked
@@ -191,8 +200,20 @@ export async function loadSignerGrant(store: GrantStore, siteInput: string, nowS
       await store.delete(GRANT_PREFIX + site);
       return null;
     }
+    const keyBytes = Uint8Array.from(p.key.match(/.{2}/gu) ?? [], (pair) => Number.parseInt(pair, 16));
+    // Way 2: kept with a grant only while the grant is still one, for this key and this name.
+    let deviceGrant: NostrEvent | undefined;
+    if (p.deviceGrant !== undefined) {
+      if (!deviceGrantHolds(p.deviceGrant, getPublicKeyHex(keyBytes), site, nowSeconds)) {
+        keyBytes.fill(0);
+        await store.delete(GRANT_PREFIX + site);
+        return null;
+      }
+      deviceGrant = p.deviceGrant as NostrEvent;
+    }
     return {
       site,
+      ...(deviceGrant ? { deviceGrant } : {}),
       everydayPrivateKey: Uint8Array.from(p.key.match(/.{2}/gu) ?? [], (pair) => Number.parseInt(pair, 16)),
       until: p.until,
       ...(typeof p.name === "string" && p.name ? { name: p.name.slice(0, 48) } : {}),

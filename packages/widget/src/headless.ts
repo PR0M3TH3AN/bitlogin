@@ -37,6 +37,8 @@ export interface HeadlessSignerOptions {
   /** Relays for account discovery (only needed for interactive login, which
    *  this signer doesn't do — safe to omit). */
   discoveryRelays?: string[];
+  /** Way 2's switch, for tests only: the worker takes it only where BitLogin runs at a local address. */
+  deviceKeys?: boolean;
 }
 
 export interface HeadlessSigner {
@@ -213,7 +215,7 @@ export interface HeadlessSigner {
    */
   acceptHandoff(
     sealed: { senderPublicKey: string; payload: string }
-  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean; family?: string; more?: WorldMore[] }>;
+  ): Promise<{ pubkey: string; app?: { site: string; permissions: AppPermissions }; site?: string; profile?: Profile; remember?: boolean; family?: string; more?: WorldMore[]; /** Way 2: the headset's own key; `pubkey` is then the account's, and this the grant. */ deviceGrant?: NostrEvent; devicePubkey?: string }>;
   /**
    * For a session an application was approved for (docs/sign-in-window.md
    * §SW9.5). Each rejects unless the session carries a permission set that
@@ -244,7 +246,7 @@ export interface HeadlessSigner {
     family?: string,
     /** Make the family's guest account where nobody is signed in here and none is kept (docs/guest-accounts.md). */
     guest?: boolean
-  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; more?: WorldMore[]; permissions?: AppPermissions; signedSensitive?: number[]; guest?: boolean } | null>;
+  ): Promise<{ pubkey: string; until: number; name?: string; profile?: Profile; signed: number[]; signedPass?: number[]; check?: "fresh" | "due" | "overdue"; family?: string; more?: WorldMore[]; permissions?: AppPermissions; signedSensitive?: number[]; guest?: boolean; /** Way 2: kept with the headset's own key. */ deviceGrant?: NostrEvent; devicePubkey?: string } | null>;
   /** Record when the last signatures for a site were made, so reloading its page can't lose the count. */
   touchSignerGrant(site: string, signed: number[], signedSensitive?: number[], signedPass?: number[]): Promise<void>;
   /** Forget a site. */
@@ -269,7 +271,9 @@ export interface HeadlessSigner {
   pairFind(code: string): Promise<PairOffer[]>;
   pairFound(offer: string): Promise<number>;
   pairEnd(offer: string): Promise<void>;
-  pairAnswer(offer: string, number: number, family?: string): Promise<{ device: string }>;
+  pairAnswer(offer: string, number: number, family?: string): Promise<{ device: string; /** Way 2: the headset's own key, public half. */ deviceKey?: string }>;
+  /** Way 2, on the phone: sign a headset's own key out, on the account's list of devices signed out. */
+  signOutDevice(deviceKey: string): Promise<{ ok: boolean; accepted: number; of: number }>;
   /** In the embedded signer: keep, and read back, the receipts BitLogin's own page handed it for this site (docs/paying.md). */
   holdReceipts(site: string, receipts: NostrEvent[]): Promise<void>;
   heldReceipts(site: string): Promise<NostrEvent[]>;
@@ -291,7 +295,8 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
   const client = new WorkerClient();
   await client.configure({
     vaultRelayUrls: options.vaultRelays ?? [],
-    discoveryRelayUrls: options.discoveryRelays ?? []
+    discoveryRelayUrls: options.discoveryRelays ?? [],
+    ...(options.deviceKeys === true ? { deviceKeys: true } : {})
   });
 
   let pubkey: string | null = null;
@@ -506,8 +511,9 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     },
     async acceptHandoff(sealed) {
       const res = await client.handoffAccept(sealed);
-      pubkey = res.everydayPublicKey;
-      return { pubkey, ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}), ...(res.family ? { family: res.family } : {}), ...(res.more?.length ? { more: res.more } : {}) };
+      // Way 2: the session holds the headset's own key; who is signed in is the account the grant is from.
+      pubkey = res.identity ?? res.everydayPublicKey;
+      return { pubkey, ...(res.deviceGrant ? { deviceGrant: res.deviceGrant, devicePubkey: res.everydayPublicKey } : {}), ...(res.app ? { app: res.app } : {}), ...(res.site ? { site: res.site } : {}), ...(res.profile ? { profile: res.profile } : {}), ...(res.remember ? { remember: true } : {}), ...(res.family ? { family: res.family } : {}), ...(res.more?.length ? { more: res.more } : {}) };
     },
     async appEncrypt(peerPublicKey, text, scheme = "nip44") {
       return (await client.appEncrypt({ peerPublicKey, text, scheme })).text;
@@ -527,9 +533,10 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async restoreSignerGrant(site, family, guest) {
       const res = await client.signerRestore({ site, ...(family ? { family } : {}), ...(guest ? { guest: true } : {}) });
       if (!res.restored || !res.everydayPublicKey || typeof res.until !== "number") return null;
-      pubkey = res.everydayPublicKey;
+      pubkey = res.identity ?? res.everydayPublicKey;
       return {
         pubkey,
+        ...(res.deviceGrant ? { deviceGrant: res.deviceGrant, devicePubkey: res.everydayPublicKey } : {}),
         until: res.until,
         ...(res.name ? { name: res.name } : {}),
         ...(res.profile ? { profile: res.profile } : {}),
@@ -589,6 +596,10 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async pairEnd(offer) {
       await requirePubkey();
       await client.pairEnd(offer);
+    },
+    async signOutDevice(deviceKey) {
+      await requirePubkey();
+      return client.devicesOut(deviceKey);
     },
     async pairAnswer(offer, number, family) {
       await requirePubkey();

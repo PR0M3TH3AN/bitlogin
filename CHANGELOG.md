@@ -8,6 +8,11 @@ would plausibly want. Newest first.
 
 ## 2026-11-25
 
+- **A headset's own key (Way 2) is built, behind `DEVICE_KEYS`, which is off.**
+  Nothing changes for any site until it is turned on. Then a headset's pass
+  is signed by its own key with the account's grant (kind 27305) beside it,
+  in `pass`'s answer as `device`, and `state` says `device: true`.
+
 - **Signing in a headset from your phone is back, on BitLogin's own page**
   (`docs/pair-a-headset.md`, Way 1): a world opens `<signIn>/headset/` in a
   window from a press (or calls `client.signInFromPhone()`), and the code,

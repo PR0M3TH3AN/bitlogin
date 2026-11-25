@@ -129,7 +129,8 @@ describe("pairing, paused (the owner's \"Yes, pause it now\", 2026-11-25)", () =
     const answer = worker.slice(worker.indexOf('case "pairAnswer": {'), worker.indexOf('case "handoffAccept": {'));
     expect(answer.indexOf("if (PAIRING_PAUSED && !offer.to) pairingPaused();")).toBeGreaterThan(-1);
     expect(answer.indexOf("if (PAIRING_PAUSED && !offer.to) pairingPaused();")).toBeLessThan(answer.indexOf("sealHandoff("));
-    expect(answer).toContain("sealHandoff(everydayPrivateKey, offer.to ?? offer.key,");
+    // Way 2: the headset's own key where the switch is on, else the account's, as Way 1.
+    expect(answer).toContain("sealHandoff(own ?? everydayPrivateKey, offer.to ?? offer.key,");
     for (const action of ["pairBegin"]) {
       const start = worker.indexOf(`case "${action}": {`);
       expect(start, action).toBeGreaterThan(-1);

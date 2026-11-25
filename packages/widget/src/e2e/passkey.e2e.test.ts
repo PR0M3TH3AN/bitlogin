@@ -33,6 +33,7 @@ import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "../../../core
 import { NostrSigner } from "../../../core/src/account/signer.js";
 import { sealMessage } from "../embedded/messages.js";
 import { PAIRING_PAUSED, PAUSED_WORDS } from "../embedded/pair.js";
+import { checkDeviceGrant, DEVICES_OUT_KIND, FROM_PHONE, readDevicesOut } from "../embedded/deviceGrant.js";
 import { startMockMint } from "../ecash/mockMint.js";
 import { startMockUnlock } from "../pay/mockUnlock.js";
 import { NostrSigner } from "@bitlogin/core/account";
@@ -67,6 +68,8 @@ try {
  */
 /** A selling service a test is tried against, as `localService` reads it. Named on BitLogin's own pages only. */
 let unlockNamed = "";
+/** Way 2's switch, for one test: told to the phone's /pair/ page, whose worker takes it only at a local address. */
+let deviceKeysOn = false;
 function startServer(relayUrls: string[]): Promise<{ server: Server; origin: string }> {
   const relayList = relayUrls.join(",");
   const server = createServer(async (req, res) => {
@@ -91,7 +94,7 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
       // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
       // signer reads it. Each is given the mock relays, as the account page is.
       if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/pair/index.html" || relative === "/headset/index.html" || relative === "/signer/index.html") {
-        body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}"${unlockNamed ? ` data-unlock-service="${unlockNamed}"` : ""}>`);
+        body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}"${unlockNamed ? ` data-unlock-service="${unlockNamed}"` : ""}${deviceKeysOn && relative === "/pair/index.html" ? ' data-device-keys="on"' : ""}>`);
       }
       res.writeHead(200, {
         "content-type": MIME[extname(filePath)] ?? "application/octet-stream",
@@ -4578,6 +4581,105 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await pair.locator("#find").click();
         await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 });
       } finally {
+        for (const relay of relays) relay.keepsEphemeral = true;
+        await browser.close();
+      }
+    },
+    300_000
+  );
+
+  it(
+    "Way 2 (switch on in this test only): the headset holds a key of its own, signs passes with the account's grant beside them, refuses the rest in words, and is signed out on the account's list",
+    async () => {
+      for (const relay of relays) relay.keepsEphemeral = false;
+      deviceKeysOn = true;
+      const QUEST = "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/35.1 Chrome/126.0 VR Safari/537.36";
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<button id="phone">Sign In using Phone</button>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN) window.heard.push(e.data); });
+  document.getElementById("phone").onclick = () => { window.opened = window.open(SIGNIN + "/headset/", "bitlogin-headset", "popup"); };
+  window.ask = (message, wait = 4000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        const phone = await browser.newContext();
+        const account = await phone.newPage();
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, `way2-${Date.now().toString(36)}`);
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+        const npub = ((await widget.locator(".pubkey").textContent()) ?? "").trim();
+
+        const headset = await browser.newContext({ userAgent: QUEST });
+        await headset.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: worldPage }));
+        const world = await headset.newPage();
+        await world.goto("https://w2.bitblocks.network/");
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        const [page] = await Promise.all([headset.waitForEvent("page"), world.locator("#phone").click()]);
+        await page.locator("#code").filter({ hasText: /^[0-9A-Z]{4}-[0-9A-Z]{4}$/u }).waitFor({ timeout: 60_000 });
+        const code = ((await page.locator("#code").textContent()) ?? "").trim();
+        const pair = await phone.newPage();
+        await pair.goto(`${origin}/pair/#${code}`);
+        await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 });
+        await pair.waitForTimeout(1000);
+        await pair.locator("#holding-yes").click();
+        await pair.locator("#step-number").waitFor({ state: "visible", timeout: 60_000 });
+        await page.locator("#number-line").waitFor({ state: "visible", timeout: 30_000 });
+        const number = ((await page.locator("#number").textContent()) ?? "").trim();
+        await pair.waitForTimeout(1000);
+        await pair.locator("#numbers button", { hasText: number }).click();
+        await pair.locator("#step-ask").waitFor({ state: "visible", timeout: 30_000 });
+        await pair.waitForTimeout(1000);
+        await pair.locator("#ask-site-only").click();
+        await pair.locator("#said").filter({ hasText: "Sent." }).waitFor({ timeout: 60_000 });
+        await page.waitForEvent("close", { timeout: 60_000 });
+
+        // Signed in as the account, holding a key of its own.
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "state" && m.unlocked), null, { timeout: 30_000 });
+        const state = await world.evaluate(() => (window as any).ask({ t: "state" }));
+        expect(state).toMatchObject({ unlocked: true, device: true });
+        expect(encodeNpub(state.pubkey)).toBe(npub);
+        // A pass: signed by the headset's key, never the account's, with the account's grant for it beside it.
+        const sessionKey = getPublicKeyHex(generatePrivateKey());
+        const passed = await world.evaluate((k) => (window as any).ask({ t: "pass", session: k }), sessionKey);
+        expect(passed.t).toBe("signed");
+        expect(verifyNostrEvent(passed.event)).toBe(true);
+        expect(passed.event.kind).toBe(27300);
+        expect(passed.event.pubkey).not.toBe(state.pubkey);
+        expect(passed.device.kind).toBe(27305);
+        expect(checkDeviceGrant(passed.device, { device: passed.event.pubkey, site: "https://w2.bitblocks.network", now: Date.now() / 1000, identity: state.pubkey })).toMatchObject({ ok: true, origin: "https://w2.bitblocks.network" });
+        // Everything else is the phone's, in words a world can show.
+        for (const ask of [{ t: "sign", event: { kind: 1, content: "from a headset", tags: [] } }, { t: "save", slot: "s", data: "x" }, { t: "find", slot: "s" }, { t: "seal", to: "ab".repeat(32), text: "hello" }]) {
+          expect(await world.evaluate((m) => (window as any).ask(m), ask)).toMatchObject({ t: "refused", words: FROM_PHONE });
+        }
+        // Loaded again: still the account, still its own key.
+        await world.reload();
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        expect(await world.evaluate(() => (window as any).ask({ t: "state" }))).toMatchObject({ unlocked: true, device: true, pubkey: state.pubkey });
+
+        // "Sign out this headset", on the phone: the account's list of devices signed out names the headset's key.
+        const sites = await phone.newPage();
+        await sites.goto(`${origin}/sites/`);
+        await sites.locator("#sites li", { hasText: "A headset (Meta Quest Browser)" }).locator("button").click();
+        await sites.locator("#said").filter({ hasText: "Signed out: that headset" }).waitFor({ timeout: 60_000 });
+        const lists = relays.flatMap((r) => [...((r as any).events as Map<string, NostrEvent>).values()]).filter((e) => e.kind === DEVICES_OUT_KIND && e.pubkey === state.pubkey);
+        expect(lists.length).toBeGreaterThan(0);
+        expect(readDevicesOut(lists[0], state.pubkey).map((d) => d.device)).toContain(passed.event.pubkey);
+      } finally {
+        deviceKeysOn = false;
         for (const relay of relays) relay.keepsEphemeral = true;
         await browser.close();
       }

@@ -20,6 +20,8 @@ export type WorkerResponse<TResult = unknown> =
 export interface ConfigurePayload {
   vaultRelayUrls?: string[];
   discoveryRelayUrls?: string[];
+  /** Way 2's switch, for tests: taken only where BitLogin itself runs at a local address, never on a live one. */
+  deviceKeys?: boolean;
 }
 
 export interface RegisterPayload {
@@ -247,6 +249,9 @@ export interface HandoffAcceptResult {
   family?: string;
   /** What this world was let do beyond a note and a reaction, by name. */
   more?: WorldMore[];
+  /** Way 2: the key handed over is the headset's own; this is the account's grant for it, and whose account it is. */
+  deviceGrant?: NostrEvent;
+  identity?: string;
 }
 
 /** A world's session public key. Everything else in a room pass is the worker's own (§SW16). */
@@ -350,6 +355,9 @@ export interface SignerTouchPayload {
 
 export interface SignerRestoreResult {
   restored: boolean;
+  /** Way 2: a headset's own key, kept with the account's grant for it, and whose account it is. */
+  deviceGrant?: NostrEvent;
+  identity?: string;
   everydayPublicKey?: string;
   until?: number;
   name?: string;
@@ -590,6 +598,8 @@ export type WorkerActionMap = {
   headsetBegin: [{ site: string; device: string; to: string }, { code: string; expires: number }];
   headsetPoll: [Record<string, never>, { status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; sealed?: { senderPublicKey: string; payload: string } }];
   headsetCancel: [Record<string, never>, Record<string, never>];
+  /** Way 2, on the phone: sign a headset's own key out, on the account's list of devices signed out (kind 37312). */
+  devicesOut: [{ deviceKey: string }, { ok: boolean; accepted: number; of: number }];
   /** And the phone's, at BitLogin's own /pair. */
   pairFind: [{ code: string }, { offers: PairOffer[] }];
   pairFound: [{ offer: string }, { number: number }];

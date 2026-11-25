@@ -378,6 +378,9 @@ export class WorkerClient {
   headsetPoll() {
     return this.call("headsetPoll", {});
   }
+  devicesOut(deviceKey: string) {
+    return this.call("devicesOut", { deviceKey });
+  }
   headsetCancel() {
     return this.call("headsetCancel", {});
   }

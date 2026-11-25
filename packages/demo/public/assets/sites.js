@@ -68,7 +68,15 @@ const publish = async (what, pubkey) => {
       say("That site was allowed as another account. Sign in as that account to take it back. Nothing was taken back.");
       return false;
     }
-    const result = await session.takeBack(what);
+    const result = await session.takeBack(what.deviceKey ? { device: what.device } : what);
+    // Way 2: a headset holding its own key is signed out on the account's public list too, which worlds read.
+    if (result.ok && what.deviceKey) {
+      const listed = await session.signOutDevice(what.deviceKey);
+      if (!listed.ok) {
+        say(`Only ${listed.accepted} of ${listed.of} relays took the list of headsets signed out. Try again, or sign out in the world itself.`);
+        return false;
+      }
+    }
     if (!result.ok) {
       say(`Only ${result.accepted} of ${result.of} relays accepted it, which is not enough to rely on. Nothing was taken back. Try again, or open the site and sign out there.`);
       return false;
@@ -135,7 +143,7 @@ const draw = () => {
         if (!words.ended) {
           remove.disabled = true;
           say(entry.device ? "Signing the headset out." : "Taking it back.");
-          if (!(await publish(entry.device ? { device: entry.device } : { site: entry.site }, entry.pubkey))) {
+          if (!(await publish(entry.device ? { device: entry.device, ...(entry.deviceKey ? { deviceKey: entry.deviceKey } : {}) } : { site: entry.site }, entry.pubkey))) {
             remove.disabled = false;
             return;
           }

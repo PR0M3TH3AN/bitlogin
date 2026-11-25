@@ -19,6 +19,18 @@ you are holding?", and answers only an offer that names `to`. In-world `pair` st
 its own Allow would, for its own origin, in that browser; it can move the window it opened to a look-alike page,
 which only the address bar shows, so the words say to check it.
 
+**Way 2, built behind `DEVICE_KEYS` (off)** (the owner's "Yes, build the core"; NSWP `docs/plans/headset-device-keys.md`;
+names given by the orchestrator): with the switch on, the phone makes the headset a key of its own, D, and signs a
+device grant (kind 27305: `nswp:device`, `nswp:origin` for the site or family, `expiration` thirty days at most, seven
+for a site BitLogin doesn't know, one day with the lock on, and `nswp:label`), carried and never sent to a relay. The
+hand-off carries D and the grant (`deviceGrant`) in place of the account's key; the headset's signer checks the grant
+for its key and its site, keeps both, says `state.device: true`, answers `pass` with a pass signed by D and the grant
+beside it (`device`), and refuses everything else with `words: "Do this from your phone."` (its worker refuses all but
+`DEVICE_ACTIONS`). "Sign out this headset" also publishes the account's list of devices signed out (kind 37312, `d`
+`nswp-devices-out`), which the headset's own check reads, since D can't open the account's sealed take-back. The
+phone's sites list keeps the headset's `deviceKey`. A test turns the switch on only where BitLogin runs at a local
+address. It is turned on in a release of its own, on the owner's word, once the kit checks a grant.
+
 Built Names given by the orchestrator (kind 27304, tag `nswp:pair`, messages
 `pair`, `pairing`, `paired`, `pairCancel`, `pairing-expired`, the hand-off's `device`, take-back's `{ device, before }`,
 page `/pair`), with number matching, the warning on a code from a link, and what a lost device needs (P4a, P4b, P5a).

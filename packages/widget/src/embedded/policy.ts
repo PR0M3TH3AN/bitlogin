@@ -298,6 +298,8 @@ export type SignerReply =
       more?: WorldMore[];
       /** What a world can ask this signer to be let do, by name, said locked or unlocked: so it asks for nothing there is no question for. */
       offers?: WorldMore[];
+      /** Way 2: this headset holds a key of its own; its passes come with the account's grant (`device` in `signed`). */
+      device?: true;
       /** In answer to `want` only: whether that set may be shown to the user at this address. False approves
        *  nothing and true approves nothing: it says whether asking is worth it. */
       taken?: boolean;
@@ -308,7 +310,7 @@ export type SignerReply =
       /** This signer is a guest account: made by BitLogin for a visitor who arrived signed out, not yet secured. */
       guest?: true;
     }
-  | { t: "signed"; id: string; event: NostrEvent }
+  | { t: "signed"; id: string; event: NostrEvent; /** Way 2: a pass signed by the headset's own key, with the account's grant for it (kind 27305). */ device?: NostrEvent }
   /** A pairing under way: the code and address to show, until when, and, once a phone found it, its number. */
   | { t: "pairing"; id: string; code: string; url: string; expires: number; number?: number }
   /** The phone signed this headset in: the signer is unlocked, and says so in `state` too. */
@@ -340,7 +342,7 @@ export type SignerReply =
   | { t: "found"; id: string; d: string }
   /** Answers `open`: what was kept, in which slot, and when. */
   | { t: "opened"; id: string; slot: string; data: string; at: number }
-  | { t: "refused"; id: string };
+  | { t: "refused"; id: string; /** Words a world can show, where there are some: "Do this from your phone." */ words?: string };
 
 const ID = /^[0-9a-z-]{1,40}$/iu;
 const HEX64 = /^[0-9a-f]{64}$/u;
