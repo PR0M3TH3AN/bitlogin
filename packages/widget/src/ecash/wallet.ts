@@ -116,7 +116,9 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
     if (!parts || !passed(mint, wallet.keysetId)) return null;
     if (!locksHere()) return null;
     const { createSeededMint } = await import("./seededMint.js");
-    return createSeededMint({ wallet, seed: parts });
+    // Lanes the wallet record names for this keyset are this account's: never drawn again (the third review).
+    const used = [...new Set((state.counters ?? []).filter((c) => c.keysetId === wallet.keysetId).map((c) => c.lane))];
+    return createSeededMint({ wallet, seed: parts, used });
   }
 
   /**
@@ -254,11 +256,11 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
      * and this browser's lane moves forward past what was found in it, by the worker, under its lock. Nothing is spent.
      * A mint that can't be reached, or can't restore, is named and left as it is.
      */
-    async restore(): Promise<{ found: number; mints: { mint: string; sats: number; trouble?: string }[] }> {
+    async restore(): Promise<{ found: number; mints: { mint: string; sats: number; trouble?: string; skipped?: number }[] }> {
       const parts = seedParts();
       if (!parts) throw new EcashError("no-wallet", "This wallet can't use a seed here.");
       const { restoreFromMint } = await import("./seedRestore.js");
-      const mints: { mint: string; sats: number; trouble?: string }[] = [];
+      const mints: { mint: string; sats: number; trouble?: string; skipped?: number }[] = [];
       for (const mint of state.mints) {
         try {
           const wallet = await at(mint);
@@ -287,7 +289,7 @@ export function createEcashWallet(store: EcashStore, options: { locks?: boolean 
             const past = mine ? lanes[mine.lane] : undefined;
             if (mine && past !== undefined && past > mine.next) await parts.forward(id, past);
           }
-          mints.push({ mint, sats: sumProofs(fresh) });
+          mints.push({ mint, sats: sumProofs(fresh), ...(restored.skipped ? { skipped: restored.skipped } : {}) });
         } catch (err) {
           mints.push({ mint, sats: 0, trouble: (err as Error)?.message || "no answer" });
         }

@@ -52,6 +52,8 @@ export interface MockMintOptions {
   spendsThenRefuses?: boolean;
   /** Sign without a DLEQ proof (NUT-12), and not say it gives them. Off by default: a mint proves what it signs. */
   noDleq?: boolean;
+  /** Leave the proof off the n-th signature it makes (from 1), while saying it gives them: a lapse, as a mint might. */
+  dleqLeftOff?: (n: number) => boolean;
   /** Sign a swap's outputs and leave its inputs unspent, as a broken mint might. */
   swapsWithoutTaking?: boolean;
 }
@@ -73,6 +75,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
     return key;
   };
   let swaps = 0;
+  let signatures = 0;
   const spent = new Set<string>();
   const funding = new Map<string, { amount: number; state: "UNPAID" | "PAID" | "ISSUED"; request: string }>();
   const invoices = new Map<string, number>();
@@ -100,7 +103,8 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
       const amount = amounts ? amounts[i]! : Number(output.amount);
       const id = active().id;
       const blind = createBlindSignature(pointFromHex(output.B_), priv(amount), id);
-      const proof = options.noDleq ? null : createDLEQProof(pointFromHex(output.B_), priv(amount));
+      signatures++;
+      const proof = options.noDleq || options.dleqLeftOff?.(signatures) ? null : createDLEQProof(pointFromHex(output.B_), priv(amount));
       const signature = { amount, id, C_: (blind.C_ as Point).toHex(true), ...(proof ? { dleq: { e: hex(proof.e), s: hex(proof.s) } } : {}) };
       signed.set(output.B_, signature);
       return signature;

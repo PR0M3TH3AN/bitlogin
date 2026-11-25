@@ -12,7 +12,8 @@
 import type { NostrSigner } from "@bitlogin/core/account";
 import type { KeyValueStore } from "@bitlogin/core/storage";
 import { cleanState, laneEnd, laneStart, TRIAL_FROM, TRIAL_TO, validLane, type LaneState } from "../ecash/seedLanes.js";
-import { seededBlinded, seededOutputs, seededUnblind, type BlindedAt, type SeededOutput } from "./ecashSeed.js";
+import { labelSalt } from "@bitlogin/core/crypto";
+import { seededBlinded, seededOutputs, seededUnblind, type BlindedAt, type KeysetGiven, type ReservedOutput, type SeededOutput } from "./ecashSeed.js";
 import type { Proof } from "@cashu/cashu-ts";
 
 const KEYSET = /^[0-9a-f]{16}$|^[0-9a-f]{66}$/u;
@@ -88,15 +89,89 @@ export async function seedBlinded(deps: SeedDeps, keysetId: unknown, from: unkno
     seed.fill(0);
   }
 }
-/** Finished proofs for signatures the mint proved: only where the seed may be used. */
+/**
+ * Finished proofs for signatures the mint proved (DLEQ), under keys pinned for the keyset: only where the seed may be
+ * used. A counter reserved by this worker in the last ten minutes, for the operation being finished, may be unblinded
+ * once without a proof, so a mint's lapse doesn't strand a paid invoice; never twice, never after.
+ */
 export async function seedUnblind(deps: SeedDeps, keysetId: unknown, keyset: unknown, found: unknown): Promise<Proof[]> {
   needLock(deps);
-  const seed = deps.seed();
-  try {
-    return seededUnblind(seed, keysetId, keyset, found);
-  } finally {
-    seed.fill(0);
-  }
+  const id = checkKeyset(keysetId);
+  await pinKeyset(deps, id, keyset as KeysetGiven);
+  return locked(deps, laneLock(id), async () => {
+    const fresh = await readFresh(deps, id);
+    const asked = new Set(Array.isArray(found) ? (found as { counter?: unknown }[]).map((f) => f?.counter).filter((c): c is number => Number.isSafeInteger(c)) : []);
+    const seed = deps.seed();
+    try {
+      const proofs = seededUnblind(seed, id, keyset, found, new Set([...asked].filter((c) => fresh.has(c))));
+      // What was finished can't be finished again without a proof.
+      if ([...asked].some((c) => fresh.has(c))) await writeFresh(deps, id, new Map([...fresh].filter(([c]) => !asked.has(c))));
+      return proofs;
+    } finally {
+      seed.fill(0);
+    }
+  });
+}
+
+/** How long a reserved counter may be finished without the mint's proof. */
+const FRESH_SEC = 600;
+const freshKey = (me: string, keysetId: string) => `bitlogin:ecash-fresh:v1:${me}:${keysetId}`;
+async function readFresh(deps: LaneDeps, keysetId: string): Promise<Map<number, number>> {
+  const raw = (await readSealed(deps, freshKey(deps.signer.getPublicKey(), keysetId))) as Record<string, unknown> | null;
+  const now = Date.now() / 1000;
+  return new Map(Object.entries(raw && typeof raw === "object" ? raw : {}).filter(([c, until]) => Number.isSafeInteger(Number(c)) && typeof until === "number" && until > now).map(([c, until]) => [Number(c), until as number]));
+}
+async function writeFresh(deps: LaneDeps, keysetId: string, fresh: Map<number, number>): Promise<void> {
+  await writeSealed(deps, freshKey(deps.signer.getPublicKey(), keysetId), Object.fromEntries([...fresh].slice(-1000)));
+}
+async function noteFresh(deps: LaneDeps, keysetId: string, counters: number[]): Promise<void> {
+  const fresh = await readFresh(deps, keysetId);
+  const until = Date.now() / 1000 + FRESH_SEC;
+  for (const c of counters) fresh.set(c, until);
+  await writeFresh(deps, keysetId, fresh);
+}
+/** The page's view of an output: its blinded message, never what unblinds it. */
+const outward = (o: SeededOutput): ReservedOutput => ({ amount: o.amount, id: o.id, B_: o.B_, counter: o.counter });
+
+/**
+ * The keys a keyset was first used with here, by a hash of them, kept and never replaced (2026-11-25, the third
+ * review): an older keyset id is only 56 bits of a hash of its keys, so keys made to match it, passed later as the
+ * mint's, are refused once the real ones were used. Carried to other devices in the wallet record (pins).
+ */
+const pinsKey = (me: string) => `bitlogin:ecash-keypins:v1:${me}`;
+export const keysetHash = (keyset: KeysetGiven): string => {
+  const keys = Object.entries(keyset?.keys ?? {}).sort(([a], [b]) => Number(a) - Number(b) || a.localeCompare(b));
+  return Array.from(labelSalt(JSON.stringify(keys)), (b) => b.toString(16).padStart(2, "0")).join("");
+};
+export async function readPins(deps: LaneDeps): Promise<Record<string, string>> {
+  const raw = (await readSealed(deps, pinsKey(deps.signer.getPublicKey()))) as Record<string, unknown> | null;
+  return Object.fromEntries(Object.entries(raw && typeof raw === "object" ? raw : {}).filter(([id, h]) => KEYSET.test(id) && typeof h === "string" && /^[0-9a-f]{64}$/u.test(h))) as Record<string, string>;
+}
+const pinsChain = new Map<string, Promise<unknown>>();
+function withPins<T>(deps: LaneDeps, fn: () => Promise<T>): Promise<T> {
+  const me = deps.signer.getPublicKey();
+  const lock = workerLock();
+  if (lock) return lock(`bitlogin:ecash-keypins:${me}`, fn);
+  const run = (pinsChain.get(me) ?? Promise.resolve()).then(fn, fn);
+  pinsChain.set(me, run.catch(() => {}));
+  return run;
+}
+/** Pin a keyset's keys the first time, or check them against the pin. */
+export function pinKeyset(deps: LaneDeps, keysetId: string, keyset: KeysetGiven): Promise<void> {
+  const hash = keysetHash(keyset);
+  return withPins(deps, async () => {
+    const pins = await readPins(deps);
+    if (pins[keysetId] && pins[keysetId] !== hash) throw new Error("Those are not the keys this keyset was first used with here.");
+    if (!pins[keysetId]) await writeSealed(deps, pinsKey(deps.signer.getPublicKey()), { ...pins, [keysetId]: hash });
+  });
+}
+/** Take up pins another device wrote into the wallet record: only for keysets with none here. Never replaces one. */
+export function adoptPins(deps: LaneDeps, record: Record<string, string>): Promise<void> {
+  return withPins(deps, async () => {
+    const pins = await readPins(deps);
+    const add = Object.entries(record).filter(([id, h]) => KEYSET.test(id) && /^[0-9a-f]{64}$/u.test(h) && !pins[id]);
+    if (add.length) await writeSealed(deps, pinsKey(deps.signer.getPublicKey()), { ...pins, ...Object.fromEntries(add) });
+  });
 }
 
 /** Keep a lane's state, forward only. Returns what is kept after: the one asked for, or the one already there. */
@@ -166,7 +241,7 @@ export function drawLane(deps: SeedDeps, keysetId: unknown, lane: unknown): Prom
  * over (rules 1 and 2): exactly as many as the amounts need, and never the same ones twice. Where this browser has no
  * lane for the keyset yet, it says so ("no-lane"), and the page draws one first.
  */
-export function reserveOutputs(deps: SeedDeps, keysetId: unknown, amounts: unknown): Promise<{ outputs: SeededOutput[]; from: number; next: number }> {
+export function reserveOutputs(deps: SeedDeps, keysetId: unknown, amounts: unknown): Promise<{ outputs: ReservedOutput[]; from: number; next: number }> {
   const id = checkKeyset(keysetId);
   return locked(deps, laneLock(id), async () => {
     const state = await readLane(deps, id);
@@ -183,7 +258,8 @@ export function reserveOutputs(deps: SeedDeps, keysetId: unknown, amounts: unkno
     // Written down first: from here, a crash burns these counters and nothing more.
     await writeSealed(deps, keyFor(deps.signer.getPublicKey(), id), after);
     await noteCounter(deps, id, after);
-    return { outputs: made.outputs, from: state.next, next: made.next };
+    await noteFresh(deps, id, made.outputs.map((o) => o.counter));
+    return { outputs: made.outputs.map(outward), from: state.next, next: made.next };
   });
 }
 
@@ -203,7 +279,7 @@ export function forwardLane(deps: SeedDeps, keysetId: unknown, next: unknown): P
  * in order from the start of the trial range, so restore can follow them as it follows a lane. The page asks the mint
  * that it is unused before using it, and asks again for another where it isn't.
  */
-export function trialOutput(deps: SeedDeps, keysetId: unknown): Promise<SeededOutput> {
+export function trialOutput(deps: SeedDeps, keysetId: unknown): Promise<ReservedOutput> {
   const id = checkKeyset(keysetId);
   return locked(deps, `bitlogin:ecash-trial:${id}`, async () => {
     const key = trialKeyFor(deps.signer.getPublicKey(), id);
@@ -218,6 +294,7 @@ export function trialOutput(deps: SeedDeps, keysetId: unknown): Promise<SeededOu
       seed.fill(0);
     }
     await writeSealed(deps, key, { next: made.next });
-    return made.outputs[0]!;
+    await noteFresh(deps, id, [made.outputs[0]!.counter]);
+    return outward(made.outputs[0]!);
   });
 }

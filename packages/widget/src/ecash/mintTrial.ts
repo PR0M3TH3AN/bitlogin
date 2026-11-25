@@ -14,8 +14,8 @@
  * A mint that doesn't say it supports restore (NUT-09) and deterministic secrets (NUT-13) isn't tried at all.
  */
 import { CheckStateEnum, type Proof, type Wallet } from "@cashu/cashu-ts";
-import { asOutputData, type SeedWorker } from "./seededMint.js";
-import type { SeededOutput } from "../worker/ecashSeed.js";
+import { keysetGiven, signedFor, type SeedWorker } from "./seededMint.js";
+import type { ReservedOutput } from "../worker/ecashSeed.js";
 
 /** Counters kept for trials (seedLanes.ts). */
 export { TRIAL_FROM, TRIAL_TO } from "./seedLanes.js";
@@ -23,7 +23,7 @@ export { TRIAL_FROM, TRIAL_TO } from "./seedLanes.js";
 export interface TrialDeps {
   wallet: Wallet;
   /** The worker's seed actions: a trial output at the next trial counter it hasn't handed out. */
-  seed: Pick<SeedWorker, "trialOutput">;
+  seed: Pick<SeedWorker, "trialOutput" | "unblind">;
   /** A 1-sat proof of the person's to try with: all the trial can cost. */
   proof: Proof;
   /**
@@ -57,7 +57,7 @@ export async function tryMint(deps: TrialDeps): Promise<TrialResult> {
   const amount = Number(deps.proof.amount);
   if (amount !== 1) return { keysetId, outcome: "not-tried", why: "The trial is made with a 1-sat proof, and none was given.", cost: 0 };
   // The next trial counter the worker hasn't handed out, asked of the mint first: one another browser used is passed by.
-  let made: SeededOutput | null = null;
+  let made: ReservedOutput | null = null;
   for (let i = 0; i < 8 && !made; i++) {
     const o = await deps.seed.trialOutput(keysetId);
     const { outputs } = await wallet.mint.restore({ outputs: [{ amount: o.amount as never, id: o.id, B_: o.B_ }] });
@@ -67,7 +67,9 @@ export async function tryMint(deps: TrialDeps): Promise<TrialResult> {
   const out = { amount: made.amount as never, id: made.id, B_: made.B_ };
   // 1. The person's proof, swapped into the trial output; what comes back is kept at once.
   const first = await wallet.mint.swap({ inputs: [deps.proof], outputs: [out] });
-  const once = asOutputData(made).toProof(first.signatures[0]!, keyset);
+  // Finished into a proof by the worker, which checks the mint's proof of it: nothing that unblinds it was here before.
+  const [once] = await deps.seed.unblind(keysetId, keysetGiven(keyset), signedFor([made], first.signatures));
+  if (!once) throw new Error("The mint's answer could not be finished into a proof.");
   await deps.keep(once);
   // 2. That proof, swapped into the same output again.
   try {

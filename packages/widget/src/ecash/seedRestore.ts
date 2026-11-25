@@ -14,7 +14,7 @@
  */
 import { Amount, CheckStateEnum, type Proof, type Wallet } from "@cashu/cashu-ts";
 import { LANES, laneEnd, laneStart, TRIAL_FROM, TRIAL_TO } from "./seedLanes.js";
-import type { SeedWorker } from "./seededMint.js";
+import { keysetGiven, type SeedWorker } from "./seededMint.js";
 import type { FoundAt } from "../worker/ecashSeed.js";
 
 /** How far an empty lane is looked into, and how far past the last found a used one is followed. */
@@ -38,6 +38,8 @@ export interface Restored {
   asked: number;
   /** The keysets looked through. */
   keysets: string[];
+  /** Signatures the mint gave no proof for (DLEQ): left, not restored (the third review: one of them no longer stops the rest). */
+  skipped: number;
 }
 
 /** What a mint that doesn't prove its signatures is told, and why restore isn't offered there. */
@@ -54,6 +56,7 @@ export async function restoreFromMint(deps: RestoreDeps): Promise<Restored> {
   const proofs: Proof[] = [];
   const next: Record<string, Record<number, number>> = {};
   let asked = 0;
+  let skipped = 0;
 
   for (const listed of keysets) {
     const keyset = await wallet.keyChain.ensureKeysetKeys(listed.id);
@@ -76,7 +79,12 @@ export async function restoreFromMint(deps: RestoreDeps): Promise<Restored> {
             const sig = byB.get(b.B_);
             if (!sig) continue;
             const dleq = (sig as { dleq?: { e?: unknown; s?: unknown } }).dleq;
-            if (typeof dleq?.e !== "string" || typeof dleq?.s !== "string") throw Object.assign(new Error(NO_DLEQ), { code: "no-dleq" });
+            // Not proved: left, and counted. Where it is in a lane, the lane still counts as used.
+            if (typeof dleq?.e !== "string" || typeof dleq?.s !== "string") {
+              skipped++;
+              last = Math.max(last ?? 0, b.counter);
+              continue;
+            }
             found.push({ counter: b.counter, amount: Number(sig.amount), C_: sig.C_, dleq: { e: dleq.e, s: dleq.s } });
             last = Math.max(last ?? 0, b.counter);
           }
@@ -94,16 +102,11 @@ export async function restoreFromMint(deps: RestoreDeps): Promise<Restored> {
     }
     await follow(TRIAL_FROM, TRIAL_TO, (l) => (l === null ? TRIAL_FROM + EMPTY_LANE : l + 1 + EMPTY_LANE));
     if (found.length) {
-      const given = {
-        keys: Object.fromEntries(Object.entries(keyset.keys).map(([a, k]) => [String(a), k])),
-        unit: keyset.unit,
-        ...(keyset.fee ? { input_fee_ppk: keyset.fee } : {}),
-        ...(keyset.expiry ? { final_expiry: keyset.expiry } : {})
-      };
+      const given = keysetGiven(keyset);
       for (let i = 0; i < found.length; i += UNBLIND_BATCH) proofs.push(...(await deps.seed.unblind(id, given, found.slice(i, i + UNBLIND_BATCH))));
     }
   }
   // What the mint has signed may have been spent since: only what it says is unspent is kept.
   const states = proofs.length ? await wallet.checkProofsStates(proofs) : [];
-  return { proofs: proofs.filter((_, i) => states[i]?.state !== CheckStateEnum.SPENT), next, asked, keysets: keysets.map((k) => k.id) };
+  return { proofs: proofs.filter((_, i) => states[i]?.state !== CheckStateEnum.SPENT), next, asked, keysets: keysets.map((k) => k.id), skipped };
 }

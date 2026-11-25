@@ -9,7 +9,7 @@ import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import { WorkerClient } from "./workerClient.js";
 import { createBlindSignature, createDLEQProof, createNewMintKeys, pointFromHex } from "@cashu/cashu-ts";
-import { drawLane, forwardLane, readCounters, readLane, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, type Lock } from "./ecashLanes.js";
+import { drawLane, forwardLane, pinKeyset, readCounters, readLane, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, type Lock } from "./ecashLanes.js";
 import { ecashSeed, seededBlinded, seededUnblind } from "./ecashSeed.js";
 import { laneStart, TRIAL_FROM } from "../ecash/seedLanes.js";
 
@@ -103,5 +103,25 @@ describe("the seed's outputs stay with the worker", () => {
     await expect(seedLane(none, KEYSET)).rejects.toMatchObject({ code: "no-seed-here" });
     await expect(seedBlinded(none, KEYSET, 1, 1)).rejects.toMatchObject({ code: "no-seed-here" });
     await expect(seedUnblind(none, KEYSET, {}, [])).rejects.toMatchObject({ code: "no-seed-here" });
+  });
+
+  it("hands out no secret and no blinding factor before the mint has signed: reserve and the trial give blinded messages (third review 1)", async () => {
+    const { deps } = worker();
+    await drawLane(deps, KEYSET, 4);
+    const made = await reserveOutputs(deps, KEYSET, [1, 2]);
+    for (const o of made.outputs) expect(Object.keys(o).sort()).toEqual(["B_", "amount", "counter", "id"]);
+    const trial = await trialOutput(deps, KEYSET);
+    expect(Object.keys(trial).sort()).toEqual(["B_", "amount", "counter", "id"]);
+  });
+
+  it("pins a keyset's keys the first time they are used, and refuses other keys under that id after (third review 2)", async () => {
+    const { deps } = worker();
+    const keys = { keys: { "1": "02" + "aa".repeat(32) }, unit: "sat" };
+    const other = { keys: { "1": "02" + "bb".repeat(32) }, unit: "sat" };
+    await pinKeyset(deps, KEYSET, keys);
+    await pinKeyset(deps, KEYSET, keys);
+    await expect(pinKeyset(deps, KEYSET, other)).rejects.toThrow(/not the keys/u);
+    // Another keyset is its own.
+    await pinKeyset(deps, "00bb268c4d1f5826", other);
   });
 });

@@ -22,7 +22,19 @@ export function ecashSeed(accountKey: Uint8Array): Uint8Array {
   return hkdfExpand(hkdfExtract(labelSalt(ECASH_SEED_LABEL), accountKey), ECASH_SEED_INFO, 64);
 }
 
-/** One output, as the page is handed it: nothing of the seed. */
+/**
+ * One output as the page is handed it for an operation (2026-11-25, the third review): its blinded message only. The
+ * secret and blinding factor stay in the worker until the mint has signed it, and come out only inside the finished
+ * proof (seededUnblind). A script that ran once on the page could otherwise keep them, and take what the mint signs
+ * there later.
+ */
+export interface ReservedOutput {
+  amount: number;
+  id: string;
+  B_: string;
+  counter: number;
+}
+/** One output, with what unblinds it: made and kept in the worker. */
 export interface SeededOutput {
   amount: number;
   /** The keyset it is for. */
@@ -140,7 +152,7 @@ function checkKeys(keysetId: string, given: KeysetGiven): Record<string, string>
  * keyset's id. Without that, a page could pass a point of its own choosing and be handed r·K back, enough to take, later,
  * whatever the mint signs at that counter. A mint whose restore gives no proofs is not restored from at all.
  */
-export function seededUnblind(seed: Uint8Array, keysetId: unknown, keyset: unknown, found: unknown): Proof[] {
+export function seededUnblind(seed: Uint8Array, keysetId: unknown, keyset: unknown, found: unknown, unproved: ReadonlySet<number> = new Set()): Proof[] {
   const id = checkKeyset(keysetId);
   const keys = checkKeys(id, keyset as KeysetGiven);
   if (!Array.isArray(found) || found.length > 1000) throw new Error("At most a thousand at a time.");
@@ -151,8 +163,12 @@ export function seededUnblind(seed: Uint8Array, keysetId: unknown, keyset: unkno
     const key = keys[String(f.amount)];
     if (typeof key !== "string") throw new Error("This keyset has no key for that amount.");
     const made = at(derive, f.counter);
-    if (typeof f.dleq?.e !== "string" || typeof f.dleq?.s !== "string") throw Object.assign(new Error("This mint doesn't prove what it signs."), { code: "no-dleq" });
-    if (!verifyDLEQProof({ e: bytes(f.dleq.e), s: bytes(f.dleq.s) }, pointFromHex(made.B_), pointFromHex(f.C_), pointFromHex(key))) throw new Error("That signature isn't proved to be the mint's.");
+    // Without a proof only for a counter this worker reserved moments ago for the operation now being finished
+    // (ecashLanes.ts): a mint's lapse doesn't strand a paid invoice, and no earlier script could have it.
+    const proved = typeof f.dleq?.e === "string" && typeof f.dleq?.s === "string";
+    if (!proved && unproved.has(f.counter)) return new OutputData({ amount: Amount.from(f.amount), id, B_: made.B_ }, made.r, made.secret).toProof({ id, amount: Amount.from(f.amount), C_: f.C_ }, given as never);
+    if (!proved) throw Object.assign(new Error("This mint doesn't prove what it signs."), { code: "no-dleq" });
+    if (!verifyDLEQProof({ e: bytes(f.dleq!.e), s: bytes(f.dleq!.s) }, pointFromHex(made.B_), pointFromHex(f.C_), pointFromHex(key))) throw new Error("That signature isn't proved to be the mint's.");
     return new OutputData({ amount: Amount.from(f.amount), id, B_: made.B_ }, made.r, made.secret).toProof({ id, amount: Amount.from(f.amount), C_: f.C_ }, given as never);
   });
 }

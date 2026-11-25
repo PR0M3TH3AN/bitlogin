@@ -13,7 +13,7 @@
  */
 import { Amount, OutputData, type Proof, type Wallet } from "@cashu/cashu-ts";
 import { drawLane, LANE_PROBE, laneStart, NO_SEED_HERE, type LaneState } from "./seedLanes.js";
-import type { BlindedAt, FoundAt, KeysetGiven, SeededOutput } from "../worker/ecashSeed.js";
+import type { BlindedAt, FoundAt, KeysetGiven, ReservedOutput, SeededOutput } from "../worker/ecashSeed.js";
 
 /** The worker's seed actions, as the page has them (headless.ts): none hands out what unblinds a counter it names. */
 export interface SeedWorker {
@@ -21,16 +21,16 @@ export interface SeedWorker {
   lane(keysetId: string): Promise<LaneState | null>;
   /** Take a lane the mint shows as empty, where this browser has none; the lane kept is returned. */
   draw(keysetId: string, lane: number): Promise<LaneState>;
-  /** Outputs for one operation, at counters the worker reserves and writes down first. */
-  reserve(keysetId: string, amounts: number[]): Promise<{ outputs: SeededOutput[]; from: number; next: number }>;
+  /** Outputs for one operation, at counters the worker reserves and writes down first: blinded messages only. */
+  reserve(keysetId: string, amounts: number[]): Promise<{ outputs: ReservedOutput[]; from: number; next: number }>;
   /** Move this browser's lane forward, never back. */
   forward(keysetId: string, next: number): Promise<LaneState | null>;
   /** Blinded messages at any counters: nothing that unblinds them. */
   blinded(keysetId: string, from: number, count: number): Promise<BlindedAt[]>;
   /** Finished proofs for what a mint signed at this seed's counters and proved it signed, unblinded in the worker. */
   unblind(keysetId: string, keyset: KeysetGiven, found: FoundAt[]): Promise<Proof[]>;
-  /** One output for a trial, at the next trial counter not yet handed out. */
-  trialOutput(keysetId: string): Promise<SeededOutput>;
+  /** One output for a trial, at the next trial counter not yet handed out: its blinded message only. */
+  trialOutput(keysetId: string): Promise<ReservedOutput>;
 }
 
 export interface SeededMintDeps {
@@ -41,11 +41,30 @@ export interface SeededMintDeps {
   random?: () => number;
   /** Ask the mint about the counters before using them (rule 5). On, unless a test turns it off. */
   checkFirst?: boolean;
+  /**
+   * Lanes the wallet record names as this account's (its counters): never drawn, whatever the mint shows at their
+   * start (the third review: a lane reserved from and never signed in looks empty to the mint).
+   */
+  used?: readonly number[];
 }
 
 const bytes = (h: string) => new Uint8Array(h.match(/../gu)!.map((x) => parseInt(x, 16)));
-/** The library's own output, from what the worker handed over. */
+/** The library's own output, from an output with what unblinds it: for tests, which make outputs outside a worker. */
 export const asOutputData = (o: SeededOutput) => new OutputData({ amount: Amount.from(o.amount), id: o.id, B_: o.B_ }, BigInt(`0x${o.blindingFactor}`), bytes(o.secret));
+/** A keyset as the worker is handed it to check signatures: its keys, and what its id is made from besides. */
+export const keysetGiven = (keyset: { keys: Record<number | string, string>; unit: string; fee?: number; expiry?: number }): KeysetGiven => ({
+  keys: Object.fromEntries(Object.entries(keyset.keys).map(([a, k]) => [String(a), k])),
+  unit: keyset.unit,
+  ...(keyset.fee ? { input_fee_ppk: keyset.fee } : {}),
+  ...(keyset.expiry ? { final_expiry: keyset.expiry } : {})
+});
+/** What the mint signed for these outputs, as the worker is asked to finish them. */
+export const signedFor = (outputs: readonly ReservedOutput[], signatures: readonly { amount: unknown; C_: string; dleq?: { e?: unknown; s?: unknown } }[]): FoundAt[] =>
+  outputs.map((o, i) => {
+    const sig = signatures[i]!;
+    const dleq = sig.dleq && typeof sig.dleq.e === "string" && typeof sig.dleq.s === "string" ? { e: sig.dleq.e, s: sig.dleq.s } : undefined;
+    return { counter: o.counter, amount: Number(sig.amount), C_: sig.C_, ...(dleq ? { dleq } : {}) };
+  });
 const split = (sats: number): number[] => {
   const out: number[] = [];
   for (let bit = 1; sats > 0; bit *= 2, sats = Math.floor(sats / 2)) if (sats % 2) out.push(bit);
@@ -81,7 +100,8 @@ export function createSeededMint(deps: SeededMintDeps) {
   async function lane(id: string): Promise<LaneState | null> {
     const kept = await deps.seed.lane(id);
     if (kept) return kept;
-    const drawn = await drawLane(async (l) => (await signedAmong(deps.wallet, await deps.seed.blinded(id, laneStart(l), LANE_PROBE))) !== null, deps.random);
+    const used = new Set(deps.used ?? []);
+    const drawn = await drawLane(async (l) => used.has(l) || (await signedAmong(deps.wallet, await deps.seed.blinded(id, laneStart(l), LANE_PROBE))) !== null, deps.random);
     if (drawn === null) return null;
     // Another tab may have drawn one a moment before: the worker keeps whichever came first, and says which.
     return deps.seed.draw(id, drawn);
@@ -106,7 +126,10 @@ export function createSeededMint(deps: SeededMintDeps) {
           }
         }
         try {
-          return await deps.wallet.ops.mintBolt11(sats, quote).asCustom(made.outputs.map(asOutputData)).run();
+          // The mint signs the blinded messages; the worker finishes them into proofs, checking the mint's proof of
+          // each. Nothing that unblinds them was on this page before the mint had signed.
+          const { signatures } = await deps.wallet.mint.mintBolt11({ quote: typeof quote === "string" ? quote : quote.quote, outputs: made.outputs.map((o) => ({ amount: o.amount, id: o.id, B_: o.B_ })) } as never);
+          return await deps.seed.unblind(id, keysetGiven(deps.wallet.keyChain.getKeyset(id)), signedFor(made.outputs, signatures));
         } catch (err) {
           if (!alreadySigned(err)) throw err;
           // Refused whole, nothing issued: past the clash, and the same paid invoice claimed again.

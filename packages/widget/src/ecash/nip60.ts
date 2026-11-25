@@ -115,6 +115,13 @@ export interface EcashCounter {
   next: number;
 }
 const COUNTER_ROW = "bitlogin-counter";
+const PIN_ROW = "bitlogin-keys";
+/** Pins as one list: the first for each keyset stays. */
+export function withPins(...lists: (readonly { keysetId: string; hash: string }[] | undefined)[]): { keysetId: string; hash: string }[] {
+  const by = new Map<string, string>();
+  for (const p of lists.flatMap((l) => l ?? [])) if (!by.has(p.keysetId)) by.set(p.keysetId, p.hash);
+  return [...by].map(([keysetId, hash]) => ({ keysetId, hash })).slice(0, 200);
+}
 const COUNTERS_KEPT = 200;
 /** Two lists of counters as one: the higher for each keyset and lane. */
 export function withCounters(...lists: (readonly EcashCounter[] | undefined)[]): EcashCounter[] {
@@ -144,6 +151,11 @@ export interface EcashWallet {
   trials?: EcashTrial[];
   /** How far each lane of each keyset has gone. Absent where nothing was added by the seed. */
   counters?: EcashCounter[];
+  /**
+   * A hash of the keys each keyset was first used with (the third review): another device takes these up, so keys
+   * made to match a short keyset id are refused there too. The first written stays.
+   */
+  pins?: { keysetId: string; hash: string }[];
 }
 
 export function writeWallet(wallet: EcashWallet): string {
@@ -151,7 +163,8 @@ export function writeWallet(wallet: EcashWallet): string {
     ["privkey", wallet.privkey],
     ...wallet.mints.map((mint) => ["mint", mint]),
     ...(wallet.trials ?? []).map((t) => [TRIAL_ROW, t.mint, t.keysetId, t.outcome, String(t.at)]),
-    ...(wallet.counters ?? []).map((c) => [COUNTER_ROW, c.keysetId, String(c.lane), String(c.next)])
+    ...(wallet.counters ?? []).map((c) => [COUNTER_ROW, c.keysetId, String(c.lane), String(c.next)]),
+    ...(wallet.pins ?? []).map((p) => [PIN_ROW, p.keysetId, p.hash])
   ]);
 }
 
@@ -182,7 +195,9 @@ export function readWallet(text: string): EcashWallet | null {
   const mints: string[] = [];
   let trials: EcashTrial[] = [];
   let counters: EcashCounter[] = [];
+  let pins: { keysetId: string; hash: string }[] = [];
   for (const row of rows) {
+    if (row[0] === PIN_ROW && typeof row[1] === "string" && KEYSET.test(row[1]) && typeof row[2] === "string" && /^[0-9a-f]{64}$/u.test(row[2])) pins = withPins(pins, [{ keysetId: row[1], hash: row[2] }]);
     if (!Array.isArray(row) || typeof row[0] !== "string") continue;
     if (row[0] === "privkey" && typeof row[1] === "string" && HEX64.test(row[1])) privkey ||= row[1];
     if (row[0] === "mint" && cleanMint(row[1]) && !mints.includes(cleanMint(row[1])) && mints.length < ECASH_LIMITS.mints) mints.push(cleanMint(row[1]));
@@ -199,7 +214,7 @@ export function readWallet(text: string): EcashWallet | null {
       }
     }
   }
-  return privkey ? { privkey, mints, ...(trials.length ? { trials } : {}), ...(counters.length ? { counters } : {}) } : null;
+  return privkey ? { privkey, mints, ...(trials.length ? { trials } : {}), ...(counters.length ? { counters } : {}), ...(pins.length ? { pins } : {}) } : null;
 }
 
 // ---- A token record (kind 7375): proofs at one mint, and the records it replaced.

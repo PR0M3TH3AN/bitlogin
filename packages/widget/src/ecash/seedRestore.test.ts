@@ -8,7 +8,7 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import { startMockMint, type MockMint } from "./mockMint.js";
-import { asOutputData, createSeededMint } from "./seededMint.js";
+import { createSeededMint } from "./seededMint.js";
 import { laneStart, type LaneState } from "./seedLanes.js";
 import { restoreFromMint } from "./seedRestore.js";
 import { ecashSeed } from "../worker/ecashSeed.js";
@@ -117,10 +117,22 @@ describe("restore from the mints, from the key alone", () => {
       const made = await worker.reserve(wallet.keysetId, Array(100).fill(1));
       const quote = await wallet.createMintQuoteBolt11(100);
       mint.payAllFunding();
-      await wallet.ops.mintBolt11(100, quote).asCustom(made.outputs.map(asOutputData)).run();
+      await wallet.mint.mintBolt11({ quote: quote.quote, outputs: made.outputs.map((o) => ({ amount: o.amount, id: o.id, B_: o.B_ })) } as never);
     }
     expect(total((await restore(mint, seed)).proofs)).toBe(1100);
   }, RESTORE_MS * 2);
+
+  it("skips a signature its mint gave no proof for, says how many, and restores the rest (third review 3)", async () => {
+    // The mint leaves the proof off its second signature: the 5 sats' first output is proved, the 4's is not.
+    const mint = await startMockMint({ dleqLeftOff: (n) => n === 2 });
+    mints.push(mint);
+    const seed = ecashSeed(generatePrivateKey());
+    const a = await browser(mint, seed, 2);
+    await a.add(5);
+    const back = await restore(mint, seed);
+    expect(back.skipped).toBe(1);
+    expect(total(back.proofs)).toBe(1);
+  }, RESTORE_MS);
 
   it("keeps only what the mint says is unspent", async () => {
     const mint = await startMockMint();

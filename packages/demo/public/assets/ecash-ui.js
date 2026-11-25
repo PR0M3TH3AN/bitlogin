@@ -244,7 +244,9 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       home();
       // Each mint that couldn't be restored from, and why: one that didn't answer, or one that doesn't prove what it signs.
       const troubled = restored.mints.filter((m) => m.trouble).map((m) => `${host(m.mint)}: ${/doesn't prove what it signs/u.test(m.trouble) ? "it doesn't prove what it signs, so it isn't restored from" : "it didn't answer"}`);
-      $("ecash-note").textContent = `${restored.found > 0 ? `Restored ${sats(restored.found)}.` : "Nothing more was found at your mints."}${troubled.length ? ` Not restored from: ${troubled.join("; ")}.` : ""}`;
+      // Signatures a mint gave no proof for are left, and said: they may be sats this wallet can't bring back.
+      const unproved = restored.mints.reduce((n, m) => n + (m.skipped ?? 0), 0);
+      $("ecash-note").textContent = `${restored.found > 0 ? `Restored ${sats(restored.found)}.` : "Nothing more was found at your mints."}${troubled.length ? ` Not restored from: ${troubled.join("; ")}.` : ""}${unproved ? ` ${unproved} ${unproved === 1 ? "signature" : "signatures"} came without the mint's proof, so ${unproved === 1 ? "it was" : "they were"} left.` : ""}`;
     } catch (err) {
       $("ecash-restore-yes").disabled = false;
       $("ecash-restore-status").hidden = true;

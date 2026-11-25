@@ -223,6 +223,25 @@ relay gone, rule 5 and the mint are enough.
     matches those 56 bits, about 2⁵⁶ tries. Newer ids are the full hash.
   - Nothing at all is done with the seed where the worker has no lock:
     not even a lane read or a blinded message.
+  - **No secret or blinding factor leaves the worker before the mint has
+    signed** (the third review, the same day). Reserving for an
+    operation, and a trial's output, hand the page blinded messages only;
+    the page asks the mint to sign them, and the worker finishes the
+    signatures into proofs. Otherwise a script that ran once on the page
+    could reserve and keep outputs, never use them (the mint would still
+    show the lane empty), and take what a later browser added there.
+  - **A mint's lapse doesn't strand a paid invoice:** a counter this
+    worker reserved in the last ten minutes, for the operation being
+    finished, may be finished once without the mint's proof; never
+    twice, never after, never a counter it didn't reserve.
+  - **Each keyset's keys are pinned the first time they are used** (a
+    hash of them, kept in the worker and never replaced), and carried to
+    other devices in the wallet record: keys made later to match a short
+    keyset id are refused.
+  - **A signature with no proof is left, not fatal:** restore skips it,
+    counts it, and the screen says how many.
+  - **A lane the wallet record names is never drawn,** whatever the mint
+    shows at its start.
   - The library takes the outputs as they are (`asCustom`).
   - The page sees what an operation's outputs are, as it already sees
     the proofs, and never the seed. A seed makes every future proof, so

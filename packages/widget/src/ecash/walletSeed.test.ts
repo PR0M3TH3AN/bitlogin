@@ -80,7 +80,8 @@ async function restorable(mint: MockMint, seed: Uint8Array) {
   return proofs.reduce((n, p) => n + Number(p.amount), 0);
 }
 
-describe("the wallet adds by the seed only at a mint that passed the trial", () => {
+// Each restore asks a mint about thousands of outputs, made in the worker: a minute or more under load.
+describe("the wallet adds by the seed only at a mint that passed the trial", { timeout: 120_000 }, () => {
   it("adds as before at a mint not yet tried, and opening the wallet tries nothing", async () => {
     const mint = await mintWith();
     const { store, seed, lanesUsed } = account();

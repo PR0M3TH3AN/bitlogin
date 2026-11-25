@@ -10,7 +10,8 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import type { NostrEvent, NostrFilter, RelayPublishOutcome } from "@bitlogin/core/nostr";
-import { keepEcashTrial, loadEcash, rollEcash, setEcashMints, type EcashRelays } from "../worker/ecashStore.js";
+import { keepEcashTrial, loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRelays } from "../worker/ecashStore.js";
+import { Wallet } from "@cashu/cashu-ts";
 import { ecashSeed } from "../worker/ecashSeed.js";
 import { forwardLane, readLane } from "../worker/ecashLanes.js";
 import { createEcashWallet, type EcashStore } from "./wallet.js";
@@ -34,13 +35,14 @@ async function mintWith(options: MockMintOptions = {}) {
 /** Relays held in memory, shared by every device of one account; `down` makes them refuse every write. */
 function relaysOf() {
   const events = new Map<string, NostrEvent>();
-  const control = { down: false };
+  const control = { down: false, delayMs: 0 };
   const relays = {
     relayUrls: ["wss://a.example", "wss://b.example"],
     async queryQuorum(filter: NostrFilter) {
       return { outcomes: [{ events: [...events.values()].filter((e) => (filter.kinds ?? []).includes(e.kind)) }], respondedCount: 2 };
     },
     async publishAll(event: NostrEvent) {
+      if (control.delayMs) await new Promise((done) => setTimeout(done, control.delayMs));
       if (control.down) return this.relayUrls.map((relayUrl) => ({ relayUrl, result: { ok: false, message: "blocked" } })) as RelayPublishOutcome[];
       if (event.kind === 5) for (const tag of event.tags) if (tag[0] === "e") events.delete(tag[1]!);
       events.set(event.id, event);
@@ -92,7 +94,8 @@ const loseTokens = (account: ReturnType<typeof newAccount>) => {
   for (const [id, e] of account.events) if (e.kind === TOKEN_KIND || e.kind === 5) account.events.delete(id);
 };
 
-describe("the review's findings, each failing before its mend", () => {
+// Each restore asks a mint about thousands of outputs, made in the worker: a minute or more under load.
+describe("the review's findings, each failing before its mend", { timeout: 120_000 }, () => {
   it("1: restore finds what was added under a keyset the mint has since rotated away from", async () => {
     const mint = await mintWith();
     const account = newAccount();
@@ -195,7 +198,8 @@ describe("the review's findings, each failing before its mend", () => {
   }, 60_000);
 });
 
-describe("the second review's findings, each failing before its mend", () => {
+// Each restore asks a mint about thousands of outputs, made in the worker: a minute or more under load.
+describe("the second review's findings, each failing before its mend", { timeout: 120_000 }, () => {
   it("1: a mint that doesn't prove its signatures (no DLEQ) is neither tried nor restored from, and says so", async () => {
     const mint = await mintWith({ noDleq: true });
     const account = newAccount();
@@ -256,4 +260,80 @@ describe("the second review's findings, each failing before its mend", () => {
     // And the counters the second device's add reached are in the record.
     expect((three.wallet.state().counters ?? []).length).toBeGreaterThan(0);
   }, 120_000);
+});
+
+// Each restore asks a mint about thousands of outputs, made in the worker: a minute or more under load.
+describe("the third review's findings, each failing before its mend", { timeout: 120_000 }, () => {
+  /** Proofs of a mint, made by an ordinary wallet: nothing of any seed. */
+  async function proofsAt(mint: MockMint, sats: number) {
+    const w = new Wallet(mint.url, { unit: "sat" });
+    await w.loadMint();
+    const quote = await w.createMintQuoteBolt11(sats);
+    mint.payAllFunding();
+    return (await w.ops.mintBolt11(sats, quote).run()).map((p) => ({ id: p.id, amount: Number(p.amount), secret: p.secret, C: p.C }));
+  }
+
+  it("4: two tabs rolling over at once on one browser's storage keep what each wrote", async () => {
+    const mint = await mintWith();
+    const account = newAccount();
+    const one = device(account);
+    await one.wallet.open();
+    await one.wallet.addMint(mint.url);
+    const two = device(account, one.browser);
+    const [first, second] = [await proofsAt(mint, 3), await proofsAt(mint, 4)];
+    // Relays slow to answer: each tab's roll is between its two writes when the other's begins.
+    account.control.delayMs = 60;
+    await Promise.all([
+      rollEcash(one.deps, { destroy: [], keep: [{ mint: mint.url, proofs: first }] }),
+      rollEcash(two.deps, { destroy: [], keep: [{ mint: mint.url, proofs: second }] })
+    ]);
+    account.control.delayMs = 0;
+    const kept = await peekEcash(one.deps);
+    expect(kept.tokens.flatMap((t) => t.proofs).reduce((n, p) => n + p.amount, 0)).toBe(7);
+  }, 60_000);
+
+  it("5a: a record is deleted as a duplicate only where the relays holding it also hold the record that covers it", async () => {
+    const mint = await mintWith();
+    const signer = new NostrSigner(generatePrivateKey());
+    const r1 = new Map<string, NostrEvent>();
+    const r2 = new Map<string, NostrEvent>();
+    const relays = {
+      relayUrls: ["wss://one.example", "wss://two.example"],
+      async queryQuorum(filter: NostrFilter) {
+        const pick = (m: Map<string, NostrEvent>) => [...m.values()].filter((e) => (filter.kinds ?? []).includes(e.kind));
+        return { outcomes: [{ events: pick(r1) }, { events: pick(r2) }], respondedCount: 2 };
+      },
+      async publishAll(event: NostrEvent) {
+        for (const m of [r1, r2]) {
+          if (event.kind === 5) for (const tag of event.tags) if (tag[0] === "e") m.delete(tag[1]!);
+          m.set(event.id, event);
+        }
+        return this.relayUrls.map((relayUrl) => ({ relayUrl, result: { ok: true, message: "" } })) as RelayPublishOutcome[];
+      }
+    } as EcashRelays;
+    const deps = (kv = new InMemoryKeyValueStore()) => ({ signer, store: kv, relays, newKey: () => "cd".repeat(32) });
+    const proofs = await proofsAt(mint, 5);
+    // The older record, on both relays; then a newer one with the same proofs, which the second relay lost.
+    await rollEcash(deps(), { destroy: [], keep: [{ mint: mint.url, proofs }] });
+    const older = [...r2.values()].find((e) => e.kind === 7375)!;
+    await new Promise((done) => setTimeout(done, 1100));
+    await rollEcash(deps(), { destroy: [], keep: [{ mint: mint.url, proofs }] });
+    const newer = [...r1.values()].find((e) => e.kind === 7375 && e.id !== older.id)!;
+    r2.delete(newer.id);
+    await loadEcash(deps());
+    // The second relay's only record of those proofs stays.
+    expect(r2.has(older.id)).toBe(true);
+  }, 60_000);
+
+  it("1: a lane the wallet record names as used is not drawn, though the mint shows its start empty", async () => {
+    const { createSeededMint } = await import("./seededMint.js");
+    const mint = await mintWith();
+    const account = newAccount();
+    const w = new Wallet(mint.url, { unit: "sat" });
+    await w.loadMint();
+    const seed = standInSeedWorker({ signer: account.signer, store: new InMemoryKeyValueStore(), seed: account.seed, lock });
+    // Lane 5 would be drawn first; the record says this account has gone 300 into it.
+    const minter = createSeededMint({ wallet: w, seed, random: (() => { let i = 0; return () => (i++ === 0 ? 5.5 / 32 : 0); })(), used: [5] });
+    expect((await minter.lane())!.lane).not.toBe(5);
+  }, 60_000);
 });
