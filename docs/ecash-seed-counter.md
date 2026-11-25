@@ -121,9 +121,13 @@ alone. How a mint is shown to refuse:
 
 - **What it says of itself (NUT-06):** it must list restore (NUT-09) and
   deterministic secrets (NUT-13). That is needed, but not enough.
-- **A trial that can cost one sat.** The wallet signs one 1-sat output
-  with a throwaway counter, from a lane kept for trials only, then asks
-  again with the same output.
+- **A trial that can cost one sat** (built in `ecash/mintTrial.ts`,
+  2026-11-24). One 1-sat proof of the person's is swapped into an output
+  made from a counter kept for trials: the last 4,096 below 2³¹, which no
+  lane reaches. The mint is asked first that the counter is unused. The
+  proof that comes back is then swapped into that same output again.
+  - A mint that charges for each swap isn't tried. The trial would cost
+    more than a sat, and nothing is spent.
   - If the mint refuses the second request, it passes.
   - If it signs it again, it fails, and the most this costs is the 1 sat
     (and any fee).

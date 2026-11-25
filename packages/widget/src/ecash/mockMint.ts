@@ -35,6 +35,8 @@ export interface MockMint {
 export interface MockMintOptions {
   /** Sign an output it has signed before, instead of refusing the whole request. Off by default. */
   signsAgain?: boolean;
+  /** Not say it supports restore or deterministic secrets (NUT-09, NUT-13), and not restore. */
+  noRestore?: boolean;
 }
 
 export async function startMockMint(options: MockMintOptions = {}): Promise<MockMint> {
@@ -117,7 +119,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
 
   const handle = (method: string, path: string, body: any): unknown => {
     if (method === "GET" && path === "/v1/info") {
-      return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true }, 9: { supported: true }, 13: { supported: true } } };
+      return { name: "mock mint", version: "mock/0", nuts: { 4: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 5: { methods: [{ method: "bolt11", unit: "sat" }], disabled: false }, 7: { supported: true }, 8: { supported: true }, ...(options.noRestore ? {} : { 9: { supported: true }, 13: { supported: true } }) } };
     }
     if (method === "GET" && path === "/v1/keysets") return { keysets: [{ id, unit: "sat", active: true, input_fee_ppk: 0 }] };
     if (method === "GET" && (path === "/v1/keys" || path === `/v1/keys/${id}`)) return { keysets: [{ id, unit: "sat", active: true, input_fee_ppk: 0, keys: pub }] };
@@ -178,7 +180,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
       const change = split(given - q.amount - 1).slice(0, (body.outputs ?? []).length);
       return { quote: body.quote, ...q, unit: "sat", expiry: 0, payment_preimage: "00".repeat(32), change: sign((body.outputs ?? []).slice(0, change.length), change) };
     }
-    if (method === "POST" && path === "/v1/restore") {
+    if (method === "POST" && path === "/v1/restore" && !options.noRestore) {
       // NUT-09: what it signed, for the blinded messages it is shown. Nothing it didn't sign; nothing changes.
       const found = (body.outputs as { amount: number; id: string; B_: string }[]).filter((o) => signed.has(o.B_));
       return { outputs: found, signatures: found.map((o) => signed.get(o.B_)!) };
