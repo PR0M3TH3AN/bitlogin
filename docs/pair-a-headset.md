@@ -11,7 +11,7 @@ Sign in on the headset with the sign-in window instead."), and a headset's `pair
 are shown only on BitLogin's own top-level page, `/headset/`, in the headset's 2D browser, whose address bar a world
 can't draw over. Its first line: "Check that the address bar says bitlogin.network." A world opens it from a press,
 as a window with its link back (`window.open("<signIn>/headset/", "bitlogin-headset", "popup")`, or
-`client.signInFromPhone()`); the page finds the world's signer through its opener, as the sign-in window does, so the
+`client.signInFromPhone()`, which returns `{ opened, done }`: `opened` false where the browser refused the window, and `done` settling once it closes, true if signed in); the page finds the world's signer through its opener, as the sign-in window does, so the
 site is the browser's word and the phone seals the hand-off to that signer's one-time key (the offer's `to`). The page
 passes it on sealed (`grant`), says "Signed in. Go back to the world." and closes; the world hears `state`. The phone
 asks of every code, typed or scanned: "Is the code on a page whose address bar says bitlogin.network, on a headset

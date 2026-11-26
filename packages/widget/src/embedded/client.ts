@@ -138,10 +138,11 @@ export interface BitLoginClient {
   /**
    * Sign in from the person's phone, for a headset (docs/pair-a-headset.md, Way 1). Call it from the user's own press,
    * after leaving immersive VR: it opens BitLogin's own /headset/ page in a window, where the code, its QR and the
-   * number to match are shown, never in the site. Resolves true once the window has closed and someone is signed in
-   * here, false otherwise. The site is told nothing else.
+   * number to match are shown, never in the site. `opened` is false where the browser refused the window: then offer
+   * a press of the person's own to try again. `done` settles once the window has closed: true if someone is signed in
+   * here then, false otherwise (and at once where it never opened). The site is told nothing else.
    */
-  signInFromPhone(): Promise<boolean>;
+  signInFromPhone(): { opened: boolean; done: Promise<boolean> };
   getPublicKey(): Promise<string>;
   signEvent(event: UnsignedEvent): Promise<NostrEvent>;
   nip44: { encrypt(peer: string, plaintext: string): Promise<string>; decrypt(peer: string, ciphertext: string): Promise<string> };
@@ -399,12 +400,13 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
         }, 400);
       });
     },
-    async signInFromPhone() {
-      await introduce();
+    signInFromPhone() {
+      // Opened first, in the press itself: a wait before it can cost the press, and the browser then refuses the window.
       // Without `noopener`: the page finds this page's frame through its link back, as the sign-in window does.
       const opened = window.open(`${at}/headset/`, "bitlogin-headset", "popup");
-      if (!opened) return false;
-      return new Promise<boolean>((resolve) => {
+      if (!opened) return { opened: false, done: Promise.resolve(false) };
+      void introduce().catch(() => {});
+      const done = new Promise<boolean>((resolve) => {
         const watch = setInterval(() => {
           if (!opened.closed) return;
           clearInterval(watch);
@@ -413,6 +415,7 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
             .then(() => resolve(current.signedIn));
         }, 400);
       });
+      return { opened: true, done };
     },
     async switchAccount() {
       await introduce();
