@@ -470,14 +470,15 @@ describe("BitLogin Phase 0 end-to-end scenarios (§32)", () => {
       expect(recovered.everydayPublicKey).toBe(registration.everydayPublicKey);
       expect(recovered.accountId).toBe(registration.accountId);
 
-      // Without the offline file, the same unreachable relays must fail outright.
+      // Without the offline file, the same unreachable relays must fail outright: and say so as relays that couldn't be
+      // reached, never as "no account" (2026-11-26, the record-not-found fault), so the widget never offers a rebuild.
       await expect(
         recoverWithPhrase({
           phrase: registration.recoveryPhrase,
           vaultRelayUrls: unreachableRelayUrls,
           discoveryRelayUrls: unreachableRelayUrls,
         }),
-      ).rejects.toThrow(AccountNotFoundError);
+      ).rejects.toMatchObject({ name: "RelaysSlowError", reason: "unreached", unreached: 1 });
     },
     ARGON2_TIMEOUT,
   );

@@ -107,6 +107,16 @@ export async function restoreFromMint(deps: RestoreDeps): Promise<Restored> {
     }
   }
   // What the mint has signed may have been spent since: only what it says is unspent is kept.
-  const states = proofs.length ? await wallet.checkProofsStates(proofs) : [];
+  // Asked again, once, where the answer was lost to the network: after a long restore a mint may have dropped the
+  // kept-alive connection. Only a network error; a mint's own refusal is its answer.
+  const check = () => wallet.checkProofsStates(proofs);
+  const states = proofs.length ? await check().catch((err: unknown) => (isNetworkError(err) ? check() : Promise.reject(err))) : [];
   return { proofs: proofs.filter((_, i) => states[i]?.state !== CheckStateEnum.SPENT), next, asked, keysets: keysets.map((k) => k.id), skipped };
+}
+
+/** A request that never got an answer from the mint: a dropped or reset connection, not a mint's refusal. */
+function isNetworkError(err: unknown): boolean {
+  const e = err as { name?: string; cause?: unknown; status?: number } | null;
+  if (!e || typeof e !== "object" || typeof e.status === "number") return false;
+  return e.name === "NetworkError" || e.name === "TypeError" || (e.cause instanceof Error && e.cause.name === "TypeError");
 }

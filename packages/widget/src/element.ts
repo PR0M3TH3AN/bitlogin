@@ -52,6 +52,7 @@ type Screen =
   | "login"
   | "recover-phrase"
   | "recover-rebuild"
+  | "relays-slow"
   | "recover-new-credentials"
   | "dashboard"
   | "accounts"
@@ -95,6 +96,19 @@ export class BitLoginAuthElement extends HTMLElement {
   private screen: Screen = "welcome";
   private busy = false;
   private errorMessage: string | undefined;
+  /**
+   * The relays that may hold the account didn't all answer (RelaysSlowError, 2026-11-26): the words, the same press
+   * again, and where a path has one, its other way as a second, plainly worded press. Never the automatic next screen.
+   */
+  private relaysSlow: { message: string; retry: () => Promise<void>; anyway?: { label: string; run: () => Promise<void> } } | null = null;
+  /** Show the relays-slow screen for this error, where it is one. True where it was. */
+  private slowRelays(err: unknown, retry: () => Promise<void>, anyway?: { label: string; run: () => Promise<void> }): boolean {
+    if (!(err instanceof Error) || err.name !== "RelaysSlowError") return false;
+    this.relaysSlow = { message: err.message, retry, ...(anyway ? { anyway } : {}) };
+    this.busy = false;
+    this.goto("relays-slow");
+    return true;
+  }
   /** Welcome-screen disclosure for non-primary sign-in paths; survives
    *  re-renders so an open menu doesn't snap shut on an error render. */
   private moreOptionsOpen = false;
@@ -1049,6 +1063,12 @@ export class BitLoginAuthElement extends HTMLElement {
         return;
       case "rebuild-confirm":
         return this.handleRebuildConfirm();
+      case "relays-retry":
+        if (this.busy || !this.relaysSlow) return;
+        return this.relaysSlow.retry();
+      case "relays-anyway":
+        if (this.busy || !this.relaysSlow?.anyway) return;
+        return this.relaysSlow.anyway.run();
       case "goto-welcome":
         this.pendingRollback = null;
         this.pendingExtensionSigner = null;
@@ -1444,6 +1464,12 @@ export class BitLoginAuthElement extends HTMLElement {
     this.setBusy(true);
     const parts = await this.runPasskeyCeremony("get");
     if (!parts) return;
+    await this.passkeyLogin(parts);
+  }
+
+  /** Sign in with what a passkey derived: again on Try again, with no new ceremony. */
+  private async passkeyLogin(parts: { loginName: string; password: string }): Promise<void> {
+    this.setBusy(true);
     try {
       const result = await this.worker.login({ loginName: parts.loginName, password: parts.password });
       this.loginName = parts.loginName;
@@ -1475,6 +1501,17 @@ export class BitLoginAuthElement extends HTMLElement {
         this.goto("rollback-confirm");
         return;
       }
+      // Some relays didn't answer: try again first; a new account only as a second press, never on a guess.
+      if (
+        this.slowRelays(err, () => this.passkeyLogin(parts), {
+          label: "Make a new account anyway",
+          run: async () => {
+            this.pendingPasskey = parts;
+            this.goto("passkey-create");
+          }
+        })
+      )
+        return;
       this.fail(err);
     }
   }
@@ -2000,6 +2037,7 @@ export class BitLoginAuthElement extends HTMLElement {
         this.goto("rollback-confirm");
         return;
       }
+      if (this.slowRelays(err, () => this.attemptLogin(loginName, password, acknowledgeRollback))) return;
       this.fail(err);
     }
   }
@@ -2019,14 +2057,30 @@ export class BitLoginAuthElement extends HTMLElement {
   }
 
   private async handleRecoverPhraseSubmit(): Promise<void> {
-    const phrase = this.field("phrase").trim();
+    await this.recoverFromPhrase(this.field("phrase").trim());
+  }
+
+  /** Recover with a phrase: again on Try again. */
+  private async recoverFromPhrase(phrase: string): Promise<void> {
     this.setBusy(true);
     let result: RecoverResult;
     try {
       result = await this.worker.recover({ phrase, offlineExportFile: this.offlineExportFile ?? undefined });
     } catch (err) {
+      // Some relays didn't answer: try again first; the rebuild only as a second press, never on a guess.
+      if (this.slowRelays(err, () => this.recoverFromPhrase(phrase), { label: "Rebuild from your phrase anyway", run: () => this.offerRebuild(phrase, err) })) return;
       if (!(err instanceof Error) || err.name !== "AccountNotFoundError") throw err;
-      // No relay holds this account. If its identity was derived from the
+      return this.offerRebuild(phrase, err);
+    }
+    this.recoveredByRebuild = false;
+    this.adoptRecoverResult(result);
+  }
+
+  /** The rebuild from the phrase, previewed first (spec §17.6). */
+  private async offerRebuild(phrase: string, err: unknown): Promise<void> {
+    this.setBusy(true);
+    try {
+      // No relay holds this account, or the person chose the rebuild where some didn't answer. If its identity was derived from the
       // phrase, the phrase can still rebuild it (spec §17.6). The preview
       // refuses on its own when relays simply didn't answer, in which case
       // the original "not found" is the honest message.
@@ -2040,10 +2094,9 @@ export class BitLoginAuthElement extends HTMLElement {
       this.rebuildPreview = { npub: preview.npub, profileFound: preview.profileFound, relayListFound: preview.relayListFound };
       this.busy = false;
       this.goto("recover-rebuild");
-      return;
+    } catch (failed) {
+      this.fail(failed);
     }
-    this.recoveredByRebuild = false;
-    this.adoptRecoverResult(result);
   }
 
   /** The user confirmed the identity shown is theirs (spec §17.6 step 3). */
@@ -2792,6 +2845,20 @@ export class BitLoginAuthElement extends HTMLElement {
             </button>
           </form>
         `;
+
+      case "relays-slow": {
+        const slow = this.relaysSlow;
+        if (!slow) return `<div class="notice error">Nothing is waiting here.</div>`;
+        return `
+          ${this.renderScreenHead("Your relays didn't all answer", "goto-welcome")}
+          <div class="notice warn">${escapeHtml(slow.message)}</div>
+          ${this.renderError()}
+          <button class="primary" type="button" data-action="relays-retry" ${this.busy ? "disabled" : ""}>
+            ${this.busy ? '<span class="spinner"></span>Trying again…' : "Try again"}
+          </button>
+          ${slow.anyway ? `<p class="small">Only if you're sure there is no account to find:</p><button class="secondary" type="button" data-action="relays-anyway" ${this.busy ? "disabled" : ""}>${escapeHtml(slow.anyway.label)}</button>` : ""}
+        `;
+      }
 
       case "recover-rebuild": {
         const preview = this.rebuildPreview;

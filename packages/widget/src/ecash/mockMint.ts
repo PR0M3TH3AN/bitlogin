@@ -62,6 +62,8 @@ export interface MockMintOptions {
   refusesAfterSigning?: number;
   /** Refuse every mint call with a code nobody knows, signing nothing. */
   refusesUnsigned?: boolean;
+  /** Drop the connection, answering nothing, on the first `n` checks of proofs' states: a socket lost mid-restore. */
+  dropsCheckstate?: number;
 }
 
 export async function startMockMint(options: MockMintOptions = {}): Promise<MockMint> {
@@ -94,6 +96,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
    */
   let refused = 0;
   let refusedAfter = 0;
+  let dropped = 0;
   const fresh = (outputs: { B_: string }[] | undefined): void => {
     if (options.signsAgain || !outputs) return;
     const seen = new Set<string>();
@@ -260,6 +263,10 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
       if (req.method === "OPTIONS") return void res.writeHead(204, cors).end();
       const path = new URL(req.url ?? "/", "http://x").pathname;
       mint.requests.push(`${req.method} ${path}`);
+      if (path === "/v1/checkstate" && (options.dropsCheckstate ?? 0) > dropped) {
+        dropped++;
+        return void req.socket.destroy();
+      }
       try {
         const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
         const out = handle(req.method ?? "GET", path, body);
