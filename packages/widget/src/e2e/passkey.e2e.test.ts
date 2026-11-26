@@ -4619,4 +4619,57 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     },
     300_000
   );
+
+  it(
+    "client.signInFromPhone() says whether the window opened, and settles once it closes (for the kit's outOfVr)",
+    async () => {
+      const appPage = `<!doctype html><meta charset="utf-8"><title>an application</title>
+<button id="go">Sign In using Phone</button>
+<script type="module">
+  import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
+  window.bl = createBitLoginClient({ at: "${origin}", permissions: { name: "Phone test", sign: [1] } });
+  document.getElementById("go").onclick = () => {
+    const r = window.bl.signInFromPhone();
+    window.opened = r.opened;
+    r.done.then((v) => { window.done = v; });
+  };
+</script>`;
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        const context = await browser.newContext();
+        await context.route(/^https:\/\/phone-app\.bitblocks\.network\//u, async (route) => {
+          const url = new URL(route.request().url());
+          if (url.pathname.startsWith("/vendor/")) {
+            const file = join(DIST, normalize(url.pathname).replace(/^(\.\.[/\\])+/u, ""));
+            return route.fulfill({ status: 200, contentType: "text/javascript; charset=utf-8", body: await readFile(file) });
+          }
+          return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: appPage });
+        });
+        const app = await context.newPage();
+        await app.goto("https://phone-app.bitblocks.network/");
+        await app.waitForFunction(() => !!(window as any).bl, null, { timeout: 30_000 });
+        // From the press: the window opens at BitLogin's /headset/, and `opened` says so at once.
+        const [popup] = await Promise.all([context.waitForEvent("page"), app.locator("#go").click()]);
+        expect(await app.evaluate(() => (window as any).opened)).toBe(true);
+        await popup.waitForLoadState("domcontentloaded");
+        expect(new URL(popup.url()).origin).toBe(origin);
+        expect(new URL(popup.url()).pathname).toBe("/headset/");
+        // Closed with nobody signed in: done is false.
+        expect(await app.evaluate(() => (window as any).done)).toBeUndefined();
+        await popup.close();
+        await app.waitForFunction(() => (window as any).done !== undefined, null, { timeout: 30_000 });
+        expect(await app.evaluate(() => (window as any).done)).toBe(false);
+        // Where the browser refuses the window: opened is false, and done is false at once, so the kit offers its own press.
+        const refused = await app.evaluate(async () => {
+          window.open = () => null;
+          const r = (window as any).bl.signInFromPhone();
+          return { opened: r.opened, done: await r.done };
+        });
+        expect(refused).toEqual({ opened: false, done: false });
+      } finally {
+        await browser.close();
+      }
+    },
+    120_000
+  );
 });

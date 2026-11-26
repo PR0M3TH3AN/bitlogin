@@ -6,6 +6,14 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-26
+
+- **`client.signInFromPhone()` returns `{ opened, done }`** in place of a
+  promise (the kit's own shape): `opened` is false where the browser
+  refused the window, so a site can offer its own press, and `done`
+  settles once the window closes, true if signed in. The window is now
+  opened in the press itself, before anything is waited on.
+
 ## 2026-11-25
 
 - **Signing in a headset from your phone is back, on BitLogin's own page**
