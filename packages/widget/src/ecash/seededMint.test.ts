@@ -236,4 +236,27 @@ describe("a browser with no navigator.locks", () => {
     await expect(minter.add(3, quote)).rejects.toMatchObject({ code: "no-seed-here" });
     expect(mint.signedCount()).toBe(0);
   });
+
+  // The orchestrator's ruling on the testnut finding (cdk words its refusal as 20006): never match a mint's codes.
+  it("on a mint that refuses with a code it makes up after signing, move the lane past what it signed and finish on the same paid quote", async () => {
+    const mint = await startMockMint({ refusesAfterSigning: 1 });
+    mints.push(mint);
+    const a = await browser(mint, ecashSeed(generatePrivateKey()), { checkFirst: false });
+    await a.setLane(9);
+    await a.add(8);
+    expect(total(a.held)).toBe(8);
+    // Past the outputs it signed and refused, and the next ones, which it signed and handed back.
+    expect((await a.lane()).next).toBeGreaterThan(laneStart(9) + 1);
+  });
+
+  it("on a mint that refuses with a code it makes up without signing, keep its error and move nothing", async () => {
+    const mint = await startMockMint({ refusesUnsigned: true });
+    mints.push(mint);
+    const a = await browser(mint, ecashSeed(generatePrivateKey()), { checkFirst: false });
+    await a.setLane(10);
+    await expect(a.add(8)).rejects.toThrow(/made-up refusal/u);
+    expect(mint.signedCount()).toBe(0);
+    // Its counters were reserved, and burned, as a crash would: never handed out again. Nothing moved past them.
+    expect((await a.lane()).next).toBe(laneStart(10) + 1);
+  });
 });

@@ -58,6 +58,10 @@ export interface MockMintOptions {
   dleqLeftOff?: (n: number) => boolean;
   /** Sign a swap's outputs and leave its inputs unspent, as a broken mint might. */
   swapsWithoutTaking?: boolean;
+  /** Sign a mint's outputs, keep them as signed, and then refuse the first `n` such calls with a code nobody knows. */
+  refusesAfterSigning?: number;
+  /** Refuse every mint call with a code nobody knows, signing nothing. */
+  refusesUnsigned?: boolean;
 }
 
 export async function startMockMint(options: MockMintOptions = {}): Promise<MockMint> {
@@ -89,6 +93,7 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
    * that `signsAgain` lets them through.
    */
   let refused = 0;
+  let refusedAfter = 0;
   const fresh = (outputs: { B_: string }[] | undefined): void => {
     if (options.signsAgain || !outputs) return;
     const seen = new Set<string>();
@@ -180,7 +185,13 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
       const q = funding.get(body.quote);
       if (!q || q.state !== "PAID") throw new Error("quote not paid");
       if (body.outputs.reduce((sum: number, o: any) => sum + Number(o.amount), 0) !== q.amount) throw new Error("outputs do not match the quote");
+      if (options.refusesUnsigned) throw Object.assign(new Error("a made-up refusal"), { code: 99999 });
       fresh(body.outputs);
+      if ((options.refusesAfterSigning ?? 0) > refusedAfter) {
+        refusedAfter++;
+        sign(body.outputs);
+        throw Object.assign(new Error("a made-up refusal, after signing"), { code: 99998 });
+      }
       q.state = "ISSUED";
       return { signatures: sign(body.outputs) };
     }

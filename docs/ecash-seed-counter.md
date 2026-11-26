@@ -185,6 +185,14 @@ two browsers in the same lane, unless both are used within the moment
 between the check and the operation. It costs one extra request per
 operation.
 
+And after: where the mint refuses the operation, the wallet asks restore
+again about exactly those outputs. Where it signed any, the lane moves
+past them and the same paid invoice is claimed again with the next.
+Where it signed none, the mint's own error stands. A mint's error codes
+and words are never read for this: the first public test mint (cdk,
+2026-11-25) words the refusal as 20006, "Invoice already paid or
+pending", where others say 10002 (`docs/reviews/seed-testnut-2026-11-25/`).
+
 ### 6. A cleared browser, or a new device
 
 It draws a lane (rule 3), takes the highest relay copy for that lane

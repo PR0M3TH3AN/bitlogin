@@ -75,7 +75,6 @@ const split = (sats: number): number[] => {
   for (let bit = 1; sats > 0; bit *= 2, sats = Math.floor(sats / 2)) if (sats % 2) out.push(bit);
   return out;
 };
-const alreadySigned = (err: unknown): boolean => /already signed/iu.test(String((err as Error)?.message ?? "")) || (err as { code?: number })?.code === 10002;
 
 /**
  * One lock per name, across every tab and worker of this site: `navigator.locks` (2026-11-24). The worker takes it for
@@ -130,22 +129,27 @@ export function createSeededMint(deps: SeededMintDeps) {
             continue;
           }
         }
+        // The mint signs the blinded messages; the worker finishes them into proofs, checking the mint's proof of each.
+        // Nothing that unblinds them was on this page before the mint had signed.
+        let signatures: Awaited<ReturnType<Wallet["mint"]["mintBolt11"]>>["signatures"];
         try {
-          // The mint signs the blinded messages; the worker finishes them into proofs, checking the mint's proof of
-          // each. Nothing that unblinds them was on this page before the mint had signed.
-          const { signatures } = await deps.wallet.mint.mintBolt11({ quote: typeof quote === "string" ? quote : quote.quote, outputs: made.outputs.map((o) => ({ amount: o.amount, id: o.id, B_: o.B_ })) } as never);
-          try {
-            return await deps.seed.unblind(id, keysetGiven(deps.wallet.keyChain.getKeyset(id)), signedFor(made.outputs, signatures));
-          } catch (err) {
-            // Signed, but not proved (the fourth review's 1): nothing is finished without the mint's proof. The sats
-            // are at the mint, at this seed's counters, and restore finds them once the mint proves what it signed.
-            if ((err as { code?: string })?.code === "no-dleq") throw Object.assign(new Error("The mint signed these sats but didn't prove it, so BitLogin hasn't finished them. They are at the mint: restoring from your key finds them once it proves them."), { code: "no-dleq" });
-            throw err;
-          }
+          ({ signatures } = await deps.wallet.mint.mintBolt11({ quote: typeof quote === "string" ? quote : quote.quote, outputs: made.outputs.map((o) => ({ amount: o.amount, id: o.id, B_: o.B_ })) } as never));
         } catch (err) {
-          if (!alreadySigned(err)) throw err;
-          // Refused whole, nothing issued: past the clash, and the same paid invoice claimed again.
+          // Refused, however the mint words it (cdk says 20006, others 10002, some nothing at all: never matched). Its
+          // own restore is asked about these exact outputs. Where it signed any, the lane moves past them and the same
+          // paid invoice is claimed again with the next; where it signed none, its error stands.
+          const signed = await signedAmong(deps.wallet, made.outputs).catch(() => null);
+          if (signed === null) throw err;
           await deps.seed.forward(id, Math.max(...made.outputs.map((o) => o.counter)) + 1);
+          continue;
+        }
+        try {
+          return await deps.seed.unblind(id, keysetGiven(deps.wallet.keyChain.getKeyset(id)), signedFor(made.outputs, signatures));
+        } catch (err) {
+          // Signed, but not proved (the fourth review's 1): nothing is finished without the mint's proof. The sats
+          // are at the mint, at this seed's counters, and restore finds them once the mint proves what it signed.
+          if ((err as { code?: string })?.code === "no-dleq") throw Object.assign(new Error("The mint signed these sats but didn't prove it, so BitLogin hasn't finished them. They are at the mint: restoring from your key finds them once it proves them."), { code: "no-dleq" });
+          throw err;
         }
       }
       throw new Error("The mint kept refusing these counters: nothing was spent, and the invoice can be claimed again.");
