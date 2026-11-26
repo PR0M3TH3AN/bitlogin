@@ -147,4 +147,22 @@ describe("restore from the mints, from the key alone", () => {
     await a.wallet.ops.send(5, eight).run();
     expect(total((await restore(mint, seed)).proofs)).toBe(3);
   }, RESTORE_MS);
+
+  it("asks the mint again, once, where its answer on what is unspent was lost to a dropped connection (after the testnut release)", async () => {
+    const mint = await startMockMint({ dropsCheckstate: 1 });
+    mints.push(mint);
+    const seed = ecashSeed(generatePrivateKey());
+    const a = await browser(mint, seed, 2);
+    await a.add(8);
+    expect(total((await restore(mint, seed)).proofs)).toBe(8);
+  }, RESTORE_MS);
+
+  it("says so where the mint drops that answer twice: restore doesn't guess what is unspent", async () => {
+    const mint = await startMockMint({ dropsCheckstate: 2 });
+    mints.push(mint);
+    const seed = ecashSeed(generatePrivateKey());
+    const a = await browser(mint, seed, 2);
+    await a.add(8);
+    await expect(restore(mint, seed)).rejects.toThrow();
+  }, RESTORE_MS);
 });
