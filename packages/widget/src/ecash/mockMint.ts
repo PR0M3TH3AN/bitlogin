@@ -161,7 +161,11 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
     refusedCount: () => refused,
     rotate: newKeyset,
     keysetIds: () => keysets.map((k) => k.id),
-    close: () => new Promise((resolve) => server.close(() => resolve()))
+    close: () => new Promise((resolve) => {
+      // Every connection cut first: one a page holds open (a wallet mid-request) would otherwise hold close() forever.
+      server.closeAllConnections();
+      server.close(() => resolve());
+    })
   };
 
   const handle = (method: string, path: string, body: any): unknown => {

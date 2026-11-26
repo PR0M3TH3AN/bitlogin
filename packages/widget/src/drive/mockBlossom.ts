@@ -26,7 +26,12 @@ export interface MockBlossom {
 }
 
 export async function startMockBlossom(): Promise<MockBlossom> {
-  const self: MockBlossom = { url: "", blobs: new Map(), price: null, maxBytes: 10_000_000, lie: false, closed: false, mediaOnly: false, requests: [], close: () => new Promise((resolve) => server.close(() => resolve())) };
+  const self: MockBlossom = { url: "", blobs: new Map(), price: null, maxBytes: 10_000_000, lie: false, closed: false, mediaOnly: false, requests: [], close: () =>
+      new Promise((resolve) => {
+        // Every connection cut first: one a page holds open would otherwise hold close() forever.
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }) };
 
   /** The note in the `Authorization` header, if it is one this server must accept for this request. Else why not. */
   const authorised = (req: IncomingMessage, verb: string, sha256: string): { pubkey: string } | { error: string } => {

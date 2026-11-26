@@ -132,7 +132,11 @@ export async function startMockUnlock(
       if (order.state !== "fulfilled" && order.state !== "paid") order.state = "expired_pending_requote";
     },
     withdraw: (coordinate) => void withdrawn.add(coordinate),
-    close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+    close: () => new Promise<void>((resolve) => {
+      // Every connection cut first: one a page holds open (a wallet mid-request) would otherwise hold close() forever.
+      server.closeAllConnections();
+      server.close(() => resolve());
+    })
   };
 
   /** Who is asking: the key that signed a fresh note for exactly this request. */
