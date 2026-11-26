@@ -62,7 +62,7 @@ export const DEVICE_ACTIONS: ReadonlySet<string> = new Set(["configure", "getPub
  * files' (read and kept, as BitLogin's pages do), and the read of their pay limit. Never the wallet's or the files'
  * settings, nor anything of the account: those stay on BitLogin's page.
  */
-export const VR_ACTIONS: ReadonlySet<string> = new Set(["ecashLoad", "ecashPeek", "ecashRoll", "driveLoad", "drivePeek", "driveSave", "blossomAuth", "blossomServers", "paySettingsLoad", "vrOff"]);
+export const VR_ACTIONS: ReadonlySet<string> = new Set(["ecashLoad", "ecashPeek", "ecashRoll", "driveLoad", "drivePeek", "driveSave", "blossomAuth", "blossomServers", "paySettingsLoad", "vrOff", "vrNotice"]);
 
 export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "configure",

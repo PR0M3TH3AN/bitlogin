@@ -54,7 +54,9 @@ import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSession
 import { describe as describeKept, forget as forgetKept, keep as keepKept, loadKept, saveKept } from "./keptAccounts.js";
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { DEVICE_ACTIONS, openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, VR_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
-import { VR_WAY } from "../embedded/vrWay.js";
+import { guardWorkerFetch, VR_WAY } from "../embedded/vrWay.js";
+import { selfNotice, vrNoticeText } from "../embedded/vrNotice.js";
+import { HISTORY_KIND, readHistory } from "../ecash/nip60.js";
 import { DEVICE_GRANT_MAX_SEC, DEVICE_KEYS, DEVICES_OUT_D, DEVICES_OUT_KIND, deviceGrantTemplate, devicesOutTemplate, FROM_PHONE, isDeviceOut, readDevicesOut } from "../embedded/deviceGrant.js";
 import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
 import { isLocalAddress, isSignInAddress, knownAppName, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
@@ -62,7 +64,7 @@ import { createSignGate, HELD_MOST, passAllowed, prepareForGuest, signClass } fr
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
 import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
 import { ACHIEVEMENT_LIMITS, achievementForWorld } from "../embedded/achievements.js";
-import { buildMessageRelays, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS, sealMessage, UNWRAP_WORLD_LIMITS } from "../embedded/messages.js";
+import { buildMessageRelays, cleanMessageRelay, MESSAGE_RELAYS_KIND, MESSAGE_WORLD_LIMITS, openWrap, REACH_WORLD_LIMITS, sealMessage, UNWRAP_WORLD_LIMITS } from "../embedded/messages.js";
 import { believedList, cleanMore, FOLLOW_LIMITS, followForWorld, FOLLOWS_KIND, readFollowList } from "../embedded/follows.js";
 import { buildRoomPass, newestProfile, type Profile } from "../embedded/profile.js";
 import { CASHU_MINT_KIND, MINT_RECOMMENDATION_KIND, rankMints } from "../ecash/mints.js";
@@ -211,6 +213,9 @@ interface SessionState {
   /** For a signer-only session serving a world: what the user let it do beyond a note and a reaction, by name. */
   more: readonly string[];
 }
+
+// The worker's own fetch reaches BitLogin's own address, and over https nothing else, whatever any page's policy says.
+if (typeof globalThis.fetch === "function") globalThis.fetch = guardWorkerFetch(globalThis.fetch.bind(globalThis), selfOrigin());
 
 const session: SessionState = {
   signer: null,
@@ -1251,6 +1256,62 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const deviceKey = own ? getPublicKeyHex(own) : null;
       if (own) wipe(own);
       return { device, ...(deviceKey ? { deviceKey } : {}) };
+    }
+
+    // VR way's notice on the phone: the account tells itself, sealed and wrapped, on its own DM relays, that a payment
+    // was made in VR here. The amount is the frame's own reading; the site is the session's. No relays named: no notice.
+    case "vrNotice": {
+      const { signer } = requireUnlocked();
+      if (!session.signerOnly || !session.vr || !session.site) throw new Error("refused");
+      const p = payload as { paid?: unknown };
+      if (!Number.isSafeInteger(p.paid) || (p.paid as number) <= 0) throw new Error("refused");
+      const me = signer.getPublicKey();
+      const finder = readPool([...new Set([...session.relays, ...vaultRelayUrls])].slice(0, 12));
+      let dmRelays: string[] = [];
+      try {
+        const found = await finder.queryQuorum({ kinds: [MESSAGE_RELAYS_KIND], authors: [me], limit: 2 }, 4000);
+        const newest = found.outcomes.flatMap((o) => o.events).filter((e) => e.kind === MESSAGE_RELAYS_KIND && e.pubkey === me && verifyNostrEvent(e)).sort((a, b) => b.created_at - a.created_at)[0];
+        dmRelays = [...new Set((newest?.tags ?? []).filter((t) => t[0] === "relay").map((t) => cleanMessageRelay(t[1])).filter(Boolean))].slice(0, 8);
+      } finally {
+        finder.closeAll();
+      }
+      if (!dmRelays.length) return { sent: 0 };
+      const wrap = selfNotice(signer, vrNoticeText({ paid: p.paid as number }, session.site), Date.now() / 1000);
+      const pool = readPool(dmRelays);
+      try {
+        const outcomes = await pool.publishAll(wrap, 6000);
+        return { sent: outcomes.filter((o) => o.result.ok).length };
+      } finally {
+        pool.closeAll();
+      }
+    }
+
+    // "Payments made in VR", on BitLogin's own pages: read from the wallet's own history, where a payment made in VR
+    // names its site inside the encrypted line. Not the notice: that may never have arrived.
+    case "vrPayments": {
+      const { signer } = requireUnlocked();
+      if (session.signerOnly) throw new Error("This is listed on BitLogin's own page.");
+      const me = signer.getPublicKey();
+      const pool = readPool([...new Set([...session.relays, ...vaultRelayUrls, ...discoveryRelayUrls])].slice(0, 12));
+      try {
+        const found = await pool.queryQuorum({ kinds: [HISTORY_KIND], authors: [me], limit: 200 }, 5000);
+        const seen = new Set<string>();
+        const payments: { sats: number; site: string; at: number }[] = [];
+        for (const e of found.outcomes.flatMap((o) => o.events)) {
+          if (e.kind !== HISTORY_KIND || e.pubkey !== me || seen.has(e.id) || !verifyNostrEvent(e)) continue;
+          seen.add(e.id);
+          let line: ReturnType<typeof readHistory> = null;
+          try {
+            line = readHistory(signer.nip44Decrypt(me, e.content));
+          } catch {
+            line = null;
+          }
+          if (line?.vr && line.direction === "out") payments.push({ sats: line.amount, site: line.vr, at: e.created_at });
+        }
+        return { payments: payments.sort((a, b) => b.at - a.at).slice(0, 50) };
+      } finally {
+        pool.closeAll();
+      }
     }
 
     // VR way turned off in the world itself (the safe direction, so a press in VR may do it): at once, and kept.
@@ -2521,7 +2582,11 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
         if (action === "ecashLoad") return await loadEcash(deps);
         if (action === "ecashSetMints") return await setEcashMints({ ...deps, newKey: () => bytesToHex(generatePrivateKey()) }, (payload as { mints?: unknown }).mints);
         // The page is told once the new proofs are sealed here, for that call alone: "Added" is true from then on.
-        return await rollEcash(deps, payload as EcashRoll, () => (self as unknown as Worker).postMessage({ notify: "ecash-sealed", id } satisfies WorkerNotification));
+        // VR way: a line of history made in a world's frame names that world, as the browser named it; any other says
+        // no site, whatever the page passed.
+        const roll = payload as EcashRoll;
+        if (roll.history) roll.history = { direction: roll.history.direction, amount: roll.history.amount, ...(session.signerOnly && session.vr && session.site && roll.history.direction === "out" ? { vr: session.site } : {}) };
+        return await rollEcash(deps, roll, () => (self as unknown as Worker).postMessage({ notify: "ecash-sealed", id } satisfies WorkerNotification));
       } finally {
         pool.closeAll();
       }
@@ -2688,7 +2753,7 @@ const KNOWN_ACTIONS = new Set<string>([
   "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
-  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "headsetBegin", "headsetPoll", "headsetCancel", "devicesOut", "vrOff", "pairFind", "pairFound", "pairEnd", "pairAnswer",
+  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "headsetBegin", "headsetPoll", "headsetCancel", "devicesOut", "vrOff", "vrNotice", "vrPayments", "pairFind", "pairFound", "pairEnd", "pairAnswer",
   "signerKeep", "signerRestore", "guestStatus", "signerTouch", "signerForget", "signerHold", "signerHeld",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",

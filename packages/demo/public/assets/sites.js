@@ -189,6 +189,18 @@ const draw = () => {
 };
 draw();
 
+// From a notice on the phone (…/sites/#vr-off): brought to the presses that turn VR way off, and nothing is pressed.
+// A link alone never acts here, so someone who sends it gets nothing.
+if (location.hash === "#vr-off") {
+  history.replaceState(null, "", location.pathname + location.search);
+  const off = [...document.querySelectorAll("#sites button")].find((b) => b.textContent === "Turn off BitLogin inside VR");
+  if (off) {
+    off.scrollIntoView({ block: "center" });
+    off.focus({ preventScroll: true });
+    say("These are the worlds where you use BitLogin inside VR. Press Turn off BitLogin inside VR for any of them.");
+  } else say("BitLogin isn't on inside VR anywhere from this browser.");
+}
+
 $("all").addEventListener("click", async () => {
   $("all").disabled = true;
   say("Signing out of every site.");
@@ -200,6 +212,27 @@ $("all").addEventListener("click", async () => {
   }
   $("all").disabled = false;
 });
+
+// "Payments made in VR", from the wallet's own history, behind everything else.
+if (me) {
+  let session = null;
+  try {
+    session = await createHeadlessSigner({
+      vaultRelays: relayList(document.documentElement.dataset.vaultRelays),
+      discoveryRelays: relayList(document.documentElement.dataset.discoveryRelays)
+    });
+    const restored = await session.restore();
+    const payments = restored && restored.pubkey === me.pubkey ? await session.vrPayments() : [];
+    if (payments.length) {
+      $("vr-payments-list").replaceChildren(...payments.map((p) => el("li", `${p.sats.toLocaleString()} sats in ${new URL(p.site).host}, ${day(p.at)}`)));
+      $("vr-payments").hidden = false;
+    }
+  } catch {
+    /* no relay answered, or the lock is on: nothing is listed */
+  } finally {
+    session?.destroy();
+  }
+}
 
 // Their profile, behind everything else: read by BitLogin's worker and believed only as far as its signature goes.
 if (me) {

@@ -179,6 +179,10 @@ export interface HeadlessSigner {
   checkTakenBack(site: string): Promise<"ok" | "ended" | "stale" | "vr-off">;
   /** VR way turned off in the world itself: at once, and kept. */
   vrOff(): Promise<void>;
+  /** VR way: tell the phone of a payment made in VR here (the account's own message to itself). */
+  vrNotice(paid: number): Promise<{ sent: number }>;
+  /** "Payments made in VR", from the wallet's own history: for BitLogin's own pages. */
+  vrPayments(): Promise<{ sats: number; site: string; at: number }[]>;
   /**
    * In a session that arrived by a hand-off for a site that declared no
    * permissions: a room pass (NSWP kind 27300) for that site, naming the
@@ -602,6 +606,13 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
     async pairEnd(offer) {
       await requirePubkey();
       await client.pairEnd(offer);
+    },
+    async vrNotice(paid) {
+      return client.vrNotice(paid);
+    },
+    async vrPayments() {
+      await requirePubkey();
+      return (await client.vrPayments()).payments;
     },
     async vrOff() {
       await client.vrOff();

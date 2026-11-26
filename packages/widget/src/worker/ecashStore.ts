@@ -190,7 +190,7 @@ export interface EcashRoll {
   /** What takes their place: the proofs still unspent, and any new ones. */
   keep: { mint: string; proofs: EcashProof[] }[];
   /** A line for the history, where the balance changed. */
-  history?: { direction: "in" | "out"; amount: number };
+  history?: { direction: "in" | "out"; amount: number; /** VR way: the site it was made in (set by the worker, never a page). */ vr?: string };
 }
 
 /**

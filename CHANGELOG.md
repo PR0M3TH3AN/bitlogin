@@ -15,6 +15,9 @@ would plausibly want. Newest first.
   anything that moves money or a file. The embedded signer's
   `connect-src` gains `https:`, narrowed in the page to the person's own
   mints and file servers.
+  For every payment made in VR, the account sends itself a sealed NIP-17
+  notice ("You paid 22 sats in …"), and Sites you allowed lists
+  "Payments made in VR" from the wallet's own history.
 
 - **A headset's own key (Way 2) is built, behind `DEVICE_KEYS`, which is off.**
   Nothing changes for any site until it is turned on. Then a headset's pass

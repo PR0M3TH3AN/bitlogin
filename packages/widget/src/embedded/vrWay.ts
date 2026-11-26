@@ -15,7 +15,7 @@
  * Built behind `VR_WAY`, off.
  */
 import { knownFamily, readFamily } from "./family.js";
-import { knownAppName } from "./permissions.js";
+import { isLocalAddress, knownAppName } from "./permissions.js";
 
 /** Off until it is released on the owner's word. */
 export const VR_WAY = false;
@@ -50,9 +50,13 @@ export interface VrReach {
 export function createVrFetchGuard(selfOrigin = "") {
   let reach: VrReach | null = null;
   let origins = new Set<string>();
+  // Only where BitLogin itself runs at a local address (a test, or a developer's own copy) may a person's own mint be
+  // a local one, over http with a port. Never on a live address.
+  const local = isLocalAddress(selfOrigin);
   const originOf = (value: unknown): string => {
     try {
       const u = new URL(String(value));
+      if (local && u.protocol === "http:" && isLocalAddress(u.origin) && !u.username && !u.password) return u.origin;
       return u.protocol === "https:" && !u.port && !u.username && !u.password ? u.origin : "";
     } catch {
       return "";
@@ -84,6 +88,51 @@ export function createVrFetchGuard(selfOrigin = "") {
       }) as typeof fetch;
     }
   };
+}
+
+/**
+ * The other ways a page reaches an address under `connect-src` (the orchestrator's review of 63684d9): the signer
+ * frame's own code uses none of them, so each is refused outright: XMLHttpRequest, EventSource, WebSocket (its
+ * relays are the worker's), WebTransport and sendBeacon. `fetch` alone goes on, through the guard.
+ */
+export const REFUSED_WAYS = ["XMLHttpRequest", "EventSource", "WebSocket", "WebTransport"] as const;
+export function refuseOtherWays(target: Record<string, unknown> & { navigator?: { sendBeacon?: unknown } }): void {
+  for (const name of REFUSED_WAYS) {
+    if (!(name in target)) continue;
+    const refused = function () {
+      throw new TypeError(`${name} isn't used by BitLogin's signer.`);
+    };
+    try {
+      Object.defineProperty(target, name, { value: refused, writable: false, configurable: false });
+    } catch {
+      target[name] = refused;
+    }
+  }
+  if (target.navigator && typeof target.navigator.sendBeacon === "function") {
+    try {
+      Object.defineProperty(target.navigator, "sendBeacon", { value: () => false, writable: false, configurable: false });
+    } catch {
+      target.navigator.sendBeacon = () => false;
+    }
+  }
+}
+
+/**
+ * The worker's own fetch: it reaches BitLogin's own address, and over https nothing else (its headers say
+ * `connect-src 'self' wss:` already; this says it again in its code). Relays are WebSockets, as before.
+ */
+export function guardWorkerFetch(inner: typeof fetch, selfOrigin: string): typeof fetch {
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+    let u: URL | null = null;
+    try {
+      u = new URL(raw, selfOrigin);
+    } catch {
+      u = null;
+    }
+    if (!u || (u.protocol === "https:" && u.origin !== selfOrigin)) return Promise.reject(new TypeError("BitLogin's worker reaches no other address over https."));
+    return inner(input, init);
+  }) as typeof fetch;
 }
 
 /** A confirm is answered after the press guard, and within a minute. */

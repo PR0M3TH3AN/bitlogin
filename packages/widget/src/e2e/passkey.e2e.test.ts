@@ -4768,10 +4768,74 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         // The frame reaches nothing over https but the person's own mints and servers.
         const signerFrame = world.frames().find((f) => f.url().startsWith(`${origin}/signer/`))!;
         expect(await signerFrame.evaluate(() => fetch("https://stranger.example/").then(() => "reached", (e) => String(e.message)))).toBe("That address isn't one of your mints or file servers.");
-        // The phone's list shows it, with its way to turn VR off.
+        // Every other way under connect-src: refused outright in the frame.
+        const ways = await signerFrame.evaluate(() => {
+          const tryIt = (f: () => unknown) => {
+            try {
+              f();
+              return "reached";
+            } catch (e) {
+              return String((e as Error).message);
+            }
+          };
+          return {
+            xhr: tryIt(() => new XMLHttpRequest()),
+            events: tryIt(() => new EventSource("https://stranger.example/")),
+            socket: tryIt(() => new WebSocket("wss://stranger.example/")),
+            beacon: navigator.sendBeacon("https://stranger.example/", "x")
+          };
+        });
+        expect(ways).toEqual({ xhr: "XMLHttpRequest isn't used by BitLogin's signer.", events: "EventSource isn't used by BitLogin's signer.", socket: "WebSocket isn't used by BitLogin's signer.", beacon: false });
+        // A payment made in VR: the account's mint and sats set up on BitLogin's own page (the phone), then paid from VR
+        // at a confirm the kit presses. With no DM relays named, no notice is sent; the wallet's history names the world.
+        const mint = await startMockMint();
+        try {
+          const mintUrl = mint.url;
+          await pair.goto(`${origin}/pair/`);
+          await pair.evaluate(`(async () => {
+            const { createHeadlessSigner } = await import("/vendor/bitlogin/bitlogin-headless.js");
+            const { createEcashWallet } = await import("/vendor/bitlogin/bitlogin-ecash.js");
+            const list = (v) => (v || "").split(",").filter(Boolean);
+            const s = await createHeadlessSigner({ vaultRelays: list(document.documentElement.dataset.vaultRelays), discoveryRelays: list(document.documentElement.dataset.discoveryRelays) });
+            await s.restore();
+            await s.ecash.setMints(["${mintUrl}"]);
+            const w = createEcashWallet(s.ecash);
+            await w.open();
+            window.__w = w;
+            window.__f = await w.fund("${mintUrl}", 100);
+          })()`);
+          mint.payAllFunding();
+          expect(await pair.evaluate(`window.__w.claim(window.__f)`)).toBe(true);
+          expect(await world.evaluate(() => (window as any).ask({ t: "walletState" }))).toMatchObject({ t: "wallet-state", balance: 100 });
+          const asked = await world.evaluate((invoice) => (window as any).ask({ t: "walletSend", invoice }), mint.invoice(21));
+          expect(asked).toMatchObject({ t: "confirm", what: "pay", sats: 21 });
+          // Too soon, a press is not taken; a moment later it is.
+          expect(await world.evaluate((c) => (window as any).ask({ t: "confirmed", confirm: c, yes: true }), asked.confirm)).toMatchObject({ t: "refused" });
+          const again = await world.evaluate((invoice) => (window as any).ask({ t: "walletSend", invoice }), mint.invoice(21));
+          await world.waitForTimeout(1100);
+          expect(await world.evaluate((c) => (window as any).ask({ t: "confirmed", confirm: c, yes: true }), again.confirm)).toMatchObject({ t: "paid" });
+          expect(mint.paid).toHaveLength(1);
+          await world.waitForTimeout(1500);
+          expect(relays.flatMap((r) => r.storedEventKinds()).filter((k) => k === 1059)).toHaveLength(0);
+        } finally {
+          await mint.close();
+        }
+
+        // The phone's list shows it, with its way to turn VR off, and the payment under "Payments made in VR".
         const sites = await phone.newPage();
         await sites.goto(`${origin}/sites/`);
         await sites.locator("#sites li button", { hasText: "Turn off BitLogin inside VR" }).waitFor({ timeout: 30_000 });
+        // What left the wallet, fee and all, as its own history says it: 21 and the mint's fee of 1.
+        await sites.locator("#vr-payments-list li").filter({ hasText: "22 sats in w3.bitblocks.network" }).waitFor({ timeout: 30_000 });
+        // From a notice's link: brought to the press, and nothing is turned off without it.
+        const takeBacksBefore = relays.flatMap((r) => r.storedEventKinds()).filter((k) => k === 30078).length;
+        const fromNotice = await phone.newPage();
+        await fromNotice.goto(`${origin}/sites/#vr-off`);
+        await fromNotice.locator("#said").filter({ hasText: "Press Turn off BitLogin inside VR" }).waitFor({ timeout: 30_000 });
+        expect(await fromNotice.evaluate(() => document.activeElement?.textContent ?? "")).toBe("Turn off BitLogin inside VR");
+        expect(new URL(fromNotice.url()).hash).toBe("");
+        await fromNotice.waitForTimeout(1500);
+        expect(relays.flatMap((r) => r.storedEventKinds()).filter((k) => k === 30078).length).toBe(takeBacksBefore);
         // Off, pressed in VR: at once, and asked again it is refused in words.
         expect(await world.evaluate(() => (window as any).ask({ t: "vrOff" }))).not.toHaveProperty("vr");
         expect(await world.evaluate(() => (window as any).ask({ t: "walletState" }))).toMatchObject({ t: "refused", words: VR_REFUSED });

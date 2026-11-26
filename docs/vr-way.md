@@ -69,12 +69,38 @@ starts, VR way or not. It lets through only BitLogin's own address and, in a sig
 person's own mints (from the wallet's record) and file servers (from their server list), by exact https origin.
 Everything else is refused before it is asked.
 
+`connect-src` covers more than `fetch` (the orchestrator's review of 63684d9). The frame's own code uses none of the
+other ways, so each is refused outright as the signer starts: XMLHttpRequest, EventSource, WebSocket (relays are the
+worker's), WebTransport, and `navigator.sendBeacon` (answers false). Each is made read-only, so it can't be set back.
+
+The worker is served from `/vendor/` under the general rule (`connect-src 'self' wss:`), which a dedicated worker
+takes from its own script's response, so the widening never reached it. Its own `fetch` is also guarded in its code:
+BitLogin's own address, and over https nothing else. Its relays are WebSockets, as they were.
+
 ## Turning it off
 
 - **In VR**, `vrOff`: at once, and kept. Off is the safe direction.
-- **On "Sites you allowed"**, "Turn off BitLogin inside VR": a take-back with `vr: true` for the site or family. The
+- **On "Sites you allowed"** (or from a notice's link), "Turn off BitLogin inside VR": a take-back with `vr: true` for the site or family. The
   headset's daily check drops VR way and stays signed in.
 - **On again** only at a pairing. Never from a world.
+
+## The notice on the phone, and "Payments made in VR"
+
+The owner: "yes notification on phone is good". It is no limit and blocks nothing.
+
+- **The notice.** For every payment made in VR, the world's frame has the account tell itself, as NIP-17: a kind 14
+  rumor, sealed (13), wrapped (1059) by a key made for that wrap, sent to the person's own DM relays (their 10050).
+  Any Nostr app on the phone that notifies for messages shows it. The words are "You paid {sats} sats in {site}." and
+  then "To turn off BitLogin inside VR: https://bitlogin.network/sites/#vr-off". The amount is what left the wallet,
+  fee and all; the site is the session's own. Nothing of the mint, the invoice or a token goes in it. With no DM
+  relays named, nothing is sent. It is sent after the answer to the world.
+- **The history's mark.** A payment's history line, NIP-60 kind 7376, encrypted to the account, carries
+  `["nswp:vr", "<site>"]`. The worker writes it only in a session with VR way on, from the session's own site, never
+  from what a page passed.
+- **The list.** "Payments made in VR", on Sites you allowed, is read from that history (`vrPayments`), not from the
+  notice.
+- **The link.** /sites/#vr-off brings the page to its "Turn off BitLogin inside VR" presses and focuses one. It
+  presses nothing.
 
 ## Not built yet
 

@@ -39,6 +39,17 @@ describe("the signer frame's guard on what it reaches over https", () => {
     expect(guard.allows("not a url")).toBe(false);
   });
 
+  it("lets a person's own local mint through only where BitLogin itself runs at a local address", () => {
+    const live = createVrFetchGuard("https://bitlogin.network");
+    live.set({ ...own, mints: ["http://127.0.0.1:3338"] });
+    expect(live.allows("http://127.0.0.1:3338/v1/info")).toBe(false);
+    const dev = createVrFetchGuard("http://localhost:8080");
+    dev.set({ ...own, mints: ["http://127.0.0.1:3338"] });
+    expect(dev.allows("http://127.0.0.1:3338/v1/info")).toBe(true);
+    expect(dev.allows("http://127.0.0.1:9999/v1/info")).toBe(false);
+    expect(dev.allows("http://evil.example/")).toBe(false);
+  });
+
   it("refuses everything when VR way is off, and with no session", () => {
     guard.set({ ...own, vr: false });
     expect(guard.allows("https://mint.example/v1/keys")).toBe(false);
@@ -122,7 +133,7 @@ describe("VR way in the hand-off and the worker", () => {
   it("opens to a signer frame only the wallet's and files' own actions, never their settings or the account's", async () => {
     const { readFileSync } = await import("node:fs");
     const { SIGNER_ONLY_ACTIONS, VR_ACTIONS } = await import("../worker/handoff.js");
-    expect([...VR_ACTIONS].sort()).toEqual(["blossomAuth", "blossomServers", "driveLoad", "drivePeek", "driveSave", "ecashLoad", "ecashPeek", "ecashRoll", "paySettingsLoad", "vrOff"]);
+    expect([...VR_ACTIONS].sort()).toEqual(["blossomAuth", "blossomServers", "driveLoad", "drivePeek", "driveSave", "ecashLoad", "ecashPeek", "ecashRoll", "paySettingsLoad", "vrNotice", "vrOff"]);
     for (const never of ["ecashSetMints", "blossomSetServers", "paySettingsSave", "exportIdentity", "changePassword", "vaultRevealNwc", "takeBack", "handoffExport", "buildRecoveryExport", "pairAnswer"]) expect(VR_ACTIONS.has(never), never).toBe(false);
     for (const a of VR_ACTIONS) expect(SIGNER_ONLY_ACTIONS.has(a), a).toBe(false);
     const worker = readFileSync(new URL("../worker/cryptoWorker.ts", import.meta.url), "utf8");
@@ -131,5 +142,46 @@ describe("VR way in the hand-off and the worker", () => {
     expect(worker).toContain("if (p.vrWay === true && isLocalAddress(selfOrigin())) vrWayHere = true;");
     // Chosen on the phone with the account's own key: never a device key with it.
     expect(worker).toContain("const own = deviceKeysHere && !vr ? generatePrivateKey() : null;");
+  });
+});
+
+describe("every other way under connect-src (the review of 63684d9)", () => {
+  it("refuses XMLHttpRequest, EventSource, WebSocket, WebTransport and sendBeacon outright in the frame", async () => {
+    const { refuseOtherWays } = await import("./vrWay.js");
+    const target: Record<string, unknown> & { navigator: { sendBeacon: (url: string) => boolean } } = {
+      XMLHttpRequest: class {},
+      EventSource: class {},
+      WebSocket: class {},
+      WebTransport: class {},
+      navigator: { sendBeacon: () => true }
+    };
+    refuseOtherWays(target);
+    for (const name of ["XMLHttpRequest", "EventSource", "WebSocket", "WebTransport"]) {
+      expect(() => new (target[name] as new (url: string) => unknown)("https://mint.example/"), name).toThrow(/isn't used by BitLogin's signer/u);
+    }
+    expect(target.navigator.sendBeacon("https://mint.example/")).toBe(false);
+    // And it stays so: it can't be set again.
+    expect(() => {
+      target.XMLHttpRequest = class {};
+    }).toThrow();
+    expect(() => new (target.XMLHttpRequest as new () => unknown)()).toThrow(/isn't used by BitLogin's signer/u);
+  });
+
+  it("guards the worker's own fetch: its own address, and over https nothing else", async () => {
+    const { guardWorkerFetch } = await import("./vrWay.js");
+    const asked: string[] = [];
+    const f = guardWorkerFetch((async (input: RequestInfo | URL) => {
+      asked.push(String(input));
+      return new Response("ok");
+    }) as typeof fetch, "https://bitlogin.network");
+    await f("https://bitlogin.network/relays.json");
+    await expect(f("https://mint.example/v1/info")).rejects.toThrow(/no other address over https/u);
+    await expect(f("https://relay.example/")).rejects.toThrow();
+    expect(asked).toEqual(["https://bitlogin.network/relays.json"]);
+    const { readFileSync } = await import("node:fs");
+    const worker = readFileSync(new URL("../worker/cryptoWorker.ts", import.meta.url), "utf8");
+    expect(worker).toContain('if (typeof globalThis.fetch === "function") globalThis.fetch = guardWorkerFetch(globalThis.fetch.bind(globalThis), selfOrigin());');
+    const frame = readFileSync(new URL("./vrSigner.ts", import.meta.url), "utf8");
+    expect(frame.indexOf("refuseOtherWays(globalThis")).toBeGreaterThan(frame.indexOf("globalThis.fetch = guard.wrap("));
   });
 });

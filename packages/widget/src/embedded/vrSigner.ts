@@ -7,7 +7,7 @@
  */
 import type { HeadlessSigner } from "../headless.js";
 import type { SignerReply } from "./policy.js";
-import { createConfirmGate, createVrFetchGuard } from "./vrWay.js";
+import { createConfirmGate, createVrFetchGuard, refuseOtherWays } from "./vrWay.js";
 
 /** What a VR ask is refused with where it can't be done here: the plain words a world can show. */
 export const VR_REFUSED = "Do this on BitLogin's own page.";
@@ -36,6 +36,8 @@ export function installVrGuard(): void {
   if (installed || typeof globalThis.fetch !== "function") return;
   installed = true;
   globalThis.fetch = guard.wrap(globalThis.fetch.bind(globalThis));
+  // Every other way under connect-src, refused outright: this frame's own code uses none of them.
+  refuseOtherWays(globalThis as unknown as Record<string, unknown>);
 }
 
 export function createVrHandler(deps: { signer: () => HeadlessSigner | null; site: () => string; say: (reply: SignerReply) => void }) {
@@ -52,14 +54,12 @@ export function createVrHandler(deps: { signer: () => HeadlessSigner | null; sit
   const reach = (on: boolean) => guard.set(on ? { vr: true, signedIn: !!deps.signer(), mints: wallet?.state().mints ?? [], servers } : null);
 
   const openWallet = async (h: HeadlessSigner): Promise<Wallet> => {
-    if (wallet) return wallet;
     const { createEcashWallet } = await import("../ecash/wallet.js");
-    // The mints come from the wallet's own record, read before any mint is asked.
-    reach(false);
-    const w = createEcashWallet(h.ecash);
-    await w.peek().catch(() => null);
+    // The mints come from the wallet's own record, read again each time (one added on BitLogin's page since is
+    // seen), and before any mint is asked.
     const state = await h.ecash.load();
     guard.set({ vr: true, signedIn: true, mints: state.mints, servers });
+    const w = wallet ?? createEcashWallet(h.ecash);
     await w.open({ check: false });
     wallet = w;
     return w;
@@ -140,22 +140,25 @@ export function createVrHandler(deps: { signer: () => HeadlessSigner | null; sit
           const c = { what: "save" as const, id: ask.id, name: ask.name, type: ask.type, bytes: ask.bytes, private: ask.private };
           return deps.say({ t: "confirm", id: ask.id, confirm: gate.issue(c), what: "save", name: ask.name, size: ask.bytes.length, private: ask.private } as SignerReply);
         }
-        // `confirmed`: the kit's press, for a confirm this frame made.
+        // `confirmed`: the kit's press, for a confirm this frame made. What it did is the answer to this press.
         const c = gate.answer(ask.confirm, ask.yes);
         if (!c) return refuse(ask.id, "Nothing was done.");
         if (c.what === "pay") {
           const paid = await (await openWallet(h)).pay(c.quoted as never);
-          return deps.say({ t: "paid", id: c.id, ...(paid.preimage ? { preimage: paid.preimage } : {}) } as SignerReply);
+          // The phone is told, after the world: it never slows the answer, and blocks nothing. What left the wallet, fee
+          // and all, as the wallet's own history says it.
+          setTimeout(() => void h.vrNotice(paid.paid + paid.fee).catch(() => {}), 0);
+          return deps.say({ t: "paid", id: ask.id, ...(paid.preimage ? { preimage: paid.preimage } : {}) } as SignerReply);
         }
         if (c.what === "take") {
           const w = await openWallet(h);
           await w.receive(c.token);
-          return deps.say({ ...walletState(w), id: c.id } as SignerReply);
+          return deps.say({ ...walletState(w), id: ask.id } as SignerReply);
         }
         const f = await openFiles(h);
         const folder = await f.worldFolder(deps.site());
         const saved = await f.put(folder.id, { name: c.name, type: c.type, bytes: c.bytes }, { private: c.private });
-        return deps.say({ t: "file-saved", id: c.id, name: saved.name, size: saved.size, private: !!saved.key } as SignerReply);
+        return deps.say({ t: "file-saved", id: ask.id, name: saved.name, size: saved.size, private: !!saved.key } as SignerReply);
       } catch (err) {
         return refuse(ask.id, String((err as Error)?.message || VR_REFUSED).slice(0, 200));
       }

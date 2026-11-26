@@ -168,11 +168,13 @@ export function balances(tokens: readonly EcashToken[]): Record<string, number> 
 
 // ---- A line of history (kind 7376): informational only.
 
-export function writeHistory(entry: { direction: "in" | "out"; amount: number; created?: readonly string[]; destroyed?: readonly string[] }): string {
+export function writeHistory(entry: { direction: "in" | "out"; amount: number; created?: readonly string[]; destroyed?: readonly string[]; /** VR way: the site it was made in, kept only in this encrypted line. */ vr?: string }): string {
+  const vrSite = typeof entry.vr === "string" ? historySite(entry.vr) : "";
   return JSON.stringify([
     ["direction", entry.direction],
     ["amount", String(entry.amount)],
     ["unit", ECASH_UNIT],
+    ...(vrSite ? [["nswp:vr", vrSite]] : []),
     ...(entry.created ?? []).map((id) => ["e", id, "", "created"]),
     ...(entry.destroyed ?? []).map((id) => ["e", id, "", "destroyed"])
   ]);
@@ -184,3 +186,30 @@ export const cleanInvoice = (input: unknown): string => {
   const invoice = input.trim().toLowerCase().replace(/^lightning:/u, "");
   return invoice.length <= 2000 && /^ln(bc|tb|tbs|bcrt)[0-9a-z]+$/u.test(invoice) ? invoice : "";
 };
+
+/** A site as a history line may name it: an https origin, as the browser gave it. "" for anything else. */
+function historySite(input: string): string {
+  try {
+    const u = new URL(input);
+    return u.protocol === "https:" && u.origin === input ? u.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+/** A history line's content, read back (decrypted already): its direction, amount, and the VR site where it has one. */
+export function readHistory(content: string): { direction: "in" | "out"; amount: number; vr?: string } | null {
+  let rows: unknown;
+  try {
+    rows = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(rows)) return null;
+  const tag = (name: string) => (rows as unknown[]).find((r): r is string[] => Array.isArray(r) && r[0] === name && typeof r[1] === "string")?.[1];
+  const direction = tag("direction");
+  const amount = Number(tag("amount"));
+  if ((direction !== "in" && direction !== "out") || !Number.isSafeInteger(amount) || amount <= 0) return null;
+  const vr = historySite(tag("nswp:vr") ?? "");
+  return { direction, amount, ...(vr ? { vr } : {}) };
+}

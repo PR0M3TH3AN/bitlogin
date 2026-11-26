@@ -306,6 +306,14 @@ describe("widget security policy", () => {
     expect(framable.map((entry) => entry.source)).toEqual(["/signer/(.*)", "/connect/panel/(.*)"]);
   });
 
+  it("serves the workers, the signer frame's too, under the general rule: no https from a worker", () => {
+    // A dedicated worker takes the policy of its own script's response: /vendor/ is under the general rule, so the
+    // signer frame's widening to https (VR way) reaches its page and never its worker.
+    const general = ruleFor("/((?!signer/|connect/).*)");
+    expect(new RegExp(vercel.headers.find((entry) => entry.source === "/((?!signer/|connect/).*)")!.source.replace(/^\//u, "^/")).test("/vendor/bitlogin/cryptoWorker.js")).toBe(true);
+    expect(general.get("Content-Security-Policy")).toMatch(/(^|; )connect-src 'self' wss:(;|$)/u);
+  });
+
   it("lets the sign-in window keep its link to the page that opened it, and nothing else", () => {
     const everything = ruleFor("/((?!signer/|connect/).*)");
     const connect = ruleFor("/connect/((?!panel/).*)");

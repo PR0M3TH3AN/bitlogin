@@ -610,6 +610,8 @@ export type WorkerActionMap = {
   devicesOut: [{ deviceKey: string }, { ok: boolean; accepted: number; of: number }];
   /** VR way turned off in the world itself: at once, and kept. */
   vrOff: [Record<string, never>, Record<string, never>];
+  vrNotice: [{ paid: number }, { sent: number }];
+  vrPayments: [Record<string, never>, { payments: { sats: number; site: string; at: number }[] }];
   /** And the phone's, at BitLogin's own /pair. */
   pairFind: [{ code: string }, { offers: PairOffer[] }];
   pairFound: [{ offer: string }, { number: number }];

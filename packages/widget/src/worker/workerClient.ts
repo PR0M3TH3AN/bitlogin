@@ -378,6 +378,12 @@ export class WorkerClient {
   headsetPoll() {
     return this.call("headsetPoll", {});
   }
+  vrNotice(paid: number) {
+    return this.call("vrNotice", { paid });
+  }
+  vrPayments() {
+    return this.call("vrPayments", {});
+  }
   vrOff() {
     return this.call("vrOff", {});
   }
