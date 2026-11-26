@@ -22,6 +22,8 @@ import {
   familyDeclined,
   familyDomain,
   familyOffer,
+  familyOf,
+  knownFamily,
   findEmbeddedSigner,
   applyChange,
   keepersOf,
@@ -253,10 +255,15 @@ const lasting = (what, row, box, label, line, after) => {
 /**
  * The family question, at the second site of a family (docs/site-family.md SF4): two buttons in place of Allow,
  * neither of them the default. Only while "remember" is ticked: a family is never allowed for one visit.
+ *
+ * Or at the first, where the world asked for its family and BitLogin knows it (SF4a, 2026-11-25): then choosing the
+ * family is itself the remembering, and it is offered whatever the box says. Never with the lock on, and not where
+ * "Just this one" was pressed for that family in the last thirty days.
  */
+let familyAsked = false;
 /** What a world may ask to be let do, as it is put on the button. */
 const MORE_WORDS = { follows: "change who I follow", messages: "send and read my private messages" };
-const familyShown = () => !!offer && !lockOn && $("remember").checked;
+const familyShown = () => !lockOn && (familyAsked || (!!offer && $("remember").checked));
 const showFamily = () => {
   const shown = familyShown();
   $("family").hidden = !shown;
@@ -278,13 +285,17 @@ const showFamily = () => {
       : "It can't read your messages, change your profile or who you follow, or touch your account or anything in it.";
   $("allow-more").textContent = `Allow, and let it ${asked.map((name) => MORE_WORDS[name]).join(" and ")}`;
   $("allow").textContent = shown ? "Just this one" : asked.length ? "Allow without that" : "Allow";
-  if (!offer) return;
+  if (!shown) return;
   const domain = familyDomain(found.family);
-  $("family-earlier").textContent = offer.site;
-  $("family-when").textContent = `on ${new Date(offer.at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long" })}`;
+  // The earlier site, where there is one. At a first sign-in that asked for its family there is none to name.
+  $("family-before").hidden = !offer;
+  if (offer) {
+    $("family-earlier").textContent = offer.site;
+    $("family-when").textContent = `on ${new Date(offer.at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long" })}`;
+  }
   $("family-domain").textContent = domain;
   $("family-lasts").textContent = `It lasts ${found.knownFamily ? 30 : 7} days on this device, or until you sign out of any one of them, which signs you out of them all.`;
-  $("allow-family").textContent = `Allow every ${domain} site`;
+  $("allow-family").textContent = familyAsked ? `Stay signed in at every ${domain} site` : `Allow every ${domain} site`;
 };
 
 /** A list, written as text: nothing a site sent is ever put on this page as markup. */
@@ -314,6 +325,19 @@ const askApp = () => {
   $("app-local").hidden = !found.local;
   paintWho();
   lasting("application", "remember-app-row", "remember-app", "remember-app-label", "app-lasts");
+  // Its family too, where it asked and BitLogin knows the family (docs/site-family.md SF5a): the application keeps its
+  // own set at its own address, and every other site of the family gets a note and a reaction, nothing of the set.
+  familyAsked = !lockOn && found.familyAsked === true && !!found.family && !familyDeclined(found.family);
+  offer = null;
+  $("app-family").hidden = !familyAsked;
+  $("allow-app-family").hidden = !familyAsked;
+  $("allow-app").textContent = familyAsked ? "Just this one" : "Allow";
+  if (familyAsked) {
+    const domain = familyDomain(found.family);
+    $("app-family-domain").textContent = domain;
+    $("app-family-lasts").textContent = `It lasts ${found.knownFamily ? 30 : 7} days on this device, or until you sign out of any one of them, which signs you out of them all.`;
+    $("allow-app-family").textContent = `Stay signed in at every ${domain} site`;
+  }
   fill("app-ordinary", words.ordinary);
   fill("app-sensitive", words.sensitive);
   $("app-sensitive-block").hidden = words.sensitive.length === 0;
@@ -601,6 +625,8 @@ const ask = () => {
   paintWho();
   // Offered only where an earlier site of the same family was allowed, as this account, and not turned down lately.
   offer = !lockOn && found.family && !familyDeclined(found.family) ? familyOffer(loadAllowed(), found.site, found.family, who.pubkey) : null;
+  // Asked for by the world itself, for a family BitLogin knows (SF4a): offered at this first sign-in too.
+  familyAsked = !lockOn && found.familyAsked === true && !!found.family && !familyDeclined(found.family);
   lasting("site", "remember-row", "remember", "remember-label", "lasts", showFamily);
   showFamily();
   status("A site is asking to sign notes as you. Check the address.");
@@ -700,6 +726,9 @@ const showAccount = () => {
     });
     widget.addEventListener("bitlogin-login", async () => {
       who = await readCachedSession();
+      // Signed in, or the guest secured: no longer a guest here.
+      securingGuest = false;
+      $("guest").hidden = true;
       startOver();
     });
     $("account-slot").replaceChildren(widget);
@@ -707,6 +736,38 @@ const showAccount = () => {
   status("");
   $("account").hidden = false;
   toClient({ t: "size", size: "tall" });
+  void showGuest();
+};
+
+/**
+ * A guest (docs/guest-accounts.md G8): where nobody is signed in here, and this browser keeps a guest account for
+ * the client's family, the panel says so, says how long a guest lasts in this browser, and offers to secure it.
+ * Only in the panel, for a client in a family BitLogin knows. In Brave, which forgets a framed site's storage when
+ * it closes, that is said always: a page can tell it is Brave, not whether its shields are up for this site.
+ */
+let wantedOwn = "";
+/** Opened on "Secure this account" (the "secure" mode): the guest line stands aside, as its button already did its part. */
+let securingGuest = false;
+const showGuest = async () => {
+  $("guest").hidden = true;
+  if (securingGuest) return;
+  const family = inPanel && client ? familyOf(client) : "";
+  if (who || !family || !knownFamily(family)) return;
+  const kept = await (await theWorker()).guestStatus(family).catch(() => null);
+  if (!kept || who) return;
+  const brave = typeof navigator.brave?.isBrave === "function";
+  $("guest-keep").textContent = brave
+    ? "This browser forgets guests when it closes. Secure this account to keep it."
+    : "This account lives in this browser only. Clearing this site's data loses it.";
+  // The wallet, Files and purchases are for a secured account: nothing of value lives in a guest's browser alone.
+  $("guest-first").hidden = !["wallet", "files", "library"].includes(wantedOwn);
+  $("guest-secure").onclick = () => {
+    const widget = $("account-slot").firstChild;
+    if (!widget || typeof widget.secureGuest !== "function") return;
+    $("guest").hidden = true;
+    widget.secureGuest(family);
+  };
+  $("guest").hidden = false;
 };
 const leaveAccount = async () => {
   $("account").hidden = true;
@@ -828,7 +889,8 @@ const allow = async (button, forFamily = false, withMore = false) => {
   try {
     session = await prepare();
     await Promise.race([profileLoaded, new Promise((done) => setTimeout(done, PROFILE_WAIT_MS))]);
-    const remember = !lockOn && $(found.wants ? "remember-app" : "remember").checked;
+    // Choosing the family is itself the remembering: a family is never for one visit.
+    const remember = !lockOn && (asFamily || $(found.wants ? "remember-app" : "remember").checked);
     // What they bought from this site (docs/paying.md) is looked up while the key is handed over, so the site's
     // signer can say "they have this" with no question. Only this site's own listings, and only if they let it.
     const receipts = import("./shop-ui.js")
@@ -844,7 +906,9 @@ const allow = async (button, forFamily = false, withMore = false) => {
     // Written down at the sign-in address, for the list of sites allowed. A record only: it lets nothing sign.
     const at = Math.floor(Date.now() / 1000);
     if (asFamily) {
-      recordAllowed({ site: found.family, members: [found.site, offer.site], pubkey: who.pubkey, at, until: at + (found.knownFamily ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec), remembered: true });
+      recordAllowed({ site: found.family, members: [found.site, ...(offer ? [offer.site] : [])], pubkey: who.pubkey, at, until: at + (found.knownFamily ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec), remembered: true });
+      // An application allowed with its family keeps its own grant too, with its set: listed as its own.
+      if (found.wants) recordAllowed({ site: found.site, pubkey: who.pubkey, at, until: at + (found.known ? SIGN_LIMITS.grantSec : SIGN_LIMITS.unknownGrantSec), remembered: true, wants: found.wants });
       status(`Done. Every ${familyDomain(found.family)} site can sign notes as you until you sign out of one of them.`);
       setTimeout(() => leave(true), 700);
       return;
@@ -867,6 +931,7 @@ $("allow").addEventListener("click", () => allow($("allow")));
 $("allow-family").addEventListener("click", () => allow($("allow-family"), true));
 $("allow-more").addEventListener("click", () => allow($("allow-more"), false, true));
 $("allow-app").addEventListener("click", () => allow($("allow-app")));
+$("allow-app-family").addEventListener("click", () => allow($("allow-app-family"), true));
 $("deny-app").addEventListener("click", () => leave(false));
 $("switch").addEventListener("click", choose);
 $("switch-app").addEventListener("click", choose);
@@ -887,6 +952,7 @@ const OWN_PAGES = {
  * PIN typed there opens that one alone: this one used to stay locked, and the wallet said "Sign in first".
  */
 const openOwnPage = async (mode) => {
+  wantedOwn = mode;
   const page = OWN_PAGES[mode];
   who = await readCachedSession();
   // A panel shown again, for the account its worker already took up, needn't take it up again: that would wait
@@ -950,6 +1016,23 @@ const begin = async (wantsSwitch) => {
 /** Open the panel for what it is shown for: the account, a file browser, a wallet, purchases, or a world's question. */
 const route = async (mode, world) => {
   if (mode === "account") return showAccount();
+  // From a press at the client: straight to "Secure this account" where this browser keeps a guest for its family;
+  // otherwise the account page, with nothing to secure (docs/guest-accounts.md G6).
+  if (mode === "secure") {
+    wantedOwn = "";
+    securingGuest = true;
+    showAccount();
+    who = await readCachedSession();
+    const family = inPanel && client ? familyOf(client) : "";
+    const kept = !who && family && knownFamily(family) ? await (await theWorker()).guestStatus(family).catch(() => null) : null;
+    const widget = $("account-slot").firstChild;
+    if (!kept || !widget || typeof widget.secureGuest !== "function") {
+      securingGuest = false;
+      return void showGuest();
+    }
+    widget.secureGuest(family);
+    return;
+  }
   // Straight to the file browser, the wallet or purchases. All are the signed-in person's: with nobody signed in, the
   // account page comes first, and says why; with the lock on, its PIN is asked first.
   if (mode === "files" || mode === "wallet" || mode === "library") return openOwnPage(mode);

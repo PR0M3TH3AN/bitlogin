@@ -121,6 +121,8 @@ export class BitLoginAuthElement extends HTMLElement {
 
   // Import flow (§SF10). importKey holds the pasted nsec/hex only until registration completes.
   private importKey = "";
+  /** The family whose guest account this sign-up secures (docs/guest-accounts.md G6), or "". */
+  private guestFamily = "";
   private importPreviewNpub = "";
   /** The user ticked that they read how an imported key is kept (on relays, encrypted) before going on. */
   private importAck = false;
@@ -388,6 +390,18 @@ export class BitLoginAuthElement extends HTMLElement {
     if (this.altSigner) return this.altSigner.nip04Decrypt(peerPublicKey, payload);
     return (await this.worker.nip04Decrypt({ peerPublicKey, payload })).plaintext;
   }
+  /**
+   * Secure this browser's guest account for a family (docs/guest-accounts.md G6): the ordinary sign-up, a login
+   * name, a generated password and the recovery phrase, made from the guest's own phrase, so the account keeps the
+   * key every world already knows. For BitLogin's own panel only: the worker refuses where no guest is kept.
+   */
+  secureGuest(family: string): void {
+    this.guestFamily = family;
+    this.importKey = "";
+    this.errorMessage = "";
+    this.goto("create-name");
+  }
+
   async logout(): Promise<void> {
     if (this.altSigner) {
       // Thin sessions persist nothing (§LM7). A NIP-46 session additionally
@@ -1605,8 +1619,10 @@ export class BitLoginAuthElement extends HTMLElement {
     const result = await this.worker.register({
       loginName: this.loginName,
       password,
-      importKey: this.importKey || undefined
+      importKey: this.importKey || undefined,
+      ...(this.guestFamily && !this.importKey ? { fromGuest: this.guestFamily } : {})
     });
+    this.guestFamily = "";
     // The pasted key is now wrapped in the capsules; drop the main-thread copy (§11.10).
     this.importKey = "";
     this.importPreviewNpub = "";
@@ -2690,7 +2706,7 @@ export class BitLoginAuthElement extends HTMLElement {
 
       case "create-name":
         return `
-          ${this.renderScreenHead(this.importKey ? "Set up your login" : "Create your BitLogin")}
+          ${this.renderScreenHead(this.guestFamily ? "Secure this account" : this.importKey ? "Set up your login" : "Create your BitLogin")}
           <p class="sub">${
             this.importKey
               ? "Choose a login name for your imported identity. It's a convenience, not a secret."

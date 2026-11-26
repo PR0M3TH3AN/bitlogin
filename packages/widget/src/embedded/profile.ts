@@ -112,7 +112,7 @@ const HEX64 = /^[0-9a-f]{64}$/u;
  * Null where it can't be made: no site, no usable session key, or a session
  * key that is the identity key itself.
  */
-export function buildRoomPass(input: { session: unknown; site: string; identity: string; nowSeconds: number; profile?: Profile | null }): UnsignedForSite | null {
+export function buildRoomPass(input: { session: unknown; site: string; identity: string; nowSeconds: number; profile?: Profile | null; /** A guest account (docs/guest-accounts.md G7): said on the pass. */ guest?: boolean }): UnsignedForSite | null {
   const origin = cleanOrigin(input.site);
   if (!origin || typeof input.session !== "string" || !HEX64.test(input.session) || input.session === input.identity) return null;
   const created = Math.floor(input.nowSeconds);
@@ -120,6 +120,7 @@ export function buildRoomPass(input: { session: unknown; site: string; identity:
   const tags: string[][] = [
     ["nswp:session", input.session],
     ["nswp:origin", origin],
+    ...(input.guest ? [["nswp:guest", "1"]] : []),
     ["expiration", String(created + PROFILE_LIMITS.passSec)]
   ];
   if (profile.name) tags.push(["name", profile.name]);

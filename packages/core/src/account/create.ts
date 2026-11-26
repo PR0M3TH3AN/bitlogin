@@ -11,6 +11,8 @@ import { decodeNsec } from "../nostr/nip19.js";
 import {
   entropyToRecoveryPhrase,
   recoveryPhraseToSeed,
+  isValidRecoveryPhrase,
+  normalizePhrase,
 } from "../crypto/bip39.js";
 import {
   deriveEverydayPrivateKey,
@@ -57,6 +59,12 @@ export interface RegisterAccountParams {
    * caller is responsible for decoding an `nsec` first.
    */
   everydayPrivateKey?: Uint8Array;
+  /**
+   * Optional recovery phrase to make the account from, instead of a fresh one: a guest account's own
+   * (docs/guest-accounts.md G6), so that securing it gives an ordinary account whose phrase rebuilds its key, the
+   * one the guest already had. Never with `everydayPrivateKey`.
+   */
+  recoveryPhrase?: string;
   minAcknowledgements?: number;
   timeoutMs?: number;
   /** Testing hook; defaults to the current time. */
@@ -136,8 +144,12 @@ export async function registerAccount(
       );
     }
 
-    // §15.2 — recovery generation happens first so its signed event can be embedded below.
-    const recoveryPhrase = entropyToRecoveryPhrase(randomEntropy128());
+    // §15.2 — recovery generation happens first so its signed event can be embedded below. A guest's own phrase
+    // where one is given (docs/guest-accounts.md G6).
+    if (params.recoveryPhrase !== undefined && (imported || !isValidRecoveryPhrase(normalizePhrase(params.recoveryPhrase)))) {
+      throw new RegistrationFailedError("That recovery phrase can't make this account.");
+    }
+    const recoveryPhrase = params.recoveryPhrase !== undefined ? normalizePhrase(params.recoveryPhrase) : entropyToRecoveryPhrase(randomEntropy128());
     const bip39Seed = await recoveryPhraseToSeed(recoveryPhrase);
     let recoveryPrivateKey: Uint8Array;
     let recoveryCapsuleKey: Uint8Array;

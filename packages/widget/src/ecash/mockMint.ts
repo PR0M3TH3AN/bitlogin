@@ -257,7 +257,9 @@ export async function startMockMint(options: MockMintOptions = {}): Promise<Mock
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
-      const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "GET,POST,OPTIONS" };
+      // Every answer closes its connection: a test whose own thread is busy unblinding for seconds (CI's slower runners)
+      // would otherwise send its next request on a kept-alive socket the server has since closed (ECONNRESET).
+      const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "GET,POST,OPTIONS", connection: "close" };
       if (req.method === "OPTIONS") return void res.writeHead(204, cors).end();
       const path = new URL(req.url ?? "/", "http://x").pathname;
       mint.requests.push(`${req.method} ${path}`);

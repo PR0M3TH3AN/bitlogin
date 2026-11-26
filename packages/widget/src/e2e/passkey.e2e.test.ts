@@ -14,6 +14,10 @@
  * (`npx playwright install chromium`), so `npm test` stays green anywhere.
  */
 import { createServer, type Server } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { WebSocketServer, WebSocket as NodeWebSocket } from "ws";
 import { readFile } from "node:fs/promises";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +34,7 @@ import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
 import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "../../../core/src/nostr/event.js";
 import { NostrSigner } from "../../../core/src/account/signer.js";
 import { sealMessage } from "../embedded/messages.js";
+import { PAIRING_PAUSED, PAUSED_WORDS } from "../embedded/pair.js";
 import { startMockMint } from "../ecash/mockMint.js";
 import { startMockUnlock } from "../pay/mockUnlock.js";
 import { NostrSigner } from "@bitlogin/core/account";
@@ -87,7 +92,7 @@ function startServer(relayUrls: string[]): Promise<{ server: Server; origin: str
       }
       // The sign-in window asks relays for a profile, the list of sites publishes a take-back, and the embedded
       // signer reads it. Each is given the mock relays, as the account page is.
-      if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/signer/index.html") {
+      if (relative === "/connect/index.html" || relative === "/connect/panel/index.html" || relative === "/sites/index.html" || relative === "/pair/index.html" || relative === "/headset/index.html" || relative === "/signer/index.html") {
         body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${relayList}" data-discovery-relays="${relayList}"${unlockNamed ? ` data-unlock-service="${unlockNamed}"` : ""}>`);
       }
       res.writeHead(200, {
@@ -1558,6 +1563,611 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
     },
     // The longest test here: sign-in, the wallet, tips, a purchase, files and a world's lists, one after another.
     480_000
+  );
+
+  it(
+    "a guest is told so in BitLogin's panel, in its browser's words, and secures the account there with the same key (guest-accounts.md G6, G8)",
+    async () => {
+      // BitLogin at a public https address and the portal at its own: the panel answers only its listed client, and
+      // a local BitLogin only local ones. Both are answered here, and the relay too: nothing real is asked.
+      const SIGNIN = "https://signin.bitlogin-test.example";
+      // Two relays: making an account needs a quorum of them.
+
+      const FAMILY = "https://*.bitblocks.network";
+      const upstreams = await Promise.all([MockRelay.start(), MockRelay.start()]);
+      // The relays as BitLogin's worker reaches them: over TLS, under made-up public names this browser resolves to this
+      // machine (as walletOpen.e2e does), each carried to a local one.
+      const certDir = mkdtempSync(join(tmpdir(), "bitlogin-guest-tls-"));
+      execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(certDir, "k.pem"), "-out", join(certDir, "c.pem"), "-days", "1", "-subj", "/CN=relay.bitlogin-test.example"], { stdio: "ignore" });
+      const tlsServers: import("node:https").Server[] = [];
+      const relayUrls: string[] = [];
+      for (const [i, upstream] of upstreams.entries()) {
+        const tls = createHttpsServer({ key: readFileSync(join(certDir, "k.pem")), cert: readFileSync(join(certDir, "c.pem")) });
+        const wss = new WebSocketServer({ server: tls });
+        wss.on("connection", (ws) => {
+          const up = new NodeWebSocket(upstream.url);
+          const waiting: string[] = [];
+          up.on("open", () => waiting.splice(0).forEach((m) => up.send(m)));
+          up.on("message", (m) => ws.readyState === 1 && ws.send(String(m)));
+          ws.on("message", (m) => (up.readyState === 1 ? up.send(String(m)) : waiting.push(String(m))));
+          ws.on("close", () => up.terminate());
+          up.on("error", () => ws.close());
+        });
+        await new Promise<void>((done) => tls.listen(0, "127.0.0.1", () => done()));
+        tlsServers.push(tls);
+        relayUrls.push(`wss://relay${i + 1}.bitlogin-test.example:${(tls.address() as { port: number }).port}`);
+      }
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${SIGNIN}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  window.ask = (message, wait = 4000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === "${SIGNIN}" && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, "${SIGNIN}");
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const portalPage = `<!doctype html><meta charset="utf-8"><title>the portal</title><div id="slot"></div>
+<script type="module">
+  // "#secure-own": the room is the top page, with its own signer frame beside the panel, as BitPortal's own pages
+  // mount both with no shell.
+  const own = location.hash.endsWith("-own");
+  if (own) {
+    const signer = document.createElement("iframe");
+    signer.id = "signer";
+    signer.src = "${SIGNIN}/signer/index.html";
+    signer.style.cssText = "width:1px;height:1px;border:0;position:absolute;left:-9px";
+    document.body.append(signer);
+    window.heard = [];
+    addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+    window.ask = (message, wait = 4000) => new Promise((done) => {
+      const id = "q" + Math.random().toString(36).slice(2, 8);
+      const on = (e) => { if (e.source === signer.contentWindow && e.origin === "${SIGNIN}" && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+      addEventListener("message", on);
+      signer.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, "${SIGNIN}");
+      setTimeout(() => done({ t: "no answer" }), wait);
+    });
+  }
+  window.said = [];
+  addEventListener("message", (e) => { if (e.origin === "${SIGNIN}" && e.data && e.data.bitlogin === "bitlogin-panel") window.said.push(e.data); });
+  const panel = document.createElement("iframe");
+  panel.id = "panel";
+  panel.src = "${SIGNIN}/connect/panel/";
+  panel.style.cssText = "width:480px;height:900px;border:0";
+  document.getElementById("slot").replaceChildren(panel);
+  const again = setInterval(() => {
+    if (window.said.some((m) => m.t === "ready")) return clearInterval(again);
+    const mode = location.hash.slice(1).replace(/-own$/u, "") || "account";
+    panel.contentWindow?.postMessage({ bitlogin: "bitlogin-panel", v: 1, t: "hello", mode, ...(mode === "ask" ? { world: location.origin } : {}) }, "${SIGNIN}");
+  }, 50);
+</script>`;
+      const RELAY = relayUrls.join(",");
+      const browser = await playwright!.chromium.launch({ args: ["--host-resolver-rules=MAP relay1.bitlogin-test.example 127.0.0.1,MAP relay2.bitlogin-test.example 127.0.0.1", "--ignore-certificate-errors", "--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        const context = await browser.newContext();
+        await context.route(/^https:\/\/signin\.bitlogin-test\.example\//u, async (route) => {
+          const url = new URL(route.request().url());
+          const relative = url.pathname.endsWith("/") ? `${url.pathname}index.html` : url.pathname;
+          const file = join(DIST, normalize(relative).replace(/^(\.\.[/\\])+/u, ""));
+          if (!existsSync(file)) return route.fulfill({ status: 404, body: "not found" });
+          let body: string | Buffer = await readFile(file);
+          if (["/connect/index.html", "/connect/panel/index.html", "/signer/index.html"].includes(relative)) body = body.toString("utf8").replace('<html lang="en">', `<html lang="en" data-vault-relays="${RELAY}" data-discovery-relays="${RELAY}">`);
+          return route.fulfill({ status: 200, contentType: MIME[extname(file)] ?? "application/octet-stream", headers: { "cache-control": "no-store" }, body });
+        });
+        await context.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) =>
+          route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: new URL(route.request().url()).hostname === "portal.bitblocks.network" ? portalPage : worldPage })
+        );
+        const world = async (host: string) => {
+          const page = await context.newPage();
+          await page.goto(`https://${host}/`);
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          return { page, ask: (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>> };
+        };
+        const one = await world("gp1.bitblocks.network");
+        const made = await one.ask({ t: "want", family: FAMILY, guest: true });
+        expect(made).toMatchObject({ unlocked: true, guest: true });
+        const guest = made.pubkey as string;
+
+        // BitPortal's own page, with no shell: the room is the top page, with its own signer frame and the panel side by
+        // side. Its signer is the same guest; the panel, mounted by it on "secure", opens on "Secure this account".
+        const room = await context.newPage();
+        await room.goto("https://portal.bitblocks.network/#secure-own");
+        await room.waitForFunction(() => (window as any).heard?.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        expect(await room.evaluate(() => (window as any).ask({ t: "want", family: "https://*.bitblocks.network", guest: true }))).toMatchObject({ unlocked: true, guest: true, pubkey: guest });
+        const roomWidget = room.frameLocator("#panel").locator("#account-slot bitlogin-auth");
+        await roomWidget.locator('form[data-form="create-name"]').waitFor({ timeout: 60_000 });
+        expect(await roomWidget.locator("h1, h2").first().textContent()).toContain("Secure this account");
+        await room.close();
+        // And asked by the room itself, the panel finds the room's own signer beside it (two deep from the panel, as
+        // framesOfClient looks): it goes on to sign in, never "BitLogin's signer wasn't found".
+        const asking = await context.newPage();
+        await asking.goto("https://portal.bitblocks.network/#ask-own");
+        await asking.frameLocator("#panel").locator("#signin").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await asking.frameLocator("#panel").locator("#status").textContent()).not.toContain("wasn't found");
+        await asking.close();
+
+        // The portal shows BitLogin's panel: it says this is a guest, and how long a guest lasts here.
+        const portal = await context.newPage();
+        await portal.goto("https://portal.bitblocks.network/");
+        const panel = portal.frameLocator("#panel");
+        await panel.locator("#guest").waitFor({ state: "visible", timeout: 60_000 }).catch(async (err) => {
+          const f = portal.frames().find((x) => x.url().includes("/connect/panel/"));
+          throw new Error(`no guest line. Panel: ${f ? (await f.evaluate(() => document.body.innerText.replace(/\s+/gu, " ").slice(0, 500)).catch((e) => String(e))) : "no frame"} | said: ${JSON.stringify(await portal.evaluate(() => (window as any).said.map((m: any) => m.t)))} | ${(err as Error).message.slice(0, 50)}`);
+        });
+        expect(await panel.locator("#guest-said").textContent()).toBe("You're a guest on this device.");
+        expect(await panel.locator("#guest-keep").textContent()).toBe("This account lives in this browser only. Clearing this site's data loses it.");
+        expect(await panel.locator("#guest-secure").textContent()).toBe("Secure this account");
+
+        // In Brave, which forgets a framed site's storage when it closes: said so, always, to a guest.
+        await context.addInitScript(() => {
+          if (location.hostname === "signin.bitlogin-test.example") Object.defineProperty(navigator, "brave", { value: { isBrave: () => Promise.resolve(true) } });
+        });
+        await portal.reload();
+        await panel.locator("#guest").waitFor({ state: "visible", timeout: 60_000 }).catch(async (err) => {
+          const f = portal.frames().find((x) => x.url().includes("/connect/panel/"));
+          throw new Error(`no guest line after reload. Panel: ${f ? (await f.evaluate(() => document.body.innerText.replace(/\s+/gu, " ").slice(0, 500) + " | brave:" + typeof (navigator as any).brave).catch((e) => String(e))) : "no frame"} | ${(err as Error).message.slice(0, 50)}`);
+        });
+        expect(await panel.locator("#guest-keep").textContent()).toBe("This browser forgets guests when it closes. Secure this account to keep it.");
+
+        // Secured: a login name, a generated password, the phrase written down. The same key: every world keeps who
+        // they are, and is told it is no longer a guest.
+        await shownLongEnough(portal);
+        await panel.locator("#guest-secure").click();
+        let widget = panel.locator("#account-slot bitlogin-auth");
+        await widget.locator('form[data-form="create-name"]').waitFor({ timeout: 30_000 });
+        expect(await widget.locator("h1, h2").first().textContent()).toContain("Secure this account");
+
+        // Or opened by the client on it, from a press there: the panel's "secure" mode. A new tab, so nothing the
+        // panel resumes from its last showing puts it there: only the mode.
+        await portal.close();
+        const securing = await context.newPage();
+        await securing.goto("https://portal.bitblocks.network/#secure");
+        widget = securing.frameLocator("#panel").locator("#account-slot bitlogin-auth");
+        await widget.locator('form[data-form="create-name"]').waitFor({ timeout: 60_000 });
+        expect(await widget.locator("h1, h2").first().textContent()).toContain("Secure this account");
+        // A press in the panel's first moments after it is shown is ignored (§SW19.8).
+        await shownLongEnough(securing);
+        await startPasswordSignUp(widget, `guest-${Date.now().toString(36)}`);
+        await widget.locator(".phrase-word").first().waitFor({ timeout: 90_000 }).catch(async (err) => {
+          const said = (await widget.evaluate((e) => (e as HTMLElement).shadowRoot?.textContent ?? "").catch(() => "")) as string;
+          throw new Error(`No phrase. The widget said: ${said.replace(/\s+/gu, " ").slice(0, 600)} | ${(err as Error).message.slice(0, 50)}`);
+        });
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+        expect(await securing.frameLocator("#panel").locator("#guest").isVisible()).toBe(false);
+        const two = await world("gp2.bitblocks.network");
+        await two.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        const after = await two.ask({ t: "state" });
+        expect(after).toMatchObject({ unlocked: true, pubkey: guest });
+        expect(after.guest).toBeUndefined();
+        // Opened on "secure" with no guest kept any more: the account page, nothing to secure.
+        await securing.goto("https://portal.bitblocks.network/#secure");
+        await securing.frameLocator("#panel").locator("#account").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await securing.frameLocator("#panel").locator("#guest").isVisible()).toBe(false);
+        // Its bag is still its own to write: now as an account, which a world asks for at first use.
+        expect((await two.ask({ t: "sign", event: { kind: 1, content: "secured", tags: [] } })).event?.pubkey).toBe(guest);
+      } finally {
+        await browser.close();
+        for (const t of tlsServers) t.close();
+        rmSync(certDir, { recursive: true, force: true });
+        await Promise.all(upstreams.map((u) => u.close()));
+      }
+    },
+    600_000
+  );
+
+  it(
+    "a visitor who arrives signed out is a guest account at once, the same guest in every world of the family (guest-accounts.md)",
+    async () => {
+      const FAMILY = "https://*.bitblocks.network";
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<button id="open">Sign in with BitLogin</button>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  document.getElementById("open").onclick = () => { window.popup = window.open(SIGNIN + "/connect/index.html", "bitlogin-connect", "popup,width=460,height=660"); };
+  window.ask = (message, wait = 4000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const appPage = `<!doctype html><meta charset="utf-8"><title>an application</title>
+<script type="module">
+  import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
+  window.bl = createBitLoginClient({ at: "${origin}", family: "${FAMILY}", guest: true, permissions: { name: "Portal test", sign: [1, 37308], read: [37308] } });
+  window.isReady = window.bl.ready();
+</script>`;
+      // The sign-in address is this machine's, and the worlds' pages "public": Chromium's check on a public page reaching
+      // a local one would block BitLogin's frame. The real addresses are both public; the check is off for the test.
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      const routed = async (context: import("playwright").BrowserContext) =>
+        context.route(/^https:\/\/[a-z0-9]+\.(bitblocks\.network|other-test\.example)\//u, async (route) => {
+          const url = new URL(route.request().url());
+          if (url.pathname.startsWith("/vendor/")) {
+            const file = join(DIST, normalize(url.pathname).replace(/^(\.\.[/\\])+/u, ""));
+            return route.fulfill({ status: 200, contentType: "text/javascript; charset=utf-8", body: await readFile(file) });
+          }
+          return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: url.hostname.startsWith("gapp") ? appPage : worldPage });
+        });
+      const world = async (context: import("playwright").BrowserContext, host: string) => {
+        const page = await context.newPage();
+        await page.goto(`https://${host}/`);
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 }).catch(async (err) => {
+          throw new Error(`${host}: no ready. Heard: ${JSON.stringify(await page.evaluate(() => (window as any).heard).catch(() => "?")).slice(0, 400)} | ${(err as Error).message.slice(0, 60)}`);
+        });
+        const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+        return { page, ask };
+      };
+      try {
+        // Nobody signed in anywhere in this browser.
+        const context = await browser.newContext();
+        await routed(context);
+        const one = await world(context, "g1.bitblocks.network");
+        expect(await one.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        // Asked for, with the family: made at once, with nothing pressed and no window.
+        const made = await one.ask({ t: "want", family: FAMILY, guest: true });
+        expect(made).toMatchObject({ t: "state", familyTaken: true, guestTaken: true, unlocked: true, guest: true });
+        const guest = made.pubkey as string;
+        expect(guest).toMatch(/^[0-9a-f]{64}$/u);
+        // No window was opened: the world's own page is the only one.
+        expect(context.pages().length).toBe(1);
+        // Its bag, with no press; a note; and nothing beyond.
+        const bag = await one.ask({ t: "sign", event: { kind: 37308, content: "{}", tags: [["d", "bag"]] } });
+        expect(bag).toMatchObject({ t: "signed", event: { kind: 37308, pubkey: guest } });
+        expect((await one.ask({ t: "sign", event: { kind: 1, content: "hello", tags: [] } })).t).toBe("signed");
+        for (const event of [{ kind: 37308, content: "{}", tags: [["d", "other"]] }, { kind: 0, content: "{}", tags: [] }, { kind: 3, content: "", tags: [] }]) {
+          expect((await one.ask({ t: "sign", event })).t, JSON.stringify(event.tags)).toBe("refused");
+        }
+        // The pass a world gets says it is a guest.
+        const passed = await one.ask({ t: "pass", session: getPublicKeyHex(generatePrivateKey()) });
+        expect(passed.t).toBe("signed");
+        expect(verifyNostrEvent(passed.event)).toBe(true);
+        expect(passed.event.tags).toContainEqual(["nswp:guest", "1"]);
+
+        // Another world of the family, that never asked: the same guest.
+        const two = await world(context, "g2.bitblocks.network");
+        await two.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        expect(await two.ask({ t: "state" })).toMatchObject({ unlocked: true, guest: true, pubkey: guest });
+        // A world's sign-out doesn't end the guest: loaded again, it is still the same guest.
+        expect(await two.ask({ t: "lock" })).toMatchObject({ unlocked: false });
+        await two.page.reload();
+        await two.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await two.ask({ t: "state" })).toMatchObject({ unlocked: true, guest: true, pubkey: guest });
+
+        // A family BitLogin doesn't know: no guest.
+        const elsewhere = await world(context, "g3.other-test.example");
+        expect(await elsewhere.ask({ t: "want", family: "https://*.other-test.example", guest: true })).toMatchObject({ familyTaken: false, guestTaken: false, unlocked: false });
+
+        // An application, through the client: told it is the guest, and handed the guest's pass, which says so.
+        const app = await context.newPage();
+        await app.goto("https://gapp1.bitblocks.network/");
+        expect(await app.evaluate(() => (window as any).isReady)).toMatchObject({ guest: true, pubkey: guest, familyTaken: true });
+        const appPass = (await app.evaluate((s) => (window as any).bl.roomPass(s), getPublicKeyHex(generatePrivateKey()))) as NostrEvent;
+        expect(appPass).toMatchObject({ kind: 27300, pubkey: guest });
+        expect(appPass.tags).toContainEqual(["nswp:origin", "https://gapp1.bitblocks.network"]);
+        expect(appPass.tags).toContainEqual(["nswp:guest", "1"]);
+        await context.close();
+
+        // A browser where an account was allowed for the family: the account wins, and no guest is made.
+        const second = await browser.newContext();
+        await routed(second);
+        const cdp = await second.newCDPSession(await second.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = second.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+        const a = await world(second, "g4.bitblocks.network");
+        expect(await a.ask({ t: "want", family: FAMILY })).toMatchObject({ familyTaken: true });
+        const [popup] = await Promise.all([second.waitForEvent("page"), a.page.click("#open")]);
+        await popup.locator("#allow-family").waitFor({ state: "visible", timeout: 30_000 });
+        await popup.waitForTimeout(1000);
+        await popup.locator("#allow-family").click();
+        await a.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        const b = await world(second, "g5.bitblocks.network");
+        const asked = await b.ask({ t: "want", family: FAMILY, guest: true });
+        expect(asked).toMatchObject({ unlocked: true, pubkey: me, guestTaken: false });
+        expect(asked.guest).toBeUndefined();
+      } finally {
+        await browser.close();
+      }
+    },
+    600_000
+  );
+
+  it(
+    "an application that asks for its family through the client is offered both at once: its own set, and the family's note and reaction (site-family.md SF5a)",
+    async () => {
+      const FAMILY = "https://*.bitblocks.network";
+      // An application's page: BitLogin's own client library, asking for its set and for its family.
+      const appPage = `<!doctype html><meta charset="utf-8"><title>an application</title><button id="open">Sign in</button>
+<script type="module">
+  import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
+  window.bl = createBitLoginClient({ at: "${origin}", family: "${FAMILY}", permissions: { name: "Portal test", sign: [1, 30078], appData: ["portaltest/"], read: [30078] } });
+  window.attempt = async (method, ...args) => {
+    try { return { ok: true, value: await window.bl[method](...args) }; } catch (err) { return { ok: false, name: err.name }; }
+  };
+  document.getElementById("open").onclick = () => { window.signedIn = window.bl.signIn(); };
+  window.isReady = window.bl.ready();
+</script>`;
+      // A world's page of the same family, with BitLogin's signer in it.
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const browser = await playwright!.chromium.launch();
+      /** A browser with its own account; pages under bitlogin's known family answered here, nothing asked of the real ones. */
+      const newBrowser = async () => {
+        const context = await browser.newContext();
+        await context.route(/^https:\/\/ff(app|w)[0-9]\.bitblocks\.network\//u, async (route) => {
+          const url = new URL(route.request().url());
+          if (url.pathname.startsWith("/vendor/")) {
+            const file = join(DIST, normalize(url.pathname).replace(/^(\.\.[/\\])+/u, ""));
+            return route.fulfill({ status: 200, contentType: "text/javascript; charset=utf-8", body: await readFile(file) });
+          }
+          return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: url.hostname.startsWith("ffapp") ? appPage : worldPage });
+        });
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+        return { context, widget, me };
+      };
+      const app = async (context: Awaited<ReturnType<typeof newBrowser>>["context"], n: number) => {
+        const page = await context.newPage();
+        await page.goto(`https://ffapp${n}.bitblocks.network/`);
+        const state = (await page.evaluate(() => (window as any).isReady)) as Record<string, unknown>;
+        const attempt = (method: string, ...args: unknown[]) => page.evaluate(([m, a]) => (window as any).attempt(m, ...(a as unknown[])), [method, args] as const) as Promise<{ ok: boolean; value?: any; name?: string }>;
+        const window_ = async () => {
+          const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+          return popup;
+        };
+        return { page, state, attempt, window: window_ };
+      };
+      const world = async (context: Awaited<ReturnType<typeof newBrowser>>["context"], n: number) => {
+        const page = await context.newPage();
+        await page.goto(`https://ffw${n}.bitblocks.network/`);
+        await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+        return { page, ask };
+      };
+      try {
+        const { context, me } = await newBrowser();
+
+        // The client asked for its family, and the signer took it: said in the client's state before any window.
+        const one = await app(context, 1);
+        expect(one.state).toMatchObject({ signedIn: false, canAsk: true, familyTaken: true });
+        const first = await one.window();
+        await first.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        // Its own set, as today, and the family line beside it.
+        expect(await first.locator("#app-site").textContent()).toBe("https://ffapp1.bitblocks.network");
+        expect(await first.locator("#app-family").isVisible()).toBe(true);
+        expect(await first.locator("#app-family-domain").textContent()).toBe("bitblocks.network");
+        expect(await first.locator("#allow-app-family").textContent()).toBe("Stay signed in at every bitblocks.network site");
+        expect(await first.locator("#allow-app").textContent()).toBe("Just this one");
+        await first.waitForTimeout(1000);
+        await first.locator("#allow-app-family").click();
+        expect(await one.page.evaluate(() => (window as any).signedIn)).toBe(true);
+        // The application has what it asked for, at its own address.
+        const kept = await one.attempt("signEvent", { kind: 30078, content: "{}", tags: [["d", "portaltest/x"]] });
+        expect(kept.ok).toBe(true);
+        expect(kept.value).toMatchObject({ kind: 30078, pubkey: me });
+
+        // Another world of the family: signed in with nothing pressed, for a note and a reaction, and nothing of the
+        // application's set: its kinds never reach the family.
+        const w = await world(context, 1);
+        await w.page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+        expect(await w.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me });
+        expect((await w.ask({ t: "sign", event: { kind: 1, content: "from a world", tags: [] } })).t).toBe("signed");
+        for (const kind of [0, 3, 30078]) expect((await w.ask({ t: "sign", event: { kind, content: "{}", tags: [["d", "portaltest/x"]] } })).t, String(kind)).toBe("refused");
+
+        // Signing out at the application signs out of the family too.
+        await one.attempt("signOut");
+        await w.page.reload();
+        await w.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await w.ask({ t: "state" })).toMatchObject({ unlocked: false });
+
+        // "Just this one" at another application of the family: its own set alone; the line isn't shown at the next.
+        const two = await app(context, 2);
+        const second = await two.window();
+        await second.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await second.locator("#app-family").isVisible()).toBe(true);
+        await second.waitForTimeout(1000);
+        await second.locator("#allow-app").click();
+        expect(await two.page.evaluate(() => (window as any).signedIn)).toBe(true);
+        const w2 = await world(context, 2);
+        expect(await w2.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        const three = await app(context, 3);
+        const third = await three.window();
+        await third.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await third.locator("#app-family").isVisible()).toBe(false);
+        expect(await third.locator("#allow-app-family").isVisible()).toBe(false);
+        expect(await third.locator("#allow-app").textContent()).toBe("Allow");
+        await third.close();
+
+        // With the lock on (another browser, nothing declined there): no family line, only the application's Allow.
+        const locked = await newBrowser();
+        await locked.widget.locator('[data-action="goto-lock-settings"]').click();
+        await locked.widget.locator('form[data-form="lock-enable"] input[name="newLockPin"]').fill("246810");
+        await locked.widget.locator('form[data-form="lock-enable"] input[name="newLockPinAgain"]').fill("246810");
+        await locked.widget.locator('form[data-form="lock-enable"] button[type="submit"]').click();
+        await locked.widget.locator('[data-action="lock-off"]').waitFor({ timeout: 60_000 });
+        const four = await app(locked.context, 4);
+        const fourth = await four.window();
+        await fourth.locator("#unlock").waitFor({ state: "visible", timeout: 30_000 });
+        await fourth.locator("#unlock-pin").fill("246810");
+        await fourth.locator("#unlock-go").click();
+        await fourth.locator("#allow-app").waitFor({ state: "visible", timeout: 60_000 });
+        expect(await fourth.locator("#app-family").isVisible()).toBe(false);
+        expect(await fourth.locator("#allow-app-family").isVisible()).toBe(false);
+        expect(await fourth.locator("#allow-app").textContent()).toBe("Allow");
+      } finally {
+        await browser.close();
+      }
+    },
+    600_000
+  );
+
+  it(
+    "a world that asks for its family at its first sign-in is offered it there, for a family BitLogin knows (site-family.md SF4a)",
+    async () => {
+      // Sites under bitblocks.network, a family BitLogin knows. Nothing is asked of the real addresses: the browser's
+      // requests for these pages are answered here.
+      const sitePage = `<!doctype html><meta charset="utf-8"><title>a world</title><button id="open">Sign in with BitLogin</button>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
+  document.getElementById("open").onclick = () => { window.popup = window.open(SIGNIN + "/connect/index.html", "bitlogin-connect", "popup,width=460,height=660"); };
+  window.ask = (message, wait = 2500) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const [A, B, C, D] = ["ffa", "ffb", "ffc", "ffd"].map((n) => `https://${n}.bitblocks.network`);
+      const FAMILY = "https://*.bitblocks.network";
+      const browser = await playwright!.chromium.launch();
+      try {
+        const context = await browser.newContext();
+        await context.route(/^https:\/\/ff[a-d]\.bitblocks\.network\//u, (route) =>
+          route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: sitePage })
+        );
+        const cdp = await context.newCDPSession(await context.newPage());
+        await cdp.send("WebAuthn.enable");
+        await cdp.send("WebAuthn.addVirtualAuthenticator", {
+          options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, hasPrf: true, isUserVerified: true, automaticPresenceSimulation: true }
+        });
+        const account = context.pages()[0]!;
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="toggle-more"]').waitFor({ timeout: 30_000 });
+        if ((await widget.locator('[data-action="goto-passkey"]').count()) === 0) await widget.locator('[data-action="toggle-more"]').click();
+        await widget.locator('[data-action="goto-passkey"]').click();
+        await widget.locator('[data-action="passkey-register"]').click();
+        await widget.locator('[data-action="passkey-new"]').waitFor({ timeout: 30_000 });
+        await widget.locator('[data-action="passkey-new"]').click();
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 60_000 });
+        const me = (await account.evaluate(() => window.bitlogin?.activeSession()))!.publicKey;
+
+        const visit = async (site: string) => {
+          const page = await context.newPage();
+          await page.goto(`${site}/`);
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          const ask = (message: Record<string, unknown>) => page.evaluate((m) => (window as any).ask(m), message) as Promise<Record<string, any>>;
+          const window_ = async () => {
+            const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+            await popup.locator("#allow").waitFor({ state: "visible", timeout: 30_000 });
+            await popup.waitForTimeout(1000);
+            return popup;
+          };
+          const unlocked = () => page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "state" && m.data.unlocked), null, { timeout: 30_000 });
+          return { page, ask, window: window_, unlocked };
+        };
+
+        // The first world of the family asks for it. Another family than its own is not taken; its own is.
+        const a = await visit(A);
+        expect(await a.ask({ t: "want", family: "https://*.other-test.example" })).toMatchObject({ t: "state", familyTaken: false });
+        expect(await a.ask({ t: "want", family: FAMILY })).toMatchObject({ t: "state", familyTaken: true, unlocked: false });
+        const first = await a.window();
+        expect(await first.locator("#site").textContent()).toBe(A);
+        expect(await first.locator("#family").isVisible()).toBe(true);
+        // No earlier site to name: the first sign-in says only what the family is.
+        expect(await first.locator("#family-before").isVisible()).toBe(false);
+        expect(await first.locator("#family-domain").textContent()).toBe("bitblocks.network");
+        expect(await first.locator("#family-lasts").textContent()).toContain("30 days");
+        expect(await first.locator("#allow-family").textContent()).toBe("Stay signed in at every bitblocks.network site");
+        expect(await first.locator("#allow").textContent()).toBe("Just this one");
+        // Choosing the family is the remembering: unticking "remember" leaves it offered.
+        await first.locator("#remember").uncheck();
+        expect(await first.locator("#allow-family").isVisible()).toBe(true);
+        await first.locator("#allow-family").click();
+        await a.unlocked();
+        const aState = await a.ask({ t: "state" });
+        expect(aState).toMatchObject({ unlocked: true, pubkey: me, remembered: true });
+        expect(aState.until - Date.now() / 1000).toBeGreaterThan(29 * 24 * 3600);
+
+        // Another world of the family, never seen: signed in with no window and nothing pressed.
+        const b = await visit(B);
+        await b.unlocked();
+        expect(await b.ask({ t: "state" })).toMatchObject({ unlocked: true, pubkey: me });
+
+        // A sign-out at any of them signs out of the family.
+        expect(await b.ask({ t: "lock" })).toMatchObject({ unlocked: false });
+        await a.page.reload();
+        await a.page.waitForFunction(() => typeof (window as any).ask === "function");
+        expect(await a.ask({ t: "state" })).toMatchObject({ unlocked: false });
+
+        // Asked again at another world, and this time "Just this one": that world alone, and the line is not shown
+        // at the next world that asks, for thirty days.
+        const c = await visit(C);
+        expect(await c.ask({ t: "want", family: FAMILY })).toMatchObject({ familyTaken: true });
+        const third = await c.window();
+        expect(await third.locator("#allow-family").isVisible()).toBe(true);
+        await third.locator("#allow").click();
+        await c.unlocked();
+        const d = await visit(D);
+        expect(await d.ask({ t: "want", family: FAMILY })).toMatchObject({ familyTaken: true });
+        expect(await d.ask({ t: "state" })).toMatchObject({ unlocked: false });
+        const fourth = await d.window();
+        expect(await fourth.locator("#family").isVisible()).toBe(false);
+        expect(await fourth.locator("#allow-family").isVisible()).toBe(false);
+        expect(await fourth.locator("#allow").textContent()).toBe("Allow");
+      } finally {
+        await browser.close();
+      }
+    },
+    300_000
   );
 
   it(
@@ -3064,13 +3674,14 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
 <script type="module">
   import { createBitLoginClient } from "/vendor/bitlogin/bitlogin-client.js";
   const more = new URLSearchParams(location.search).has("more");
+  const pass = new URLSearchParams(location.search).has("pass");
   window.heard = [];
   addEventListener("message", (e) => window.heard.push({ origin: e.origin, data: e.data }));
   window.bl = createBitLoginClient({
     at: "${origin}",
     permissions: {
       name: "Test App",
-      sign: [0, 1, 5, 7, 27235, 30078, ...(more ? [3] : [])],
+      sign: [0, 1, 5, 7, 27235, 30078, ...(more ? [3] : []), ...(pass ? [27300] : [])],
       appData: ["testapp:"],
       proofs: ["https://api.testapp.example"],
       read: [30078]
@@ -3171,6 +3782,8 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await popup.locator("#allow-app").click();
         expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
         expect(await page.evaluate(() => (window as any).bl.state())).toMatchObject({ signedIn: true, pubkey: me });
+        // A room pass: not for an application whose approved set doesn't sign the pass's kind.
+        expect((await attempt("roomPass", getPublicKeyHex(generatePrivateKey()))).ok).toBe(false);
 
         // An application can put a careful kind to the person too (§SW20), through the client: BitLogin's page
         // shows it in words, signs it on a press, and the client hands back exactly what was asked.
@@ -3247,6 +3860,23 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await page.goto(`${site}/?more`);
         expect(await page.evaluate(() => (window as any).isReady)).toEqual({ signedIn: false, needsMore: true, canAsk: true });
         expect((await sign({ kind: 3, content: "", tags: [] })).ok).toBe(false);
+
+        // Approved again for a set that signs the pass's kind (a local copy and a local application may hold it): a
+        // room pass, for its own address, saying nothing of a guest.
+        await page.goto(`${site}/?pass`);
+        expect(await page.evaluate(() => (window as any).isReady)).toMatchObject({ signedIn: false, needsMore: true });
+        const [again] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);
+        await again.locator("#allow-app").waitFor({ state: "visible", timeout: 30_000 });
+        await again.waitForTimeout(1000);
+        await again.locator("#allow-app").click();
+        expect(await page.evaluate(() => (window as any).signedIn)).toBe(true);
+        const sessionForPass = getPublicKeyHex(generatePrivateKey());
+        const passed = await attempt("roomPass", sessionForPass);
+        expect(passed.ok).toBe(true);
+        expect(verifyNostrEvent(passed.value)).toBe(true);
+        expect(passed.value).toMatchObject({ kind: 27300, pubkey: me });
+        expect(passed.value.tags.slice(0, 2)).toEqual([["nswp:session", sessionForPass], ["nswp:origin", site]]);
+        expect(passed.value.tags.some((t: string[]) => t[0] === "nswp:guest")).toBe(false);
 
         // Nothing the application heard was a key.
         expect(JSON.stringify(await page.evaluate(() => (window as any).heard))).not.toMatch(/nsec1|"payload"|senderPublicKey/u);
@@ -3662,6 +4292,328 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
         await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
       } finally {
         for (const i of [0, 1]) relays[i]!.refuseConnections = false;
+        await browser.close();
+      }
+    },
+    300_000
+  );
+
+  // Paused (the owner's "Yes, pause it now", 2026-11-25): this runs again once pairing is open again.
+  it.skipIf(PAIRING_PAUSED)(
+    "a headset is signed in from a phone: the number it shows is tapped on the phone, and a wrong one signs nothing in (pair-a-headset.md)",
+    async () => {
+      // Relays as real ones are: an ephemeral note is passed on to whoever listens, and kept by none.
+      for (const relay of relays) relay.keepsEphemeral = false;
+      const QUEST = "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/35.1 Chrome/126.0 VR Safari/537.36";
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN) window.heard.push({ origin: e.origin, data: e.data }); });
+  window.post = (message) => frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, ...message }, SIGNIN);
+  window.ask = (message, wait = 4000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    window.post({ id, ...message });
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      // The world's pages are "public" and BitLogin's this machine's: the check on that is off for the test only.
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        // The phone: an account, signed in on BitLogin's own page.
+        const phone = await browser.newContext();
+        const account = await phone.newPage();
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, `phone-${Date.now().toString(36)}`);
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+        const npub = ((await widget.locator(".pubkey").textContent()) ?? "").trim();
+
+        // The headset: a world, with nobody signed in, in a browser that says it is a Quest's.
+        const headset = await browser.newContext({ userAgent: QUEST });
+        await headset.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: worldPage }));
+        const world = async (host: string) => {
+          const page = await headset.newPage();
+          await page.goto(`https://${host}/`);
+          await page.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+          return page;
+        };
+        const said = (page: import("playwright").Page, id: string) => page.evaluate((i) => (window as any).heard.map((m: any) => m.data).filter((d: any) => d.id === i), id) as Promise<Record<string, any>[]>;
+        const waitSaid = (page: import("playwright").Page, id: string, t: string, more = "") =>
+          page.waitForFunction(([i, k, m]) => (window as any).heard.some((h: any) => h.data?.id === i && h.data.t === k && (!m || h.data[m] !== undefined)), [id, t, more] as const, { timeout: 60_000 });
+
+        const h1 = await world("h1.bitblocks.network");
+        await h1.evaluate(() => (window as any).post({ t: "pair", id: "p1" }));
+        await waitSaid(h1, "p1", "pairing");
+        const shown = (await said(h1, "p1")).find((d) => d.t === "pairing")!;
+        expect(shown.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/u);
+        expect(shown.url).toBe(`${origin}/pair/#${shown.code}`);
+        expect(shown.expires).toBeGreaterThan(Date.now() / 1000 + 200);
+
+        // The phone opens the QR's address: asked first whether they hold the headset, and the code leaves the address.
+        const pair = await phone.newPage();
+        const pageErrors: string[] = [];
+        pair.on("pageerror", (err) => pageErrors.push(String(err)));
+        pair.on("console", (m) => m.type() === "error" && pageErrors.push(m.text()));
+        await pair.goto(shown.url);
+        await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 }).catch((err) => {
+          throw new Error(`no question on /pair: ${pageErrors.join(" | ").slice(0, 600)} | ${(err as Error).message.slice(0, 60)}`);
+        });
+        expect(await pair.locator("#step-holding").textContent()).toContain("Did you just press Sign in on a headset you are holding?");
+        expect(new URL(pair.url()).hash).toBe("");
+        await pair.waitForTimeout(1000);
+        await pair.locator("#holding-yes").click();
+        await pair.locator("#step-number").waitFor({ state: "visible", timeout: 60_000 });
+        // The headset shows the number the phone sent, and the phone offers it among three.
+        await waitSaid(h1, "p1", "pairing", "number");
+        const number = (await said(h1, "p1")).find((d) => d.t === "pairing" && d.number !== undefined)!.number as number;
+        const choices = (await pair.locator("#numbers button").allTextContents()).map(Number);
+        expect(choices).toHaveLength(3);
+        expect(choices).toContain(number);
+        await pair.waitForTimeout(1000);
+        await pair.locator("#numbers button", { hasText: String(number) }).click();
+        await pair.locator("#step-ask").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await pair.locator("#ask-device").textContent()).toBe("A headset (Meta Quest Browser)");
+        expect(await pair.locator("#ask-site").textContent()).toBe("at https://h1.bitblocks.network");
+        expect(await pair.locator("#ask-code").textContent()).toBe(`Code ${shown.code}`);
+        expect(await pair.locator("#ask-family").textContent()).toBe("Stay signed in at every bitblocks.network site");
+        expect(await pair.locator("#step-ask").textContent()).toContain("Only sign in a headset you are holding.");
+        await pair.waitForTimeout(1000);
+        await pair.locator("#ask-site-only").click();
+        await pair.locator("#said").filter({ hasText: "Sent." }).waitFor({ timeout: 60_000 });
+
+        // The headset is signed in, as the phone's account, with nothing typed in it.
+        await waitSaid(h1, "p1", "paired");
+        const state = await h1.evaluate(() => (window as any).ask({ t: "state" }));
+        expect(state).toMatchObject({ unlocked: true, remembered: true });
+        expect(encodeNpub(state.pubkey)).toBe(npub);
+        const note = await h1.evaluate(() => (window as any).ask({ t: "sign", event: { kind: 1, content: "from a headset", tags: [] } }));
+        expect(note).toMatchObject({ t: "signed", event: { kind: 1, pubkey: state.pubkey } });
+        // Kept, as an Allow is: loaded again, still signed in. And it can't be paired over now: an account is signed in.
+        await h1.reload();
+        await h1.waitForFunction(() => (window as any).heard.some((m: any) => m.data?.t === "ready"), null, { timeout: 30_000 });
+        expect(await h1.evaluate(() => (window as any).ask({ t: "state" }))).toMatchObject({ unlocked: true, pubkey: state.pubkey });
+        expect(await h1.evaluate(() => (window as any).ask({ t: "pair" }))).toMatchObject({ t: "refused" });
+
+        // On the phone's list: that headset, signed out on its own.
+        const sites = await phone.newPage();
+        await sites.goto(`${origin}/sites/`);
+        const row = sites.locator("#sites li", { hasText: "A headset (Meta Quest Browser)" });
+        await row.waitFor({ timeout: 30_000 });
+        expect(await row.textContent()).toContain("BitLogin can't change an account's key yet.");
+        expect(await row.locator("button").textContent()).toBe("Sign out this headset");
+
+        // Another headset world, its code typed in by hand (no question first), and the wrong number tapped.
+        const h2 = await world("h2.bitblocks.network");
+        await h2.evaluate(() => (window as any).post({ t: "pair", id: "p2" }));
+        await waitSaid(h2, "p2", "pairing");
+        const second = (await said(h2, "p2")).find((d) => d.t === "pairing")!;
+        await pair.goto(`${origin}/pair/`);
+        await pair.locator("#step-code").waitFor({ state: "visible", timeout: 30_000 });
+        await pair.locator("#code").fill(second.code.toLowerCase().replace("-", " "));
+        await pair.locator("#find").click();
+        await pair.locator("#step-number").waitFor({ state: "visible", timeout: 60_000 });
+        await waitSaid(h2, "p2", "pairing", "number");
+        const right = (await said(h2, "p2")).find((d) => d.t === "pairing" && d.number !== undefined)!.number as number;
+        const wrong = (await pair.locator("#numbers button").allTextContents()).map(Number).find((n) => n !== right)!;
+        await pair.waitForTimeout(1000);
+        await pair.locator("#numbers button", { hasText: String(wrong) }).click();
+        await pair.locator("#said").filter({ hasText: "isn't the number the headset shows" }).waitFor({ timeout: 30_000 });
+        await waitSaid(h2, "p2", "pairing-expired");
+        expect((await said(h2, "p2")).find((d) => d.t === "pairing-expired")).toMatchObject({ why: "refused" });
+        expect(await h2.evaluate(() => (window as any).ask({ t: "state" }))).toMatchObject({ unlocked: false });
+
+        // A code no headset shows: said plainly.
+        await pair.goto(`${origin}/pair/`);
+        await pair.locator("#code").fill("ZZZZ-ZZZZ");
+        await pair.locator("#find").click();
+        await pair.locator("#said").filter({ hasText: "No headset is showing that code." }).waitFor({ timeout: 30_000 });
+
+        // "Sign out this headset": published, for that device alone.
+        await sites.reload();
+        await sites.locator("#sites li", { hasText: "A headset (Meta Quest Browser)" }).locator("button").click();
+        await sites.locator("#said").filter({ hasText: "Signed out: that headset, and no other device." }).waitFor({ timeout: 60_000 });
+      } finally {
+        for (const relay of relays) relay.keepsEphemeral = true;
+        await browser.close();
+      }
+    },
+    300_000
+  );
+
+  it(
+    "in-world pairing stays paused: a headset's pair is answered at once, and the phone's worker answers no offer it didn't find",
+    async () => {
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN) window.heard.push(e.data); });
+  window.post = (message) => frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, ...message }, SIGNIN);
+</script>`;
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        const headset = await browser.newContext();
+        await headset.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: worldPage }));
+        const world = await headset.newPage();
+        await world.goto("https://h1.bitblocks.network/");
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        await world.evaluate(() => (window as any).post({ t: "pair", id: "p1" }));
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.id === "p1"), null, { timeout: 30_000 });
+        const said = (await world.evaluate(() => (window as any).heard.filter((m: any) => m.id === "p1"))) as Record<string, unknown>[];
+        // At once, and with no code: nothing is offered for a phone to answer.
+        expect(said[0]).toMatchObject({ t: "pairing-expired", id: "p1", why: "paused" });
+        expect(said.some((m) => m.t === "pairing")).toBe(false);
+
+        // The phone: signed in, and opening a code from a link. Only the words, and no question.
+        const phone = await browser.newContext();
+        const account = await phone.newPage();
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, `paused-${Date.now().toString(36)}`);
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+        const pair = await phone.newPage();
+        await pair.goto(`${origin}/pair/`);
+
+        // The worker itself, asked by a script on BitLogin's own page, signed in: refused, whatever it is given.
+        // As a string, so the test runner leaves its import() as the browser's own.
+        const refusals = (await pair.evaluate(`(async () => {
+          const { createHeadlessSigner } = await import("/vendor/bitlogin/bitlogin-headless.js");
+          const list = (v) => (v || "").split(",").filter(Boolean);
+          const s = await createHeadlessSigner({ vaultRelays: list(document.documentElement.dataset.vaultRelays), discoveryRelays: list(document.documentElement.dataset.discoveryRelays) });
+          if (!(await s.restore())) return ["not signed in"];
+          const out = [];
+          for (const args of [["", 0], ["${"ab".repeat(32)}", 47], ["x", 47, "https://*.bitblocks.network"], [{}, "47"]]) {
+            try {
+              await s.pairAnswer(...args);
+              out.push("answered");
+            } catch (err) {
+              out.push(String(err && err.message));
+            }
+          }
+          try {
+            await s.pairBegin("https://h1.bitblocks.network", "a browser");
+            out.push("began");
+          } catch (err) {
+            out.push(String(err && err.message));
+          }
+          s.destroy();
+          return out;
+        })()`)) as string[];
+        // An offer it never found is no offer (Way 1 lifts the pause only for offers BitLogin's own page makes), and an
+        // in-world pairBegin stays paused.
+        expect(refusals.slice(0, 4).every((r) => r !== "answered" && r.length > 0)).toBe(true);
+        expect(refusals[4]).toBe(PAUSED_WORDS);
+      } finally {
+        await browser.close();
+      }
+    },
+    240_000
+  );
+
+  it(
+    "Way 1: a world opens BitLogin's own /headset/ page, the code and number are shown there only, and the phone signs the world in through it (pair-a-headset.md)",
+    async () => {
+      for (const relay of relays) relay.keepsEphemeral = false;
+      const QUEST = "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/35.1 Chrome/126.0 VR Safari/537.36";
+      const worldPage = `<!doctype html><meta charset="utf-8"><title>a world</title>
+<iframe id="signer" src="${origin}/signer/index.html" style="width:1px;height:1px;border:0;position:absolute;left:-9px"></iframe>
+<button id="phone">Sign In using Phone</button>
+<script type="module">
+  const SIGNIN = "${origin}";
+  const frame = document.getElementById("signer");
+  window.heard = [];
+  addEventListener("message", (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN) window.heard.push(e.data); });
+  // From the press, as the kit's outOfVr does: a window, with its link back.
+  document.getElementById("phone").onclick = () => { window.opened = window.open(SIGNIN + "/headset/", "bitlogin-headset", "popup"); };
+  window.ask = (message, wait = 4000) => new Promise((done) => {
+    const id = "q" + Math.random().toString(36).slice(2, 8);
+    const on = (e) => { if (e.source === frame.contentWindow && e.origin === SIGNIN && e.data && e.data.id === id) { removeEventListener("message", on); done(e.data); } };
+    addEventListener("message", on);
+    frame.contentWindow.postMessage({ nswp: "nswp-signer", v: 1, id, ...message }, SIGNIN);
+    setTimeout(() => done({ t: "no answer" }), wait);
+  });
+</script>`;
+      const browser = await playwright!.chromium.launch({ args: ["--disable-features=LocalNetworkAccessChecks"] });
+      try {
+        // The phone, signed in.
+        const phone = await browser.newContext();
+        const account = await phone.newPage();
+        await account.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = account.locator("bitlogin-auth");
+        await widget.locator('[data-action="goto-create"]').click();
+        await startPasswordSignUp(widget, `way1-${Date.now().toString(36)}`);
+        await completeRecoveryCeremony(widget);
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+        const npub = ((await widget.locator(".pubkey").textContent()) ?? "").trim();
+
+        // The headset: a world, nobody signed in, and its press.
+        const headset = await browser.newContext({ userAgent: QUEST });
+        await headset.route(/^https:\/\/[a-z0-9]+\.bitblocks\.network\//u, (route) => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "cache-control": "no-store" }, body: worldPage }));
+        const world = await headset.newPage();
+        await world.goto("https://w1.bitblocks.network/");
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "ready"), null, { timeout: 30_000 });
+        expect(await world.evaluate(() => (window as any).ask({ t: "state" }))).toMatchObject({ unlocked: false });
+        const [page] = await Promise.all([headset.waitForEvent("page"), world.locator("#phone").click()]);
+        // BitLogin's own page: the address-bar line first, the site the browser named, and the code.
+        await page.locator("#code").filter({ hasText: /^[0-9A-Z]{4}-[0-9A-Z]{4}$/u }).waitFor({ timeout: 60_000 });
+        expect(new URL(page.url()).origin).toBe(origin);
+        expect(await page.locator("#check").textContent()).toContain("Check that the address bar says bitlogin.network.");
+        expect(await page.locator("#site").textContent()).toBe("https://w1.bitblocks.network");
+        expect(await page.locator("#qr svg").count()).toBe(1);
+        const code = ((await page.locator("#code").textContent()) ?? "").trim();
+        // The world itself was told nothing of it.
+        expect(JSON.stringify(await world.evaluate(() => (window as any).heard))).not.toContain(code);
+
+        // The phone: asked about the address bar first, then the number the BitLogin page shows.
+        const pair = await phone.newPage();
+        await pair.goto(`${origin}/pair/#${code}`);
+        await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await pair.locator("#step-holding").textContent()).toContain("Is the code on a page whose address bar says bitlogin.network, on a headset you are holding?");
+        // No default: two buttons of the same weight, and neither has the focus.
+        expect(await pair.locator("#holding-yes").getAttribute("class")).toBe(await pair.locator("#holding-no").getAttribute("class"));
+        expect(await pair.evaluate(() => document.activeElement?.id ?? "")).not.toMatch(/^holding-/u);
+        await pair.waitForTimeout(1000);
+        await pair.locator("#holding-yes").click();
+        await pair.locator("#step-number").waitFor({ state: "visible", timeout: 60_000 });
+        await page.locator("#number-line").waitFor({ state: "visible", timeout: 30_000 });
+        const number = ((await page.locator("#number").textContent()) ?? "").trim();
+        await pair.waitForTimeout(1000);
+        await pair.locator("#numbers button", { hasText: number }).click();
+        await pair.locator("#step-ask").waitFor({ state: "visible", timeout: 30_000 });
+        expect(await pair.locator("#ask-site").textContent()).toBe("at https://w1.bitblocks.network");
+        expect(await pair.locator("#ask-device").textContent()).toBe("A headset (Meta Quest Browser)");
+        await pair.waitForTimeout(1000);
+        await pair.locator("#ask-site-only").click();
+        await pair.locator("#said").filter({ hasText: "Sent." }).waitFor({ timeout: 60_000 });
+
+        // BitLogin's page passes it to the world's signer, says so, and closes; the world is signed in as the phone's account.
+        await page.waitForEvent("close", { timeout: 60_000 });
+        await world.waitForFunction(() => (window as any).heard.some((m: any) => m.t === "state" && m.unlocked), null, { timeout: 30_000 });
+        const state = await world.evaluate(() => (window as any).ask({ t: "state" }));
+        expect(state).toMatchObject({ unlocked: true, remembered: true });
+        expect(encodeNpub(state.pubkey)).toBe(npub);
+        expect(await world.evaluate(() => (window as any).ask({ t: "sign", event: { kind: 1, content: "from a headset", tags: [] } }))).toMatchObject({ t: "signed", event: { pubkey: state.pubkey } });
+        // In-world pairing stays refused.
+        expect(await world.evaluate(() => (window as any).ask({ t: "pair" }))).toMatchObject({ t: "pairing-expired", why: "paused" });
+
+        // A typed code is asked about too.
+        await pair.goto(`${origin}/pair/`);
+        await pair.locator("#code").fill("ZZZZ-ZZZZ");
+        await pair.locator("#find").click();
+        await pair.locator("#step-holding").waitFor({ state: "visible", timeout: 30_000 });
+      } finally {
+        for (const relay of relays) relay.keepsEphemeral = true;
         await browser.close();
       }
     },

@@ -362,6 +362,39 @@ export class WorkerClient {
   signerRestore(payload: SignerSitePayload) {
     return this.call("signerRestore", payload);
   }
+  guestStatus(family: string) {
+    return this.call("guestStatus", { family });
+  }
+  pairBegin(site: string, device: string) {
+    return this.call("pairBegin", { site, device });
+  }
+  pairPoll() {
+    return this.call("pairPoll", {});
+  }
+  pairCancel() {
+    return this.call("pairCancel", {});
+  }
+  headsetBegin(site: string, device: string, to: string) {
+    return this.call("headsetBegin", { site, device, to });
+  }
+  headsetPoll() {
+    return this.call("headsetPoll", {});
+  }
+  headsetCancel() {
+    return this.call("headsetCancel", {});
+  }
+  pairFind(code: string) {
+    return this.call("pairFind", { code });
+  }
+  pairFound(offer: string) {
+    return this.call("pairFound", { offer });
+  }
+  pairEnd(offer: string) {
+    return this.call("pairEnd", { offer });
+  }
+  pairAnswer(offer: string, number: number, family?: string) {
+    return this.call("pairAnswer", { offer, number, ...(family ? { family } : {}) });
+  }
   signerTouch(payload: SignerTouchPayload) {
     return this.call("signerTouch", payload);
   }

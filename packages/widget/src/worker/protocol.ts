@@ -2,6 +2,7 @@
 import type { NostrEvent, NostrTag } from "@bitlogin/core/nostr";
 import type { RebroadcastResult, RecoveryExportFile, ReplicaHealthResult } from "@bitlogin/core/account";
 import type { AppPermissions } from "../embedded/permissions.js";
+import type { PairOffer } from "../embedded/pair.js";
 import type { Profile } from "../embedded/profile.js";
 import type { WorldMore } from "../embedded/follows.js";
 import type { ReadMessage, WrittenMessage } from "../embedded/messages.js";
@@ -36,6 +37,11 @@ export interface RegisterPayload {
   password: string;
   /** When present, import this existing identity (nsec or 64-char hex) instead of generating one (§SF10). */
   importKey?: string;
+  /**
+   * Secure this family's guest account (docs/guest-accounts.md G6): the account is made from the guest's own phrase,
+   * so its key is the guest's, and the family is then signed in as it, the guest forgotten.
+   */
+  fromGuest?: string;
 }
 export interface RegisterResult {
   recoveryPhrase: string;
@@ -217,6 +223,8 @@ export interface TakeBackPayload {
   site?: string;
   /** Every site, on every device: "sign out of every site". */
   all?: boolean;
+  /** One device a phone paired, by its id (docs/pair-a-headset.md): "Sign out this headset". */
+  device?: string;
 }
 export interface TakeBackResult {
   /** Enough relays accepted the record for it to be found. False: nothing was taken back. */
@@ -336,6 +344,8 @@ export interface SignerSitePayload {
   site: string;
   /** For signerRestore: the family the site is in, by the embedded signer's Public Suffix List. Its grant is taken up where the site has none of its own. */
   family?: string;
+  /** For signerRestore: make the family's guest account where nobody is signed in here and none is kept (docs/guest-accounts.md). */
+  guest?: boolean;
 }
 
 export interface SignerTouchPayload {
@@ -364,6 +374,8 @@ export interface SignerRestoreResult {
   signedSensitive?: number[];
   /** What this world was let do beyond a note and a reaction, by name. */
   more?: WorldMore[];
+  /** A guest account (docs/guest-accounts.md), not yet secured. */
+  guest?: boolean;
 }
 
 // ---- The optional lock (docs/sign-in-window.md §SW12) ----
@@ -582,6 +594,21 @@ export type WorkerActionMap = {
   handoffAccept: [HandoffSealed, HandoffAcceptResult];
   signerKeep: [SignerKeepPayload, { kept: boolean }];
   signerRestore: [SignerSitePayload, SignerRestoreResult];
+  /** A headset signed in from a phone (docs/pair-a-headset.md): its side, in its signer frame. */
+  pairBegin: [{ site: string; device: string }, { code: string; expires: number }];
+  pairPoll: [Record<string, never>, { status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; everydayPublicKey?: string; site?: string; profile?: Profile; remember?: boolean; family?: string }];
+  pairCancel: [Record<string, never>, Record<string, never>];
+  /** Way 1: BitLogin's own /headset/ page offers the code for the world's signer, and keeps the answer sealed for it. */
+  headsetBegin: [{ site: string; device: string; to: string }, { code: string; expires: number }];
+  headsetPoll: [Record<string, never>, { status: "waiting" | "found" | "paired" | "ended" | "expired"; number?: number; sealed?: { senderPublicKey: string; payload: string } }];
+  headsetCancel: [Record<string, never>, Record<string, never>];
+  /** And the phone's, at BitLogin's own /pair. */
+  pairFind: [{ code: string }, { offers: PairOffer[] }];
+  pairFound: [{ offer: string }, { number: number }];
+  pairEnd: [{ offer: string }, Record<string, never>];
+  pairAnswer: [{ offer: string; number: number; family?: string }, { device: string }];
+  /** Whether a guest account is kept here for a family, by its public key alone (docs/guest-accounts.md G3). */
+  guestStatus: [{ family: string }, { pubkey?: string }];
   signerTouch: [SignerTouchPayload, Record<string, never>];
   signerForget: [SignerSitePayload, Record<string, never>];
   /** Keep, and read back, the receipts BitLogin's page handed a site's signer. A signer-only session only. */

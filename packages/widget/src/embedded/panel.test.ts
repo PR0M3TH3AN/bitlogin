@@ -37,6 +37,8 @@ describe("the sign-in panel (sign-in-window.md §SW19)", () => {
     expect(readPanelHello(hello({ world: "https://gallery.bitblocks.network" }))).toEqual({ t: "hello", mode: "ask", world: "https://gallery.bitblocks.network" });
     expect(readPanelHello(hello({ world: "https://gallery.bitblocks.network/room?x=1", mode: "switch" }))).toEqual({ t: "hello", mode: "switch", world: "https://gallery.bitblocks.network" });
     expect(readPanelHello(hello({}))).toEqual({ t: "hello", mode: "account" });
+    // A guest's "Secure this account", from a press at the client (docs/guest-accounts.md G6).
+    expect(readPanelHello(hello({ mode: "secure" }))).toEqual({ t: "hello", mode: "secure" });
     expect(readPanelHello(hello({ mode: "account", world: "https://gallery.bitblocks.network" }))).toEqual({ t: "hello", mode: "account", world: "https://gallery.bitblocks.network" });
     // Straight to the file browser, or the wallet: no world is needed.
     expect(readPanelHello(hello({ mode: "files" }))).toEqual({ t: "hello", mode: "files" });
@@ -92,6 +94,7 @@ describe("a panel the client keeps, shown again and hidden (sign-in-window.md §
   const msg = (rest: Record<string, unknown>) => ({ bitlogin: "bitlogin-panel", v: 1, ...rest });
   it("reads show, with a mode and a world as a hello has them, and hide", () => {
     expect(readPanelControl(msg({ t: "show", mode: "wallet" }))).toEqual({ t: "show", mode: "wallet" });
+    expect(readPanelControl(msg({ t: "show", mode: "secure" }))).toEqual({ t: "show", mode: "secure" });
     expect(readPanelControl(msg({ t: "show", world: "https://gallery.bitblocks.network/x" }))).toEqual({ t: "show", mode: "ask", world: "https://gallery.bitblocks.network" });
     expect(readPanelControl(msg({ t: "hide", mode: "wallet" }))).toEqual({ t: "hide" });
     for (const bad of [msg({ t: "show", mode: "nonsense" }), msg({ t: "show", mode: "ask" }), msg({ t: "hello", mode: "wallet" }), { t: "show", mode: "wallet" }, msg({ t: "show", mode: "wallet", v: 2 }), null]) expect(readPanelControl(bad)).toBeNull();

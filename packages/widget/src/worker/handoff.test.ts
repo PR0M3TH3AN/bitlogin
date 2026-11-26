@@ -142,14 +142,17 @@ describe("a session that arrived by a hand-off", () => {
   // site, by name.
   it("lets a handed-over session ask for nothing beyond signing, the grant, and what an application was approved for", () => {
     expect([...SIGNER_ONLY_ACTIONS].sort()).toEqual(
-      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "roomPass", "signEvent", "signerCheck", "signerForget", "signerHeld", "signerHold", "signerKeep", "signerRestore", "signerTouch", "worldAchieve", "worldFind", "worldFollow", "worldOpen", "worldReach", "worldSave", "worldScore", "worldSeal", "worldUnwrap"]
+      ["appDecrypt", "appDecryptEvent", "appEncrypt", "configure", "getPublicKey", "getSessionStatus", "handoffAccept", "handoffBegin", "logout", "pairBegin", "pairCancel", "pairPoll", "roomPass", "signEvent", "signerCheck", "signerForget", "signerHeld", "signerHold", "signerKeep", "signerRestore", "signerTouch", "worldAchieve", "worldFind", "worldFollow", "worldOpen", "worldReach", "worldSave", "worldScore", "worldSeal", "worldUnwrap"]
     );
     // "roomPass" was added with the owner's say (2026-11-19, §SW16): a pass for the one site, built in the worker.
     // "signerCheck" likewise (docs/take-back.md): it asks the user's relays whether the site was taken back.
     // "signerHold" and "signerHeld" likewise (2026-11-21, docs/paying.md): a site's signer keeps, and reads back, the
     // receipts BitLogin's own page handed it for that site's own listings, beside the site's grant.
+    // "pairBegin", "pairPoll" and "pairCancel" likewise (2026-11-25, docs/pair-a-headset.md): a headset's signer offers
+    // a code and takes up what a phone sealed to it, as it takes up an Allow. Answering one is the phone's own page's,
+    // never a signer's: "pairFind", "pairFound", "pairEnd" and "pairAnswer" are not here.
     // Never: exporting the key, raw decrypting, the vault, the account, asking relays anything, or handing the key on again.
-    for (const never of ["exportIdentity", "nip44Decrypt", "nip04Decrypt", "nip44Encrypt", "handoffExport", "vaultRevealNwc", "changePassword", "buildRecoveryExport", "loadProfile", "takeBack"]) {
+    for (const never of ["exportIdentity", "nip44Decrypt", "nip04Decrypt", "nip44Encrypt", "handoffExport", "vaultRevealNwc", "changePassword", "buildRecoveryExport", "loadProfile", "takeBack", "pairFind", "pairFound", "pairEnd", "pairAnswer"]) {
       expect(SIGNER_ONLY_ACTIONS.has(never), never).toBe(false);
     }
   });

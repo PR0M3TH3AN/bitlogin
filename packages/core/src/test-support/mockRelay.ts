@@ -53,6 +53,11 @@ export class MockRelay {
   public refuseConnections = false;
   /** Milliseconds before EOSE is sent: a relay that connects and answers slowly. */
   public eoseDelayMs = 0;
+  /**
+   * Keep ephemeral events (kinds 20000-29999) as any other. True by default, as the tests before it expect. False:
+   * as real relays, passed on to whoever is listening and kept by none (NIP-01).
+   */
+  public keepsEphemeral = true;
 
   private constructor(wss: WebSocketServer, port: number) {
     this.wss = wss;
@@ -101,7 +106,8 @@ export class MockRelay {
           socket.send(JSON.stringify(["OK", event.id, false, "blocked: refused by test relay"]));
           return;
         }
-        this.store(event);
+        const ephemeral = event.kind >= 20000 && event.kind < 30000;
+        if (!ephemeral || this.keepsEphemeral) this.store(event);
         socket.send(JSON.stringify(["OK", event.id, true, ""]));
         this.broadcast(event);
         return;

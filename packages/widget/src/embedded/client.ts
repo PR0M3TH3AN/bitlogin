@@ -44,6 +44,21 @@ export interface BitLoginClientOptions {
    * Ignored unless `at` is an address on this machine or a private network.
    */
   localUnlockService?: string;
+  /**
+   * The family of sites this application is one of, written as BitLogin writes a family:
+   * `https://*.bitblocks.network` (docs/site-family.md SF5a). Asked for before the first sign-in, as a world asks;
+   * BitLogin takes it only where it is this page's own family, by the browser's address for it, and one it knows.
+   * Where taken, BitLogin's window offers, beside this application's own set, to keep the person signed in at every
+   * site of the family: for a note and a reaction there, never this application's kinds. Read `familyTaken`.
+   */
+  family?: string;
+  /**
+   * With `family`: where nobody is signed in on this browser, be the family's guest account at once, with nothing
+   * pressed (docs/guest-accounts.md): an account BitLogin makes and keeps in this browser, the same in every site of
+   * the family, not yet secured. It may sign a note, a reaction and its bag, and nothing of this application's set.
+   * Read `guest` in the state.
+   */
+  guest?: boolean;
 }
 
 export interface BitLoginClientState {
@@ -64,6 +79,17 @@ export interface BitLoginClientState {
    * to say. Fall back, or say so, before opening the window.
    */
   canAsk?: boolean;
+  /**
+   * Whether BitLogin will offer the family asked for in `family` beside this application's set. False where it won't
+   * (not this page's family, or one it doesn't know), and false where the signer is too old to say: then nothing is
+   * offered. Absent where no family was asked for. Known once `ready()` has resolved.
+   */
+  familyTaken?: boolean;
+  /**
+   * True while this browser is signed in here as the family's guest account (with `pubkey`): not yet secured, and
+   * not signed in to this application's set (`signedIn` stays false). Absent otherwise.
+   */
+  guest?: boolean;
 }
 
 export interface UnsignedEvent {
@@ -96,6 +122,26 @@ export interface BitLoginClient {
   switchAccount(): Promise<boolean>;
   /** Sign out of this application: the signer forgets this site. */
   signOut(): Promise<void>;
+  /**
+   * A room pass (NSWP-12) for this site, made and signed by BitLogin for `session` (the room session's public key,
+   * hex), for an account or a guest: a guest's says so (`["nswp:guest", "1"]`). The site never writes what it says.
+   * For an application, only where the set the user approved signs the pass's kind (27300). Throws where refused.
+   */
+  roomPass(session: string): Promise<NostrEvent>;
+  /**
+   * Sign this device in from the person's phone (docs/pair-a-headset.md), for a headset where nothing can be typed.
+   * `onCode` is told the code and the address to show (draw `url` as a QR), and again once the phone has found it,
+   * with the `number` the phone asks the person to tap. `done` is true once signed in; false where the code ran out,
+   * the phone said no, or `cancel()` was called. Only where nobody is signed in here, or it is a guest.
+   */
+  pair(onCode: (shown: BitLoginPairing) => void): { done: Promise<boolean>; cancel(): void };
+  /**
+   * Sign in from the person's phone, for a headset (docs/pair-a-headset.md, Way 1). Call it from the user's own press,
+   * after leaving immersive VR: it opens BitLogin's own /headset/ page in a window, where the code, its QR and the
+   * number to match are shown, never in the site. Resolves true once the window has closed and someone is signed in
+   * here, false otherwise. The site is told nothing else.
+   */
+  signInFromPhone(): Promise<boolean>;
   getPublicKey(): Promise<string>;
   signEvent(event: UnsignedEvent): Promise<NostrEvent>;
   nip44: { encrypt(peer: string, plaintext: string): Promise<string>; decrypt(peer: string, ciphertext: string): Promise<string> };
@@ -158,6 +204,16 @@ export interface AskOptions {
   show?: () => boolean | Promise<boolean>;
 }
 
+/** What a pairing shows: the code, the address of BitLogin's /pair with it (for a QR), until when, and the number. */
+export interface BitLoginPairing {
+  code: string;
+  url: string;
+  /** In seconds. */
+  expires: number;
+  /** Shown beside the code once the phone found it: "Your phone asks: 47". */
+  number?: number;
+}
+
 export class BitLoginRefused extends Error {
   constructor(what: string) {
     // The signer never says why (§SW5): locked, not allowed, over a limit and malformed all look the same.
@@ -173,6 +229,9 @@ const covers = (granted: AppPermissions | undefined, wanted: AppPermissions): bo
   wanted.appData.every((p) => granted.appData.includes(p) || granted.appData.includes("*")) &&
   wanted.proofs.every((o) => granted.proofs.includes(o)) &&
   wanted.peers.every((k) => granted.peers.includes(k));
+
+/** How long an older signer's silence about a family is waited for before it counts as "not offered". */
+const FAMILY_WAIT_MS = 3000;
 
 export function createBitLoginClient(options: BitLoginClientOptions): BitLoginClient {
   const at = cleanOrigin(options.at);
@@ -196,15 +255,21 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
   let raw: { unlocked: boolean; pubkey?: string } = { unlocked: false };
   /** Whether the signer said this set may be shown here. Undefined until it has, or where it is too old to. */
   let canAsk: boolean | undefined;
+  /** Whether the signer took the family asked for. Undefined where none was asked. */
+  let familyTaken: boolean | undefined;
+  const family = typeof options.family === "string" ? options.family : undefined;
+  const asGuest = family !== undefined && options.guest === true;
   const listeners = new Set<(state: BitLoginClientState) => void>();
   const waiting = new Map<string, { resolve(value: Record<string, unknown>): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   let stopped = false;
 
+  const streams = new Map<string, (d: Record<string, unknown>) => void>();
   const newId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
 
   const take = (d: Record<string, unknown>) => {
     const unlocked = d.unlocked === true && typeof d.pubkey === "string";
     if (typeof d.taken === "boolean") canAsk = d.taken;
+    if (family !== undefined && typeof d.familyTaken === "boolean") familyTaken = d.familyTaken;
     const granted = unlocked ? (readPermissions(d.permissions) ?? undefined) : undefined;
     const enough = unlocked && covers(granted, wanted);
     raw = { unlocked, ...(unlocked ? { pubkey: d.pubkey as string } : {}) };
@@ -214,7 +279,10 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
       ...(enough && typeof d.name === "string" ? { name: d.name } : {}),
       ...(enough && typeof d.until === "number" ? { until: d.until } : {}),
       ...(unlocked && !enough ? { needsMore: true } : {}),
-      ...(canAsk !== undefined ? { canAsk } : {})
+      ...(canAsk !== undefined ? { canAsk } : {}),
+      ...(familyTaken !== undefined ? { familyTaken } : {}),
+      // A guest is who they are here, for what a guest may do: not this application's set.
+      ...(unlocked && d.guest === true ? { guest: true, pubkey: d.pubkey as string } : {})
     };
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     current = next;
@@ -229,6 +297,9 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
     if (d.t === "ready") return void frameIsUp();
     if (d.t === "state") take(d);
     if (typeof d.id !== "string") return;
+    // A pairing hears more than one answer to its one ask.
+    const stream = streams.get(d.id);
+    if (stream) return stream(d);
     const pending = waiting.get(d.id);
     if (!pending) return;
     waiting.delete(d.id);
@@ -266,6 +337,12 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
   const introduce = (): Promise<BitLoginClientState> =>
     (introduced ??= (async () => {
       await frameUp;
+      // The family first, on its own, as a world asks for it. A signer too old to know the question says nothing:
+      // after a short wait that is "not offered", and the application's own question goes on as before.
+      if (family !== undefined) {
+        const answered = await Promise.race([request({ t: "want", family, ...(asGuest ? { guest: true } : {}) }).then(() => true, () => false), new Promise<boolean>((done) => setTimeout(() => done(false), FAMILY_WAIT_MS))]);
+        if (!answered || familyTaken === undefined) familyTaken = false;
+      }
       await request({ t: "want", permissions: wanted });
       return current;
     })().catch((error: unknown) => {
@@ -322,6 +399,21 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
         }, 400);
       });
     },
+    async signInFromPhone() {
+      await introduce();
+      // Without `noopener`: the page finds this page's frame through its link back, as the sign-in window does.
+      const opened = window.open(`${at}/headset/`, "bitlogin-headset", "popup");
+      if (!opened) return false;
+      return new Promise<boolean>((resolve) => {
+        const watch = setInterval(() => {
+          if (!opened.closed) return;
+          clearInterval(watch);
+          void request({ t: "state" })
+            .catch(() => undefined)
+            .then(() => resolve(current.signedIn));
+        }, 400);
+      });
+    },
     async switchAccount() {
       await introduce();
       const opened = window.open(`${at}/connect/#switch`, "bitlogin-connect", "popup,width=480,height=760");
@@ -336,8 +428,43 @@ export function createBitLoginClient(options: BitLoginClientOptions): BitLoginCl
         }, 400);
       });
     },
+    async roomPass(session: string) {
+      await introduce();
+      const reply = await request({ t: "pass", session });
+      if (reply.t !== "signed" || !verifyNostrEvent(reply.event as NostrEvent)) throw new BitLoginRefused("make a room pass");
+      return reply.event as NostrEvent;
+    },
     async signOut() {
       await request({ t: "lock" });
+    },
+    pair(onCode) {
+      const id = newId();
+      let finish: (ok: boolean) => void = () => {};
+      const done = new Promise<boolean>((resolve) => {
+        finish = (ok) => {
+          streams.delete(id);
+          resolve(ok);
+        };
+      });
+      streams.set(id, (d) => {
+        if (d.t === "pairing" && typeof d.code === "string" && typeof d.url === "string" && d.url.startsWith(`${at}/pair/#`) && typeof d.expires === "number") {
+          onCode({ code: d.code, url: d.url, expires: d.expires, ...(typeof d.number === "number" ? { number: d.number } : {}) });
+          return;
+        }
+        if (d.t === "paired") return finish(true);
+        if (d.t === "pairing-expired" || d.t === "refused") return finish(false);
+      });
+      void introduce()
+        .then(() => post({ t: "pair", id }))
+        .catch(() => finish(false));
+      return {
+        done,
+        cancel() {
+          if (!streams.has(id)) return;
+          post({ t: "pairCancel", id });
+          finish(false);
+        }
+      };
     },
     async propose(event, options) {
       if (!ASKED_KINDS.includes(event.kind)) return null;

@@ -6,6 +6,26 @@ site with its own vendored copy (see "Updating your integration" in
 sitting on an older vendored copy is missing a fix or behavior change it
 would plausibly want. Newest first.
 
+## 2026-11-25
+
+- **Signing in a headset from your phone is back, on BitLogin's own page**
+  (`docs/pair-a-headset.md`, Way 1): a world opens `<signIn>/headset/` in a
+  window from a press (or calls `client.signInFromPhone()`), and the code,
+  QR and number appear only there. In-world `pair` stays paused.
+
+- **Signing in a headset from your phone is paused** the same day it was
+  released: a world draws the code and the number a headset shows, so a
+  hostile one could have them answered for its own headset. A headset's
+  `pair` is answered `pairing-expired` with `why: "paused"` at once, and
+  `client.pair()` resolves false.
+
+- **A headset is signed in from the person's phone** (`docs/pair-a-headset.md`):
+  a world sends `pair` to its signer frame and shows the code and a QR of
+  `/pair/#CODE`; the phone, signed in to BitLogin, finds it, has the person
+  tap the number the headset shows, and sends what Allow sends. Nothing is
+  typed in the headset. An application uses `client.pair(onCode)`. The
+  phone's list of sites signs one headset out alone.
+
 ## 2026-11-22
 
 - **A world's owner can change its guest list and block list** from inside
