@@ -14,8 +14,8 @@
  * tests assert the distinction holds, so a future change that quietly adds a
  * format gate to the login path fails here rather than in someone's browser.
  */
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { MockRelay } from "../test-support/mockRelay.js";
+import { describe, expect, it, beforeEach, afterEach, onTestFailed } from "vitest";
+import { MockRelay, clearRelayTrace, dumpRelayTrace } from "../test-support/mockRelay.js";
 import { registerAccount } from "./create.js";
 import { loginWithPassword } from "./login.js";
 import { changePassword } from "./changePassword.js";
@@ -39,7 +39,10 @@ describe("passwords created before manual entry was removed still work", () => {
   let relays: MockRelay[] = [];
   let vaultRelayUrls: string[] = [];
 
-  beforeEach(async () => {
+  beforeEach(async (ctx) => {
+    // TEMPORARY trace (2026-11-25): what the relays saw, written out only if this test fails.
+    clearRelayTrace();
+    onTestFailed(() => dumpRelayTrace(ctx.task.name));
     relays = await Promise.all([MockRelay.start(), MockRelay.start(), MockRelay.start()]);
     vaultRelayUrls = relays.map((r) => r.url);
   });

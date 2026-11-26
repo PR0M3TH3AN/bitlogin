@@ -95,6 +95,9 @@ export class RelayPool {
       })
     );
     const outcomes = [...asked, ...skipped.map(([relayUrl]): RelayQueryOutcome => ({ relayUrl, events: [], responded: false, error: NOT_WAITED }))];
+    // TEMPORARY trace (2026-11-25, the "record not found" fault): only where a test set the hook.
+    const trace = (globalThis as { __bitloginRelayTrace?: (line: string) => void }).__bitloginRelayTrace;
+    if (trace) trace(`POOL read ${JSON.stringify({ k: filter.kinds, a: filter.authors?.map((x) => x.slice(0, 8)), d: (filter as { "#d"?: string[] })["#d"]?.map((x) => x.slice(0, 12)) })} ${outcomes.map((o) => `${o.relayUrl.slice(-5)}:${o.responded ? `ok${o.events.length}` : `x(${(o.error ?? "").slice(0, 30)})`}`).join(" ")}`);
     const respondedCount = outcomes.filter((o) => o.responded).length;
     const totalCount = outcomes.length;
     return {

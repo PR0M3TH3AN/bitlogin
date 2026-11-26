@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { MockRelay } from "../test-support/mockRelay.js";
+import { describe, it, expect, beforeEach, afterEach, onTestFailed } from "vitest";
+import { MockRelay, clearRelayTrace, dumpRelayTrace } from "../test-support/mockRelay.js";
 import { generatePassphrase } from "./passphrase.js";
 import { registerAccount } from "./create.js";
 import { loginWithPassword } from "./login.js";
@@ -29,7 +29,10 @@ describe("seed-derived everyday identity (§11.6) and rebuild from phrase (§17.
   let relays: MockRelay[] = [];
   let vaultRelayUrls: string[] = [];
 
-  beforeEach(async () => {
+  beforeEach(async (ctx) => {
+    // TEMPORARY trace (2026-11-25): what the relays saw, written out only if this test fails.
+    clearRelayTrace();
+    onTestFailed(() => dumpRelayTrace(ctx.task.name));
     relays = await Promise.all([
       MockRelay.start(),
       MockRelay.start(),

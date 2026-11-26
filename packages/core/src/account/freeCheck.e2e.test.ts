@@ -4,8 +4,8 @@
  * anywhere means taken; "free" needs a quorum to answer "nothing here" and no relay that connected left unfinished;
  * and the new capsule is written only where it answered. Replica repair never re-sends a capsule over another record.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRelay } from "../test-support/mockRelay.js";
+import { afterEach, beforeEach, describe, expect, it, onTestFailed } from "vitest";
+import { MockRelay, clearRelayTrace, dumpRelayTrace } from "../test-support/mockRelay.js";
 import { registerAccount } from "./create.js";
 import { changePassword } from "./changePassword.js";
 import { loginWithPassword } from "./login.js";
@@ -39,7 +39,10 @@ describe("an account address is free only when the relays that could hold one sa
     });
   const holds = (r: MockRelay) => r.storedEventKinds().filter((k) => k === KIND_APP_DATA).length;
 
-  beforeEach(async () => {
+  beforeEach(async (ctx) => {
+    // TEMPORARY trace (2026-11-25): what the relays saw, written out only if this test fails.
+    clearRelayTrace();
+    onTestFailed(() => dumpRelayTrace(ctx.task.name));
     relays = await Promise.all(Array.from({ length: 8 }, () => MockRelay.start()));
     urls = relays.map((r) => r.url);
   });
