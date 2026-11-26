@@ -23,6 +23,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // Relative source import on purpose: test-support is deliberately NOT a
 // package export (it must never ship), and vitest resolves the TS directly.
 import { MockRelay } from "../../../core/src/test-support/mockRelay.js";
+import { registerAccount } from "../../../core/src/account/create.js";
+import { generatePassphrase } from "../../../core/src/account/passphrase.js";
 import { generatePrivateKey, getPublicKeyHex } from "../../../core/src/crypto/secp256k1.js";
 import { encodeNpub, encodeNsec } from "../../../core/src/nostr/nip19.js";
 import { signNostrEvent, verifyNostrEvent, type NostrEvent } from "../../../core/src/nostr/event.js";
@@ -3633,4 +3635,36 @@ describe.skipIf(!chromiumAvailable)("passkey sign-in, real browser ceremony", ()
       300_000
     );
   }
+
+  it(
+    "says try again, never \"no account\", where the relays holding an account can't be reached, and signs in on Try again once they can (the record-not-found fault)",
+    async () => {
+      const browser = await playwright!.chromium.launch();
+      const loginName = `held-two-${Date.now().toString(36)}`;
+      const password = generatePassphrase().secret;
+      // Held by two of the three relays; the third is empty for it.
+      await registerAccount({ loginName, password, vaultRelayUrls: [relays[0]!.url, relays[1]!.url] });
+      try {
+        const page = await (await browser.newContext()).newPage();
+        await page.goto(`${origin}/account.html`, { waitUntil: "domcontentloaded" });
+        const widget = page.locator("bitlogin-auth");
+        for (const i of [0, 1]) relays[i]!.refuseConnections = true;
+        await widget.locator('[data-action="goto-login"]').click();
+        await widget.locator('form[data-form="login"] input[name="loginName"]').fill(loginName);
+        await widget.locator('form[data-form="login"] input[name="password"]').fill(password);
+        await widget.locator('form[data-form="login"] button[type="submit"]').click();
+        await widget.locator('[data-action="relays-retry"]').waitFor({ timeout: 120_000 });
+        expect(await widget.locator(".notice.warn").first().textContent()).toBe("Your account wasn't on the relays that answered, but 2 of your relays couldn't be reached. Try again.");
+        // A password sign-in has no other way: only Try again.
+        expect(await widget.locator('[data-action="relays-anyway"]').count()).toBe(0);
+        for (const i of [0, 1]) relays[i]!.refuseConnections = false;
+        await widget.locator('[data-action="relays-retry"]').click();
+        await widget.locator(".pubkey").waitFor({ timeout: 120_000 });
+      } finally {
+        for (const i of [0, 1]) relays[i]!.refuseConnections = false;
+        await browser.close();
+      }
+    },
+    300_000
+  );
 });

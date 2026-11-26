@@ -3,7 +3,7 @@ import { getPublicKeyHex } from "../crypto/secp256k1.js";
 import { base64urlToBytes } from "../crypto/encoding.js";
 import { derivePasswordKeys, normalizeLoginName } from "./normalize.js";
 import { RelayPool } from "../nostr/pool.js";
-import { readCredentialCapsule } from "./capsuleReader.js";
+import { readAccountCarefully, readCredentialCapsule } from "./capsuleReader.js";
 import { AccountNotFoundError, RollbackDetectedError } from "./errors.js";
 import { getHighWaterMark, raiseHighWaterMark } from "./highWaterMark.js";
 import {
@@ -73,10 +73,18 @@ export async function loginWithPassword(
     authPrivateKey: locatorPrivateKey,
   });
   try {
-    const result = await readCredentialCapsule(
-      pool,
-      locatorPublicKey,
-      capsuleKey,
+    // Never a slow or unreached relay read as "no account" (2026-11-26): asked once more, and said plainly.
+    const result = await readAccountCarefully(
+      async (urls, timeoutMs) => {
+        if (urls.length === params.vaultRelayUrls.length) return readCredentialCapsule(pool, locatorPublicKey, capsuleKey, timeoutMs);
+        const again = new RelayPool(urls, { authPrivateKey: locatorPrivateKey });
+        try {
+          return await readCredentialCapsule(again, locatorPublicKey, capsuleKey, timeoutMs);
+        } finally {
+          again.closeAll();
+        }
+      },
+      params.vaultRelayUrls,
       params.timeoutMs,
     );
 

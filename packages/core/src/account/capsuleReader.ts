@@ -3,6 +3,7 @@
  * detection logic (§16.1, §16.2, §17.3, §17.4, §12.4.9), used by login,
  * recovery, and password-change (which must read the capsule it replaces).
  */
+import { RelaysSlowError } from "./errors.js";
 import { RelayPool } from "../nostr/pool.js";
 import { verifyNostrEvent, findTagValue, type NostrEvent } from "../nostr/event.js";
 import { KIND_APP_DATA, D_TAG_PASSWORD_CAPSULE, D_TAG_RECOVERY_CAPSULE } from "../nostr/kinds.js";
@@ -155,4 +156,40 @@ export function checkRecoveryChainAcrossCandidates(candidates: Array<Candidate<R
       previousRecoveryEventId: c.payload.previous_recovery_event_id
     }))
   );
+}
+
+/** How long a relay that connected and didn't finish is given when a sign-in or recovery asks it once more. */
+export const SLOW_ANSWER_WAIT_MS = 5000;
+
+/**
+ * Read an address as sign-in and recovery must (2026-11-26, the record-not-found fault), held to the free check's
+ * rule the other way round: a relay that connected and didn't finish is asked once more, and where nothing decrypts,
+ * "no account" is said only where every listed relay was reached and answered empty. Otherwise `RelaysSlowError`:
+ * "slow" where a relay that connected still hasn't finished, "unreached" where some couldn't be reached at all. A
+ * false "no account" at sign-in sends someone to make a new account, or to rebuild one: the harm this stops.
+ */
+export async function readAccountCarefully<T>(
+  read: (urls: string[], timeoutMs?: number) => Promise<CapsuleReadResult<T>>,
+  urls: readonly string[],
+  timeoutMs?: number,
+  slowWaitMs = SLOW_ANSWER_WAIT_MS
+): Promise<CapsuleReadResult<T>> {
+  const list = [...new Set(urls)];
+  const first = await read(list, timeoutMs);
+  if (first.best || first.candidates.length > 0) return first;
+  const slow = first.relays.filter((r) => r.state === "slow").map((r) => r.relayUrl);
+  let result = first;
+  let stillSlow = 0;
+  if (slow.length > 0) {
+    const again = await read(slow, slowWaitMs);
+    if (again.best || again.candidates.length > 0) {
+      return { ...again, quorumMet: true, respondedCount: first.respondedCount + again.respondedCount, totalCount: first.totalCount, relays: [...first.relays.filter((r) => r.state !== "slow"), ...again.relays] };
+    }
+    stillSlow = again.relays.filter((r) => r.state !== "answered").length;
+    result = { ...first, respondedCount: first.respondedCount + again.respondedCount, relays: [...first.relays.filter((r) => r.state !== "slow"), ...again.relays] };
+  }
+  if (stillSlow > 0) throw new RelaysSlowError("slow");
+  const unreached = result.relays.filter((r) => r.state !== "answered").length;
+  if (unreached > 0) throw new RelaysSlowError("unreached", unreached);
+  return { ...result, quorumMet: true };
 }

@@ -11,6 +11,31 @@ export class AccountNotFoundError extends Error {
   }
 }
 
+/**
+ * The relays that may hold the account didn't all answer (2026-11-26, the record-not-found fault): never "no
+ * account". "slow": a relay that connected didn't finish, even when asked once more. "unreached": every relay that
+ * was reached answered empty, but some listed relays couldn't be reached at all. Either way: try again.
+ */
+export class RelaysSlowError extends Error {
+  readonly reason: "slow" | "unreached";
+  /** For "unreached": how many listed relays couldn't be reached. */
+  readonly unreached: number;
+  /** The reason, as a code that crosses a worker's boundary. */
+  readonly code: "slow" | "unreached";
+
+  constructor(reason: "slow" | "unreached", unreached = 0) {
+    super(
+      reason === "slow"
+        ? "Some of your relays didn't answer in time, so your account couldn't be read. Try again."
+        : `Your account wasn't on the relays that answered, but ${unreached} of your relays couldn't be reached. Try again.`
+    );
+    this.name = "RelaysSlowError";
+    this.reason = reason;
+    this.code = reason;
+    this.unreached = unreached;
+  }
+}
+
 export class RegistrationFailedError extends Error {
   constructor(message: string) {
     super(message);

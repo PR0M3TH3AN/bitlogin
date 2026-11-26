@@ -28,6 +28,7 @@ import {
 import {
   readCredentialCapsule,
   readRecoveryCapsule,
+  readAccountCarefully,
   checkRecoveryChainAcrossCandidates,
   type Candidate,
 } from "./capsuleReader.js";
@@ -119,12 +120,18 @@ export async function recoverWithPhrase(
   });
   let result;
   try {
-    result = await readRecoveryCapsule(
-      vaultPool,
-      recoveryPublicKey,
-      capsuleKey,
-      params.timeoutMs,
-    );
+    // Never a slow or unreached relay read as "no account", so never the rebuild on a guess (2026-11-26). Where this
+    // device holds an offline copy, that is weighed below as before.
+    const read = async (urls: string[], timeoutMs?: number) => {
+      if (urls.length === params.vaultRelayUrls.length) return readRecoveryCapsule(vaultPool, recoveryPublicKey, capsuleKey, timeoutMs);
+      const again = new RelayPool(urls, { authPrivateKey: recoveryPrivateKey });
+      try {
+        return await readRecoveryCapsule(again, recoveryPublicKey, capsuleKey, timeoutMs);
+      } finally {
+        again.closeAll();
+      }
+    };
+    result = params.offlineRecoveryCapsuleEvents?.length ? await read(params.vaultRelayUrls, params.timeoutMs) : await readAccountCarefully(read, params.vaultRelayUrls, params.timeoutMs);
   } finally {
     vaultPool.closeAll();
   }
