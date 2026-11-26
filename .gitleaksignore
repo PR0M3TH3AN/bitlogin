@@ -28,3 +28,9 @@ c61026cdda4043584b119b549e756ac83973e095:packages/widget/src/pay/vectors/shares.
 765b31e12a7ed570b5278782990981d5f11ec1c9:packages/widget/src/embedded/owner-list-writing.vectors.json:generic-api-key:7
 765b31e12a7ed570b5278782990981d5f11ec1c9:packages/widget/src/embedded/owner-list-writing.vectors.json:generic-api-key:12
 765b31e12a7ed570b5278782990981d5f11ec1c9:packages/widget/src/embedded/owner-list-writing.vectors.json:generic-api-key:17
+#
+# The seed line's run against testnut.cashu.space (docs/reviews/seed-testnut-2026-11-25/, at f7ffa79): the value
+# taken for a key is the test mint's sat keyset id, 017bc604aa…, which every mint publishes at /v1/keysets. It is a
+# public identifier, not a secret, and the outputs hold no key, secret or proof.
+f7ffa79689ed26fc3aaedaaf6a54def382ef4377:docs/reviews/seed-testnut-2026-11-25/output-2-seed.txt:generic-api-key:5
+f7ffa79689ed26fc3aaedaaf6a54def382ef4377:docs/reviews/seed-testnut-2026-11-25/output-2-seed.txt:generic-api-key:11
