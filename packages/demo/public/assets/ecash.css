@@ -19,6 +19,11 @@
 .ecash-mints .mint { min-width: 0; overflow-wrap: anywhere; font: .88rem var(--font-mono); color: var(--fg); }
 .ecash-mints .sats { flex: none; font-variant-numeric: tabular-nums; font-weight: 600; }
 .ecash-mints .sats small { font-weight: 400; color: var(--muted); }
+.ecash-mints .where { min-width: 0; display: grid; gap: .15rem; justify-items: start; }
+.ecash-mints .seed { font-size: .82rem; color: var(--muted); }
+.ecash-mints .seed.kept { color: var(--fg); }
+.ecash-mints .connect-link { font-size: .82rem; padding: 0; }
+#ecash-go-restore:not([hidden]) { display: block; margin-top: .5rem; }
 
 .ecash-form { display: grid; gap: .45rem; margin-top: .8rem; }
 .ecash-form label { font-size: .9rem; color: var(--muted); margin-top: .3rem; }

@@ -129,6 +129,8 @@ export class WorkerClient {
       } else {
         const error = new Error(msg.error);
         error.name = msg.errorName ?? "Error";
+        // Its code too, where the worker gave one: what the caller decides by.
+        if (typeof msg.errorCode === "string") (error as Error & { code?: string }).code = msg.errorCode;
         entry.reject(error);
       }
     });
@@ -482,6 +484,33 @@ export class WorkerClient {
   }
   ecashLoad() {
     return this.call("ecashLoad", {});
+  }
+  ecashKeepTrial(trial: WorkerActionMap["ecashKeepTrial"][0]["trial"]) {
+    return this.call("ecashKeepTrial", { trial });
+  }
+  ecashLaneGet(keysetId: string) {
+    return this.call("ecashLaneGet", { keysetId });
+  }
+  ecashDraw(keysetId: string, lane: number) {
+    return this.call("ecashDraw", { keysetId, lane });
+  }
+  ecashReserve(keysetId: string, amounts: number[], keyset: WorkerActionMap["ecashUnblind"][0]["keyset"]) {
+    return this.call("ecashReserve", { keysetId, amounts, keyset });
+  }
+  ecashForward(keysetId: string, next: number) {
+    return this.call("ecashForward", { keysetId, next });
+  }
+  ecashBlinded(keysetId: string, from: number, count: number) {
+    return this.call("ecashBlinded", { keysetId, from, count });
+  }
+  ecashUnblind(keysetId: string, keyset: WorkerActionMap["ecashUnblind"][0]["keyset"], found: WorkerActionMap["ecashUnblind"][0]["found"]) {
+    return this.call("ecashUnblind", { keysetId, keyset, found });
+  }
+  ecashTrialOutput(keysetId: string, keyset: WorkerActionMap["ecashUnblind"][0]["keyset"]) {
+    return this.call("ecashTrialOutput", { keysetId, keyset });
+  }
+  ecashRepin(keysetId: string, keyset: WorkerActionMap["ecashUnblind"][0]["keyset"]) {
+    return this.call("ecashRepin", { keysetId, keyset });
   }
   ecashSetMints(mints: string[]) {
     return this.call("ecashSetMints", { mints });

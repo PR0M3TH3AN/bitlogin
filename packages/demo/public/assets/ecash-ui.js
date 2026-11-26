@@ -55,6 +55,15 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     $("ecash-error").hidden = !text;
   };
   let current = "loading";
+  /** When the person last pressed to go to another screen of the wallet: an add finishing behind leaves them there. */
+  let movedAt = 0;
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (e.target instanceof Element && e.target.closest('[id^="ecash-go-"], #ecash-back, #ecash-mints button')) movedAt = performance.now();
+    },
+    true
+  );
   /** Why the last opening failed, while the browser's copy is on screen: nothing that spends is offered meanwhile. */
   let trouble = "";
   const show = (name) => {
@@ -123,13 +132,16 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
         const name = document.createElement("span");
         name.className = "mint";
         name.textContent = host(mint);
+        const where = document.createElement("div");
+        where.className = "where";
+        where.append(name, ...seedLine(mint));
         const amount = document.createElement("span");
         amount.className = "sats";
         amount.textContent = held.toLocaleString();
         const unit = document.createElement("small");
         unit.textContent = held === 1 ? " sat" : " sats";
         amount.append(unit);
-        row.append(name, amount);
+        row.append(where, amount);
         return row;
       })
     );
@@ -144,7 +156,135 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
     $("ecash-fund-mint").hidden = state.mints.length < 2;
     document.querySelector('label[for="ecash-fund-mint"]').hidden = state.mints.length < 2;
     $("ecash-limit").value = String(limit());
+    // Whether the seed is used here at all (docs/ecash-seed-counter.md, rule 3a), and restore, at a press only.
+    const here = wallet.seedHere();
+    $("ecash-seed-note").hidden = here !== "no-locks";
+    $("ecash-seed-note").textContent = here === "no-locks" ? lib.NO_SEED_HERE : "";
+    $("ecash-go-restore").hidden = here === "no-seed";
+    $("ecash-go-restore").disabled = checking || !!trouble;
     show("home");
+  };
+
+  /**
+   * Which of the wallet's mints the seed is used for (rule 4): asked of each mint's current keyset once the wallet
+   * is open, behind the balance. Until known, a mint is named as relay-kept.
+   */
+  let seeded = new Set();
+  /** Mints that don't say they prove what they sign (NUT-12): never tried, never restored from. */
+  let unproven = new Set();
+  const learnSeeded = async () => {
+    const found = new Set();
+    const cant = new Set();
+    for (const mint of wallet.state().mints) {
+      if (await wallet.seededMint(mint).catch(() => false)) found.add(mint);
+      else if (!(await wallet.mintCanSeed(mint).catch(() => false))) cant.add(mint);
+    }
+    seeded = found;
+    unproven = cant;
+    if (current === "home") home();
+  };
+  /** The words under a mint: restorable from the key, or relay-kept, and the trial where it can be pressed. */
+  const seedLine = (mint) => {
+    const here = wallet.seedHere();
+    if (here === "no-seed") return [];
+    const line = document.createElement("span");
+    line.className = "seed";
+    if (wallet.keysChanged(mint)) {
+      // The fourth review's 2: the keys this mint gives now aren't the ones pinned for its keyset. Re-pinned only at the
+      // owner's press, said in words first, and a moment after the words are shown.
+      line.textContent = "This mint's keys aren't the ones it was first used with here, so sats added now are kept on relays. A mint may change its keys; someone may also be passing other keys off as this mint's.";
+      const repin = document.createElement("button");
+      repin.type = "button";
+      repin.className = "connect-link";
+      repin.textContent = "I trust this mint: use its keys now";
+      let shownAt = performance.now();
+      repin.onclick = async () => {
+        if (performance.now() - shownAt < TOO_SOON_MS) return;
+        repin.disabled = true;
+        try {
+          await wallet.repinMint(mint);
+          $("ecash-note").textContent = "This mint's keys are pinned again. Sats added here from now on can be restored from your key.";
+          home();
+        } catch (err) {
+          repin.disabled = false;
+          shownAt = performance.now();
+          fail(err);
+        }
+      };
+      return [line, repin];
+    }
+    if (seeded.has(mint)) {
+      line.classList.add("kept");
+      line.textContent = here === "yes" ? "Sats added here can be restored from your key." : "Passed the trial. Not used with your key in this browser.";
+      return [line];
+    }
+    if (unproven.has(mint)) {
+      line.textContent = "This mint doesn't prove what it signs, so your key can't restore sats here. They are kept on relays.";
+      return [line];
+    }
+    const failed = (wallet.state().trials ?? []).some((t) => t.mint === mint && t.outcome === "failed");
+    line.textContent = failed ? "Failed its trial, so it stays relay-kept." : "Relay-kept: your key alone can't restore sats here.";
+    if (failed || here !== "yes") return [line];
+    const tryIt = document.createElement("button");
+    tryIt.type = "button";
+    tryIt.className = "connect-link";
+    tryIt.textContent = "Try this mint";
+    tryIt.disabled = checking || !!trouble;
+    tryIt.onclick = () => {
+      trialMint = mint;
+      $("ecash-trial-mint").textContent = host(mint);
+      $("ecash-trial-yes").disabled = false;
+      $("ecash-trial-yes").textContent = "Try it";
+      show("trial");
+      trialAt = performance.now();
+    };
+    return [line, tryIt];
+  };
+  let trialMint = "";
+  let trialAt = 0;
+  $("ecash-trial-yes").onclick = async () => {
+    if (!trialMint || performance.now() - trialAt < TOO_SOON_MS) return;
+    $("ecash-trial-yes").disabled = true;
+    $("ecash-trial-yes").textContent = "Trying…";
+    try {
+      const result = await wallet.tryMint(trialMint);
+      if (result.outcome === "passed") seeded.add(trialMint);
+      home();
+      $("ecash-note").textContent =
+        result.outcome === "passed"
+          ? "Passed: nothing spent. Sats you add at this mint from now on can be restored from your key."
+          : result.outcome === "failed"
+            ? `${result.why ?? "This mint signed the same thing twice."} ${sats(result.cost)} was spent finding out, and this mint stays relay-kept.`
+            : `Not tried: ${result.why} Nothing was spent.`;
+    } catch (err) {
+      $("ecash-trial-yes").disabled = false;
+      $("ecash-trial-yes").textContent = "Try it";
+      fail(err);
+    }
+  };
+  $("ecash-go-restore").onclick = () => {
+    $("ecash-restore-gap").textContent = lib.RESTORE_GAP;
+    $("ecash-restore-status").hidden = true;
+    $("ecash-restore-yes").disabled = false;
+    show("restore");
+  };
+  $("ecash-restore-yes").onclick = async () => {
+    $("ecash-restore-yes").disabled = true;
+    $("ecash-restore-status").hidden = false;
+    $("ecash-restore-status").textContent = "Asking your mints.";
+    try {
+      const restored = await wallet.restore();
+      home();
+      // Each mint that couldn't be restored from, and why: one that didn't answer, or one that doesn't prove what it signs.
+      const troubled = restored.mints.filter((m) => m.trouble).map((m) => `${host(m.mint)}: ${/doesn't prove what it signs/u.test(m.trouble) ? "it doesn't prove what it signs, so it isn't restored from" : "it didn't answer"}`);
+      // Signatures a mint gave no proof for are left, and said: they may be sats this wallet can't bring back.
+      const unproved = restored.mints.reduce((n, m) => n + (m.skipped ?? 0), 0);
+      $("ecash-note").textContent = `${restored.found > 0 ? `Restored ${sats(restored.found)}.` : "Nothing more was found at your mints."}${troubled.length ? ` Not restored from: ${troubled.join("; ")}.` : ""}${unproved ? ` ${unproved} ${unproved === 1 ? "signature" : "signatures"} came without the mint's proof, so ${unproved === 1 ? "it was" : "they were"} left.` : ""}`;
+    } catch (err) {
+      $("ecash-restore-yes").disabled = false;
+      $("ecash-restore-status").hidden = true;
+      fail(err);
+    }
   };
 
   /** The site's question can't go on: say why, and offer only Close. Nothing was spent. */
@@ -263,6 +403,8 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       await wallet.addMint(address);
       $("ecash-mint").value = "";
       request ? await goOn() : home();
+      // What the new mint can be (seeded, relay-kept, or never restorable), learned behind the screen as at opening.
+      if (!request) void learnSeeded().catch(() => {});
     } catch (err) {
       fail(err);
     } finally {
@@ -325,6 +467,7 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       e.target.hidden = true;
       $("ecash-invoice").hidden = false;
       const mine = funding;
+      const shownAt = performance.now();
       // Asked once a second while the invoice waits, one ask at a time; stopped once it is paid or runs out.
       let asking = false;
       polling = setInterval(async () => {
@@ -340,14 +483,18 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
         try {
           // "Added" is said once the mint has issued the sats and they are sealed in this browser: from then on they
           // are kept, whatever relays do. Until two relays have them, the note says they are still being sent.
+          // Unless the person pressed to go somewhere else since this invoice was shown (Restore, say): that press is
+          // theirs, and is not undone when the relays answer (2026-11-25: the claim's second redraw took Restore away).
+          const stillHere = () => movedAt < shownAt;
           const added = () => {
-            if (request || funding !== mine) return;
+            if (request || funding !== mine || !stillHere()) return;
             home();
             $("ecash-note").textContent = `Added ${sats(mine.amount)}. Sending to your relays.`;
           };
           if (!(await wallet.claim(mine, added))) return;
           stopPolling();
           if (request) return void goOn();
+          if (!stillHere()) return;
           home();
           $("ecash-note").textContent = wallet.state().unsaved
             ? `Added ${sats(mine.amount)}. Kept in this browser: your relays didn't take it yet, and it is sent again next time.`
@@ -502,6 +649,8 @@ export async function openEcash({ worker, name = "", resize, request, done }) {
       void wallet
         .check()
         .then(() => current === "home" && home())
+        .catch(() => {})
+        .then(learnSeeded)
         .catch(() => {});
     }
   };

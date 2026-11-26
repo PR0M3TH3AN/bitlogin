@@ -1,0 +1,41 @@
+
+ RUN  v5.1.0 /home/user/Documents/GitHub/bitlogin/packages/widget
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:30.108Z","what":"mint","data":{"keysetId":"017bc604aaa08e9b58804bdd552286f15d75ebdaa3d1bccc2a52fc7406b4040fda","unit":"sat","fee":100}}
+
+stderr | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+Implicit numeric coercion of Amount is deprecated and throws in cashu-ts v5; use .add()/.subtract()/.compareTo(), .toBigInt() or .toNumber(), or .toString() for display.
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:33.360Z","what":"1. trial (shipped tryMint)","data":{"keysetId":"017bc604aaa08e9b58804bdd552286f15d75ebdaa3d1bccc2a52fc7406b4040fda","outcome":"not-tried","why":"This mint charges for each swap, so it can't be tried for one sat.","cost":0}}
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:33.499Z","what":"   the 1-sat proof after the trial","data":{"state":"UNSPENT"}}
+{"at":"2026-11-25T22:44:33.499Z","what":"   TRIAL GATE BYPASSED IN THIS SCRIPT from here on: the wallet itself would stay relay-kept at this mint."}
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:36.843Z","what":"2. seeded add of 21 (shipped createSeededMint)","data":{"proofs":3,"sats":21,"lane":3,"countersUsed":3,"signatures":3,"withDleq":3}}
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:37.056Z","what":"   their state at the mint","data":{"unspent":3,"of":3}}
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:40.173Z","what":"3. rule 5: an already-signed output offered again","data":{"result":"refused: Invoice already paid or pending (code 20006)","quoteAfter":"PAID"}}
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:40.507Z","what":"   control: the same quote with an output nobody has signed","data":{"result":"signed (1)","quoteAfter":"ISSUED"}}
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:40.647Z","what":"   restore asked about the already-signed output","data":{"signedCounter":201326592,"lane":3,"laneStart":201326592}}
+
+stdout | src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device
+{"at":"2026-11-25T22:44:50.781Z","what":"4. restore from the key on a fresh device (shipped restoreFromMint)","data":{"proofs":3,"sats":21,"skipped":0,"asked":3503,"signatures":3,"withDleq":3,"sameAsAdded":true}}
+
+ ✓ src/ecash/testnut-seed.run.test.ts > testnut.cashu.space: the trial (not tried, fees), a seeded add, rule 5, and a restore from the key on a fresh device 21153ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  17:44:29
+   Duration  21.52s (tests 99%, import 1%)
+

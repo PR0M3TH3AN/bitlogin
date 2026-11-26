@@ -1,0 +1,89 @@
+/**
+ * Seed review 4's run against a public test mint (agreed by the orchestrator, 2026-11-25): testnut.cashu.space only,
+ * its fake sats only, a throwaway account and seed, and stand-in relays held in memory (nothing written to any real
+ * relay). Run from beta at 14237ee. Prints what happened, no keys and no proofs.
+ */
+import { it } from "vitest";
+import { NostrSigner } from "@bitlogin/core/account";
+import { generatePrivateKey } from "@bitlogin/core/crypto";
+import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
+import type { NostrEvent, NostrFilter, RelayPublishOutcome } from "@bitlogin/core/nostr";
+import { keepEcashTrial, loadEcash, rollEcash, setEcashMints, type EcashRelays } from "../worker/ecashStore.js";
+import { ecashSeed } from "../worker/ecashSeed.js";
+import { readLane } from "../worker/ecashLanes.js";
+import { createEcashWallet, type EcashStore } from "./wallet.js";
+import { standInLock, standInSeedWorker } from "./seedWorkerStandIn.js";
+
+const MINT = "https://testnut.cashu.space";
+const lock = standInLock();
+const log: unknown[] = [];
+const say = (what: string, data?: unknown) => {
+  log.push({ at: new Date().toISOString(), what, ...(data !== undefined ? { data } : {}) });
+  console.log(JSON.stringify(log.at(-1)));
+};
+
+function relaysOf() {
+  const events = new Map<string, NostrEvent>();
+  const relays = {
+    relayUrls: ["wss://stand-in-a.invalid", "wss://stand-in-b.invalid"],
+    async queryQuorum(filter: NostrFilter) {
+      return { outcomes: [{ events: [...events.values()].filter((e) => (filter.kinds ?? []).includes(e.kind)) }], respondedCount: 2 };
+    },
+    async publishAll(event: NostrEvent) {
+      if (event.kind === 5) for (const tag of event.tags) if (tag[0] === "e") events.delete(tag[1]!);
+      events.set(event.id, event);
+      return this.relayUrls.map((relayUrl) => ({ relayUrl, result: { ok: true, message: "" } })) as RelayPublishOutcome[];
+    }
+  } as EcashRelays;
+  return { events, relays };
+}
+function device(account: { signer: NostrSigner; seed: Uint8Array; relays: EcashRelays }) {
+  const deps = { signer: account.signer, store: new InMemoryKeyValueStore(), relays: account.relays, newKey: () => Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("") };
+  const store: EcashStore = {
+    load: () => loadEcash(deps),
+    setMints: (m) => setEcashMints(deps, m),
+    roll: (roll) => rollEcash(deps, roll),
+    seed: standInSeedWorker({ signer: account.signer, store: deps.store, seed: account.seed, lock }),
+    keepTrial: (t: { mint: string; keysetId: string; outcome: "passed" | "failed" }) => keepEcashTrial(deps, t)
+  };
+  return { wallet: createEcashWallet(store, { locks: true }), deps };
+}
+async function add(wallet: ReturnType<typeof createEcashWallet>, sats: number) {
+  const funding = await wallet.fund(MINT, sats);
+  // The test mint pays its own fake invoices: asked until it says so.
+  for (let i = 0; i < 30; i++) {
+    if (await wallet.claim(funding)) return true;
+    await new Promise((done) => setTimeout(done, 1000));
+  }
+  return false;
+}
+
+it("testnut.cashu.space: the trial, a seeded add, and a restore from the key on a fresh device", async () => {
+  const shared = relaysOf();
+  const account = { signer: new NostrSigner(generatePrivateKey()), seed: ecashSeed(generatePrivateKey()), relays: shared.relays };
+  const one = device(account);
+  await one.wallet.open();
+  await one.wallet.addMint(MINT);
+  say("mint added", { canSeed: await one.wallet.mintCanSeed(MINT) });
+  say("fund 8 fake sats, relay-kept", { claimed: await add(one.wallet, 8), balance: one.wallet.balance() });
+  let trial: unknown;
+  try {
+    trial = await one.wallet.tryMint(MINT);
+  } catch (err) {
+    trial = { error: String((err as Error).message) };
+  }
+  say("trial", { result: trial, balance: one.wallet.balance() });
+  const seeded = await one.wallet.seededMint(MINT);
+  say("seeded here after the trial", { seeded });
+  if (!seeded) {
+    say("stopped: nothing is added by the seed at a mint that hasn't passed the trial");
+    return;
+  }
+  const keysetId = (one.wallet.state().trials ?? []).find((t) => t.mint === MINT)!.keysetId;
+  say("seeded add of 21", { claimed: await add(one.wallet, 21), balance: one.wallet.balance(), lane: await readLane(one.deps, keysetId) });
+  for (const [id, e] of shared.events) if (e.kind === 7375 || e.kind === 5) shared.events.delete(id);
+  const two = device(account);
+  await two.wallet.open();
+  say("fresh device, token records gone", { balance: two.wallet.balance() });
+  say("restore from the key", { restored: await two.wallet.restore(), balance: two.wallet.balance() });
+}, 300_000);

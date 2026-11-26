@@ -15,7 +15,17 @@ export interface WorkerRequest<TAction extends string = string, TPayload = unkno
 
 export type WorkerResponse<TResult = unknown> =
   | { id: string; ok: true; result: TResult }
-  | { id: string; ok: false; error: string; errorName?: string };
+  | { id: string; ok: false; error: string; errorName?: string; errorCode?: string };
+
+/**
+ * A refusal as the worker posts it: its words, its name, and its code where it has one (2026-11-25, the review's
+ * second finding 3: "no-lane" and "no-seed-here" tell the wallet to add as before, and were lost on the way).
+ */
+export function errorResponse(id: string, err: unknown): WorkerResponse {
+  const error = err instanceof Error ? err : new Error(String(err));
+  const code = (error as { code?: unknown }).code;
+  return { id, ok: false, error: error.message, errorName: error.name, ...(typeof code === "string" && /^[a-z0-9-]{1,40}$/u.test(code) ? { errorCode: code } : {}) };
+}
 
 export interface ConfigurePayload {
   vaultRelayUrls?: string[];
@@ -543,6 +553,8 @@ export type WorkerNotification =
 // ---- An ecash wallet kept with the account (docs/ecash.md; worker/ecashStore.ts) ----
 export type { EcashState, EcashRoll } from "./ecashStore.js";
 import type { EcashState, EcashRoll } from "./ecashStore.js";
+import type { BlindedAt, FoundAt, KeysetGiven, SeededOutput } from "./ecashSeed.js";
+import type { LaneState } from "../ecash/seedLanes.js";
 import type { RankedMint } from "../ecash/mints.js";
 export type { RankedMint };
 
@@ -660,6 +672,26 @@ export type WorkerActionMap = {
   drivePeek: [Record<string, never>, DriveState];
   receiptsPeek: [Record<string, never>, ReceiptsState];
   ecashSetMints: [{ mints: string[] }, EcashState];
+  /**
+   * The wallet's seed (docs/ecash-seed-counter.md, rule 7). The worker keeps the seed and the counters: an output's
+   * secret is handed over only for counters it reserves itself, for one operation (the review's finding 3).
+   */
+  ecashLaneGet: [{ keysetId: string }, { state: LaneState | null }];
+  /** Take a lane the mint shows as empty, where this browser has none; the lane kept is returned. */
+  ecashDraw: [{ keysetId: string; lane: number }, { state: LaneState }];
+  /** Outputs for one operation, at counters reserved from this browser's lane and written down first. */
+  ecashReserve: [{ keysetId: string; amounts: number[]; keyset: KeysetGiven }, { outputs: SeededOutput[]; from: number; next: number }];
+  /** Move this browser's lane forward, never back. */
+  ecashForward: [{ keysetId: string; next: number }, { state: LaneState | null }];
+  /** Blinded messages at any counters, for restore and the check before use: nothing that unblinds them. */
+  ecashBlinded: [{ keysetId: string; from: number; count: number }, { blinded: BlindedAt[] }];
+  /** Finished proofs for what a mint signed at this seed's counters, unblinded here. */
+  ecashUnblind: [{ keysetId: string; keyset: KeysetGiven; found: FoundAt[] }, { proofs: { id: string; amount: number; secret: string; C: string }[] }];
+  /** One output for a trial, at the next trial counter not yet handed out. */
+  ecashTrialOutput: [{ keysetId: string; keyset: KeysetGiven }, { output: SeededOutput }];
+  ecashRepin: [{ keysetId: string; keyset: KeysetGiven }, { hash: string; at: number }];
+  /** Keep a mint keyset's trial with the wallet record (docs/ecash-seed-counter.md, rule 4). */
+  ecashKeepTrial: [{ trial: { mint: string; keysetId: string; outcome: "passed" | "failed" } }, EcashState];
   ecashRoll: [EcashRoll, EcashState];
   /** The mints people recommend (NIP-87), the user's own follows first. */
   ecashMints: [Record<string, never>, { mints: RankedMint[] }];

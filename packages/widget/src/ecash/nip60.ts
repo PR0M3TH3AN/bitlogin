@@ -4,6 +4,7 @@
  * mint. Whoever can read a token can spend it, so every record is sealed to
  * the account's own key by the worker before it leaves it.
  */
+import { laneEnd, laneStart, validLane } from "./seedLanes.js";
 
 export const WALLET_KIND = 17375;
 export const TOKEN_KIND = 7375;
@@ -89,14 +90,103 @@ export const sumProofs = (proofs: readonly Pick<EcashProof, "amount">[]): number
 
 // ---- The wallet record (kind 17375): which mints, and a key of the wallet's own.
 
+/**
+ * A mint keyset's trial (docs/ecash-seed-counter.md, rule 4): whether it refused an output it had signed before. Kept
+ * in the wallet record as a row of BitLogin's own, which another NIP-60 wallet leaves alone, so one press decides it
+ * for every device. Only a keyset that "passed" is used with the seed.
+ */
+export interface EcashTrial {
+  mint: string;
+  keysetId: string;
+  outcome: "passed" | "failed";
+  /** When, in seconds since 1970. */
+  at: number;
+}
+const TRIAL_ROW = "bitlogin-trial";
+
+/**
+ * How far this account has gone in one lane of a mint keyset (docs/ecash-seed-counter.md, rule 3): one past the
+ * highest counter used. Kept in the wallet record so restore on another device follows a lane at least that far, gaps
+ * and all. Only ever up: two records are joined by taking the higher.
+ */
+export interface EcashCounter {
+  keysetId: string;
+  lane: number;
+  next: number;
+}
+const COUNTER_ROW = "bitlogin-counter";
+const PIN_ROW = "bitlogin-keys";
+/** A keyset's pin, as the wallet record carries it: the keys' hash, and when it was made (0 for one with no date). */
+export interface EcashPin {
+  keysetId: string;
+  hash: string;
+  at?: number;
+}
+/** Pins as one list: the newer for each keyset (an owner's re-pin, the fourth review's 2); the first where as new. */
+export function withPins(...lists: (readonly EcashPin[] | undefined)[]): EcashPin[] {
+  const by = new Map<string, EcashPin>();
+  for (const p of lists.flatMap((l) => l ?? [])) if (!by.has(p.keysetId) || (p.at ?? 0) > (by.get(p.keysetId)!.at ?? 0)) by.set(p.keysetId, { keysetId: p.keysetId, hash: p.hash, ...(p.at ? { at: p.at } : {}) });
+  return [...by.values()].slice(0, 200);
+}
+const COUNTERS_KEPT = 200;
+/** Two lists of counters as one: the higher for each keyset and lane. */
+export function withCounters(...lists: (readonly EcashCounter[] | undefined)[]): EcashCounter[] {
+  const by = new Map<string, EcashCounter>();
+  for (const c of lists.flatMap((l) => l ?? [])) {
+    const key = `${c.keysetId}:${c.lane}`;
+    if ((by.get(key)?.next ?? 0) < c.next) by.set(key, { keysetId: c.keysetId, lane: c.lane, next: c.next });
+  }
+  return [...by.values()].slice(-COUNTERS_KEPT);
+}
+/** Two lists of trials as one: the newer for each mint and keyset. */
+export function withTrials(...lists: (readonly EcashTrial[] | undefined)[]): EcashTrial[] {
+  let out: EcashTrial[] = [];
+  for (const t of lists.flatMap((l) => l ?? [])) {
+    const older = out.find((o) => o.mint === t.mint && o.keysetId === t.keysetId);
+    if (!older || older.at < t.at) out = withTrial(out, t);
+  }
+  return out;
+}
+const KEYSET = /^[0-9a-f]{16}$|^[0-9a-f]{66}$/u;
+
 export interface EcashWallet {
   /** A key used only to unlock ecash locked to this wallet (NIP-61). Never the account's key. */
   privkey: string;
   mints: string[];
+  /** Trials of mints' keysets, newest kept for each. Absent where none was made. */
+  trials?: EcashTrial[];
+  /** How far each lane of each keyset has gone. Absent where nothing was added by the seed. */
+  counters?: EcashCounter[];
+  /**
+   * A hash of the keys each keyset was first used with (the third review): another device takes these up, so keys
+   * made to match a short keyset id are refused there too. The newer stays: the owner may re-pin, at a press.
+   */
+  pins?: EcashPin[];
 }
 
 export function writeWallet(wallet: EcashWallet): string {
-  return JSON.stringify([["privkey", wallet.privkey], ...wallet.mints.map((mint) => ["mint", mint])]);
+  return JSON.stringify([
+    ["privkey", wallet.privkey],
+    ...wallet.mints.map((mint) => ["mint", mint]),
+    ...(wallet.trials ?? []).map((t) => [TRIAL_ROW, t.mint, t.keysetId, t.outcome, String(t.at)]),
+    ...(wallet.counters ?? []).map((c) => [COUNTER_ROW, c.keysetId, String(c.lane), String(c.next)]),
+    ...(wallet.pins ?? []).map((p) => [PIN_ROW, p.keysetId, p.hash, ...(p.at ? [String(p.at)] : [])])
+  ]);
+}
+
+/** A trial as a row says it, or null. */
+function readTrial(row: unknown[]): EcashTrial | null {
+  const [, mint, keysetId, outcome, at] = row;
+  const clean = cleanMint(mint);
+  const when = Number(at);
+  if (!clean || typeof keysetId !== "string" || !KEYSET.test(keysetId) || (outcome !== "passed" && outcome !== "failed") || !Number.isSafeInteger(when) || when <= 0) return null;
+  return { mint: clean, keysetId, outcome, at: when };
+}
+
+/** Add a trial, replacing an older one for the same mint and keyset. */
+export function withTrial(trials: readonly EcashTrial[] | undefined, trial: EcashTrial): EcashTrial[] {
+  const others = (trials ?? []).filter((t) => !(t.mint === trial.mint && t.keysetId === trial.keysetId));
+  return [...others, trial].slice(-50);
 }
 
 export function readWallet(text: string): EcashWallet | null {
@@ -109,12 +199,28 @@ export function readWallet(text: string): EcashWallet | null {
   if (!Array.isArray(rows)) return null;
   let privkey = "";
   const mints: string[] = [];
+  let trials: EcashTrial[] = [];
+  let counters: EcashCounter[] = [];
+  let pins: EcashPin[] = [];
   for (const row of rows) {
+    if (row[0] === PIN_ROW && typeof row[1] === "string" && KEYSET.test(row[1]) && typeof row[2] === "string" && /^[0-9a-f]{64}$/u.test(row[2])) pins = withPins(pins, [{ keysetId: row[1], hash: row[2], ...(Number.isSafeInteger(Number(row[3])) && Number(row[3]) > 0 ? { at: Number(row[3]) } : {}) }]);
     if (!Array.isArray(row) || typeof row[0] !== "string") continue;
     if (row[0] === "privkey" && typeof row[1] === "string" && HEX64.test(row[1])) privkey ||= row[1];
     if (row[0] === "mint" && cleanMint(row[1]) && !mints.includes(cleanMint(row[1])) && mints.length < ECASH_LIMITS.mints) mints.push(cleanMint(row[1]));
+    if (row[0] === COUNTER_ROW) {
+      const [, keysetId, lane, next] = row;
+      const c = { keysetId, lane: Number(lane), next: Number(next) };
+      if (typeof keysetId === "string" && KEYSET.test(keysetId) && validLane(c.lane) && Number.isSafeInteger(c.next) && c.next >= laneStart(c.lane) && c.next <= laneEnd(c.lane) + 1) counters = withCounters(counters, [c as EcashCounter]);
+    }
+    if (row[0] === TRIAL_ROW) {
+      const trial = readTrial(row);
+      if (trial) {
+        const older = trials.find((t) => t.mint === trial.mint && t.keysetId === trial.keysetId);
+        if (!older || older.at < trial.at) trials = withTrial(trials, trial);
+      }
+    }
   }
-  return privkey ? { privkey, mints } : null;
+  return privkey ? { privkey, mints, ...(trials.length ? { trials } : {}), ...(counters.length ? { counters } : {}), ...(pins.length ? { pins } : {}) } : null;
 }
 
 // ---- A token record (kind 7375): proofs at one mint, and the records it replaced.

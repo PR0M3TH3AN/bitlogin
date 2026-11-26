@@ -5,6 +5,7 @@
  */
 export { createEcashWallet, EcashError, type EcashStore, type EcashWalletApi, type FundQuote, type PayQuote } from "./wallet.js";
 export { cleanInvoice, cleanMint } from "./nip60.js";
+export { NO_SEED_HERE, RESTORE_GAP } from "./seedLanes.js";
 export { renderQrSvg } from "../qr.js";
 // Paying and buying (docs/paying.md) ride with the wallet: they are loaded where it is, and nowhere else.
 export { cleanLightningAddress, cleanSats, invoiceFromAddress, invoiceSats, cleanPayLimit, overPayLimit, PAY_LIMIT, readWorld, TipError, tipNote, type WorldWord } from "../pay/lightning.js";

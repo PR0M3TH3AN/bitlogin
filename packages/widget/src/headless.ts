@@ -22,6 +22,7 @@ import type { AppPermissions } from "./embedded/permissions.js";
 import type { Profile } from "./embedded/profile.js";
 import { WorkerClient } from "./worker/workerClient.js";
 import type { RankedMint } from "./ecash/mints.js";
+import type { SeedWorker } from "./ecash/seededMint.js";
 import type { PairOffer } from "./embedded/pair.js";
 import type { DriveSave, DriveState, RankedServer } from "./worker/driveStore.js";
 import type { KeptReceipt, ReceiptsState } from "./worker/receiptStore.js";
@@ -167,6 +168,13 @@ export interface HeadlessSigner {
     recommended(): Promise<RankedMint[]>;
     /** The browser's own copy of the wallet, asking no relay: to show at once, marked as being checked. */
     peek(): Promise<EcashState>;
+    /**
+     * The seed's actions in the worker (docs/ecash-seed-counter.md): the worker keeps the seed and the counters, and
+     * none of these hands out what unblinds a counter the page names.
+     */
+    seed: SeedWorker;
+    /** Keep a mint keyset's trial with the wallet record, for every device. */
+    keepTrial(trial: { mint: string; keysetId: string; outcome: "passed" | "failed" }): Promise<EcashState>;
   };
   /**
    * In the embedded signer: ask the user's relays whether this site was
@@ -465,6 +473,44 @@ export async function createHeadlessSigner(options: HeadlessSignerOptions = {}):
       async peek() {
         await requirePubkey();
         return client.ecashPeek();
+      },
+      seed: {
+        async lane(keysetId) {
+          await requirePubkey();
+          return (await client.ecashLaneGet(keysetId)).state;
+        },
+        async draw(keysetId, lane) {
+          await requirePubkey();
+          return (await client.ecashDraw(keysetId, lane)).state;
+        },
+        async reserve(keysetId, amounts, keyset) {
+          await requirePubkey();
+          return client.ecashReserve(keysetId, amounts, keyset);
+        },
+        async forward(keysetId, next) {
+          await requirePubkey();
+          return (await client.ecashForward(keysetId, next)).state;
+        },
+        async blinded(keysetId, from, count) {
+          await requirePubkey();
+          return (await client.ecashBlinded(keysetId, from, count)).blinded;
+        },
+        async unblind(keysetId, keyset, found) {
+          await requirePubkey();
+          return (await client.ecashUnblind(keysetId, keyset, found)).proofs as never;
+        },
+        async trialOutput(keysetId, keyset) {
+          await requirePubkey();
+          return (await client.ecashTrialOutput(keysetId, keyset)).output;
+        },
+        async repin(keysetId, keyset) {
+          await requirePubkey();
+          await client.ecashRepin(keysetId, keyset);
+        }
+      },
+      async keepTrial(trial) {
+        await requirePubkey();
+        return client.ecashKeepTrial(trial);
       }
     },
     async takeBack(what) {

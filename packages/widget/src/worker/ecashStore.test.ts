@@ -3,8 +3,8 @@ import { NostrSigner } from "@bitlogin/core/account";
 import { generatePrivateKey } from "@bitlogin/core/crypto";
 import { InMemoryKeyValueStore } from "@bitlogin/core/storage";
 import type { NostrEvent, NostrFilter, RelayPublishOutcome } from "@bitlogin/core/nostr";
-import { loadEcash, rollEcash, setEcashMints, type EcashRelays } from "./ecashStore.js";
-import { balances, readToken, TOKEN_KIND, WALLET_KIND } from "../ecash/nip60.js";
+import { keepEcashTrial, loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRelays } from "./ecashStore.js";
+import { balances, readToken, TOKEN_KIND, WALLET_KIND, writeWallet } from "../ecash/nip60.js";
 
 const MINT = "https://mint.example";
 const proof = (secret: string, amount: number) => ({ id: "00ad268c4d1f5826", amount, secret, C: `02${"ab".repeat(32)}` });
@@ -216,5 +216,112 @@ describe("where an ecash wallet is kept (docs/ecash.md)", () => {
     const after = await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof("a", 64)] }], history: { direction: "in", amount: 64 } });
     expect(after.unsaved).toBe(true);
     expect([...deps.relays.events.values()].filter((e) => e.kind === 7376)).toEqual([]);
+  });
+});
+
+describe("a mint's trial, kept with the wallet record (docs/ecash-seed-counter.md, rule 4)", () => {
+  const KEYSET = "00ad268c4d1f5826";
+  it("is kept here and on relays, read back on another device, and survives a change of mints", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    // Pressed a while after the mint was named: a record of the same second would tie with the one it replaces.
+    const kept = await keepEcashTrial({ ...deps, now: Date.now() / 1000 + 5 }, { mint: MINT, keysetId: KEYSET, outcome: "passed" });
+    expect(kept.trials).toMatchObject([{ mint: MINT, keysetId: KEYSET, outcome: "passed" }]);
+    // Another device, the same key, nothing kept locally.
+    const elsewhere = await loadEcash({ ...deps, store: new InMemoryKeyValueStore() });
+    expect(elsewhere.trials).toMatchObject([{ mint: MINT, keysetId: KEYSET, outcome: "passed" }]);
+    // A newer trial of the same keyset replaces it.
+    const again = await keepEcashTrial({ ...deps, now: Date.now() / 1000 + 15 }, { mint: MINT, keysetId: KEYSET, outcome: "failed" });
+    expect(again.trials).toHaveLength(1);
+    expect(again.trials![0]!.outcome).toBe("failed");
+    // Another mint added: the trial stays. The mint removed: its trial goes with it.
+    expect((await setEcashMints(deps, [MINT, "https://other.example"])).trials).toHaveLength(1);
+    expect((await setEcashMints(deps, ["https://other.example"])).trials).toBeUndefined();
+  });
+
+  it("refuses what isn't a trial, or a mint not in the wallet", async () => {
+    const deps = setup();
+    await setEcashMints(deps, [MINT]);
+    await expect(keepEcashTrial(deps, { mint: "https://elsewhere.example", keysetId: KEYSET, outcome: "passed" })).rejects.toThrow();
+    await expect(keepEcashTrial(deps, { mint: MINT, keysetId: "x", outcome: "passed" })).rejects.toThrow();
+    await expect(keepEcashTrial(deps, { mint: MINT, keysetId: KEYSET, outcome: "maybe" })).rejects.toThrow();
+  });
+});
+
+describe("a wallet record that replaces another (2026-11-24)", () => {
+  const KEYSET = "00ad268c4d1f5826";
+  it("is dated after it, even in the same second, so it can't lose to it", async () => {
+    const deps = setup();
+    const now = Math.floor(Date.now() / 1000);
+    await setEcashMints({ ...deps, now }, [MINT]);
+    // In the very same second, by the clock: a trial kept.
+    await keepEcashTrial({ ...deps, now }, { mint: MINT, keysetId: KEYSET, outcome: "passed" });
+    const records = [...deps.relays.events.values()].filter((e) => e.kind === WALLET_KIND).map((e) => e.created_at).sort();
+    expect(records).toEqual([now, now + 1]);
+    // Another device reads the newer, with the trial in it.
+    expect((await loadEcash({ ...deps, store: new InMemoryKeyValueStore() })).trials).toMatchObject([{ outcome: "passed" }]);
+  });
+
+  it("read from relays, two of the same second: every device takes the one with the lower id", async () => {
+    const deps = setup();
+    const me = deps.signer.getPublicKey();
+    const at = Math.floor(Date.now() / 1000);
+    const make = (mint: string) => deps.signer.signEvent({ kind: WALLET_KIND, created_at: at, tags: [], content: deps.signer.nip44Encrypt(me, writeWallet({ privkey: "cd".repeat(32), mints: [mint] })) });
+    const a = make("https://a.example");
+    const b = make("https://b.example");
+    // The higher id first, as a relay may return it: code with no rule for a tie would take that one.
+    for (const e of [a, b].sort((x, y) => y.id.localeCompare(x.id))) deps.relays.events.set(e.id, e);
+    const lower = a.id < b.id ? "https://a.example" : "https://b.example";
+    for (let i = 0; i < 3; i++) expect((await loadEcash({ ...deps, store: new InMemoryKeyValueStore() })).mints).toEqual([lower]);
+  });
+});
+
+describe("the wallet record, sent while another tab keeps a claim (fourth review 3)", () => {
+  /** Relays that hold the wallet record's publish until let go: the moment another tab writes. */
+  const holding = () => {
+    const deps = setup();
+    let letGo: () => void = () => {};
+    const held = new Promise<void>((done) => (letGo = done));
+    const publishAll = deps.relays.publishAll.bind(deps.relays);
+    let waiting: () => void = () => {};
+    const asked = new Promise<void>((done) => (waiting = done));
+    deps.relays.publishAll = async (event: NostrEvent) => {
+      if (event.kind === WALLET_KIND && hold.on) {
+        waiting();
+        await held;
+      }
+      return publishAll(event);
+    };
+    const hold = { on: false };
+    return { deps, hold, asked, letGo };
+  };
+
+  it("keeps what another tab sealed while the mints were being sent: setEcashMints", async () => {
+    const { deps, hold, asked, letGo } = holding();
+    await setEcashMints(deps, [MINT]);
+    hold.on = true;
+    const changing = setEcashMints(deps, [MINT, "https://other.example"]);
+    await asked;
+    // Another tab's claim, kept while the record is on its way.
+    await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof("claimed", 16)] }], history: { direction: "in", amount: 16 } });
+    letGo();
+    const after = await changing;
+    expect(after.mints).toEqual([MINT, "https://other.example"]);
+    const local = await peekEcash(deps);
+    expect(balances(local.tokens)[MINT]).toBe(16);
+  });
+
+  it("keeps what another tab sealed while a trial was being sent: keepEcashTrial", async () => {
+    const { deps, hold, asked, letGo } = holding();
+    await setEcashMints(deps, [MINT]);
+    hold.on = true;
+    const keeping = keepEcashTrial(deps, { mint: MINT, keysetId: "00ad268c4d1f5826", outcome: "passed" });
+    await asked;
+    await rollEcash(deps, { destroy: [], keep: [{ mint: MINT, proofs: [proof("claimed", 16)] }], history: { direction: "in", amount: 16 } });
+    letGo();
+    await keeping;
+    const local = await peekEcash(deps);
+    expect(balances(local.tokens)[MINT]).toBe(16);
+    expect(local.trials).toMatchObject([{ mint: MINT, keysetId: "00ad268c4d1f5826", outcome: "passed" }]);
   });
 });
