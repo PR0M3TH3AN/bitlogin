@@ -44,10 +44,12 @@ export function panelClientAllowed(client: string, me: string): boolean {
 /** What the panel is opened for. */
 /**
  * "ask": a world asked something. "switch": the account chooser, for a world. "account": the account pages.
+ * "secure": straight to "Secure this account", where this browser keeps a guest account for the client's family
+ * (docs/guest-accounts.md G6), and otherwise the account pages.
  * "files", "wallet" and "library": straight to the person's file browser, their ecash wallet, or what they have
  * bought, with no world.
  */
-export type PanelMode = "ask" | "switch" | "account" | "files" | "wallet" | "library";
+export type PanelMode = "ask" | "switch" | "account" | "files" | "wallet" | "library" | "secure";
 
 /** What the client says to the panel: which world asked, and what for. */
 export interface PanelHello {
@@ -104,7 +106,7 @@ export function readPanelHello(data: unknown): PanelHello | null {
   const d = data as Record<string, unknown>;
   if (d.bitlogin !== PANEL_PROTOCOL || d.v !== PANEL_VERSION || d.t !== "hello") return null;
   const mode = d.mode === undefined ? (d.world === undefined ? "account" : "ask") : d.mode;
-  if (mode !== "ask" && mode !== "switch" && mode !== "account" && mode !== "files" && mode !== "wallet" && mode !== "library") return null;
+  if (mode !== "ask" && mode !== "switch" && mode !== "account" && mode !== "files" && mode !== "wallet" && mode !== "library" && mode !== "secure") return null;
   let world: string | undefined;
   if (d.world !== undefined) {
     world = cleanOrigin(d.world);

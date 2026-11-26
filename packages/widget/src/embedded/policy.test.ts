@@ -112,6 +112,19 @@ describe("the messages", () => {
     expect(signerMessage({ t: "refused", id: "a2" })).toEqual({ nswp: "nswp-signer", v: 1, t: "refused", id: "a2" });
   });
 
+  it("a world's ask for its family is read as that, and only a family written as BitLogin writes one", () => {
+    const wrap = (m: Record<string, unknown>) => ({ nswp: "nswp-signer", v: 1, ...m });
+    expect(readSignerRequest(wrap({ t: "want", id: "f1", family: "https://*.bitblocks.network" }))).toEqual({ t: "wantFamily", id: "f1", family: "https://*.bitblocks.network" });
+    // Misshapen: asked, and read as asking for nothing the signer could take.
+    expect(readSignerRequest(wrap({ t: "want", id: "f2", family: "bitblocks.network" }))).toEqual({ t: "wantFamily", id: "f2", family: "" });
+    expect(readSignerRequest(wrap({ t: "want", id: "f3", family: "https://*.BITBLOCKS.network" }))).toEqual({ t: "wantFamily", id: "f3", family: "" });
+    // Asking for more by name stays that: a family is never asked with more.
+    expect(readSignerRequest(wrap({ t: "want", id: "f4", more: ["follows"], family: "https://*.bitblocks.network" }))).toEqual({ t: "wantMore", id: "f4", more: ["follows"] });
+    // The signer tells the window the world asked, as a flag; nothing else of it is carried.
+    expect(readHandoffMessage(handoffMessage({ t: "frame", nonce: "n1", world: SITE, recipient: key, family: true }))).toEqual({ t: "frame", nonce: "n1", world: SITE, recipient: key, family: true });
+    expect(readHandoffMessage({ ...handoffMessage({ t: "frame", nonce: "n1", world: SITE, recipient: key }), family: "yes" })).toEqual({ t: "frame", nonce: "n1", world: SITE, recipient: key });
+  });
+
   it("the window's and the signer's are read back as sent, and nothing misshapen is read", () => {
     expect(readHandoffMessage(handoffMessage({ t: "hello", nonce: "n1" }))).toEqual({ t: "hello", nonce: "n1" });
     expect(readHandoffMessage(handoffMessage({ t: "frame", nonce: "n1", world: `${SITE}/x`, recipient: key }))).toEqual({ t: "frame", nonce: "n1", world: SITE, recipient: key });
@@ -131,7 +144,8 @@ describe("the embedded signer and the window, as written", () => {
     expect(signer).not.toMatch(/\.restore\(\)|readCachedSession|localStorage|indexedDB|sessionStorage/u);
     // What it takes up is only what it kept for the site it is in, or for that site's family (docs/site-family.md):
     // and the family is worked out here, from the address the browser gave, never taken from a message.
-    expect(signer).toContain("restoreSignerGrant(site, familyOf(site) || undefined)");
+    // A guest account (docs/guest-accounts.md) is taken up the same way, made only where the site asked for one.
+    expect(signer).toContain("restoreSignerGrant(site, familyOf(site) || undefined, makeGuest)");
     expect(signer.split("restoreSignerGrant(").length - 1).toBe(1);
     expect(signer.split("familyOf(").length - 1).toBe(signer.split("familyOf(site)").length - 1);
     // A hand-off for a family is refused unless it is this site's own family.

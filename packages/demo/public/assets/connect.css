@@ -101,3 +101,17 @@ body.panel [data-window-only] { display: none !important; }
   body.panel #ask > ul { grid-column: 2; grid-row: span 9; margin-top: .3rem; font-size: .92rem; }
   body.panel #ask > p:last-child { grid-column: 1 / -1; margin-bottom: 0; }
 }
+/* Signing in a headset from a phone (/pair): the code typed as the headset shows it, and the numbers to tap. */
+.connect-input { width: 100%; box-sizing: border-box; padding: .7rem .9rem; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--ink-softer); color: var(--fg);
+  font: 1.4rem ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.pair-number { min-width: 5rem; font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+/* BitLogin's own headset page (Way 1): the address-bar line first, and the code, QR and number large enough to read in a headset. */
+.headset-check { margin: 0 0 1rem; }
+.headset-check-again { animation: headset-again .9s ease-out 1; }
+@keyframes headset-again { from { outline: 3px solid var(--fg); } to { outline: 3px solid transparent; } }
+@media (prefers-reduced-motion: reduce) { .headset-check-again { animation: none; } }
+.headset-qr { width: min(18rem, 80vw); margin: .8rem auto; }
+.headset-qr svg { width: 100%; height: auto; display: block; }
+.headset-code { text-align: center; font: 2.2rem ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .14em; margin: .4rem 0; }
+.headset-number { text-align: center; font-size: 1.6rem; }
+.headset-number strong { font-size: 2.6rem; font-variant-numeric: tabular-nums; }

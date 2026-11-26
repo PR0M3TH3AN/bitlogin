@@ -106,6 +106,39 @@ in place of Allow:
   family for thirty days. Asked at every new world, it would be the
   prompt this design is meant to remove.
 
+# SF4a. Offered at the first sign-in, where the world asks for it
+
+Added 2026-11-25 at the owner's word, through the BitPortal session: "These
+logins should carry. especialy when on the same domain." It changes SF4's
+"at the first site, nothing is said about a family" for a world that asks.
+
+- **The world asks, before its first sign-in.** It sends its embedded
+  signer `{ t: "want", family: "https://*.bitblocks.network" }`, written
+  exactly as BitLogin writes a family. The signer takes it only where that
+  is its own family, worked out from the browser's address for it by the
+  Public Suffix List, and BitLogin knows the family (`KNOWN_FAMILIES`). It
+  answers `familyTaken: true` or `false`, and approves nothing.
+- **The window works it out again** (its own family, known, nothing beyond a
+  note and a reaction asked) and, at the first sign-in, puts the family in
+  place of Allow, as SF4 does at the second, without naming an earlier site:
+
+  > Every site whose address ends in bitblocks.network can know who you are
+  > and ask you to sign notes, without asking you first. Choose this only if
+  > one person or team runs all of them.
+  >
+  > **[ Stay signed in at every bitblocks.network site ]**   **[ Just this one ]**
+
+- **Choosing the family is itself the remembering**: it is offered whether
+  or not "Remember" is ticked, and granted as SF4's family grant is (thirty
+  days for a known family, signed out of everywhere by a sign-out at any of
+  them). "Just this one" is the plain Allow, with the box as the person left
+  it, and turns the family down for thirty days, as in SF4.
+- **Unchanged:** never with the lock on; not where "Just this one" was
+  pressed for the family in the last thirty days; never for a family
+  BitLogin doesn't know, or one that isn't the asking site's own; never with
+  more than a note and a reaction. A world that doesn't ask sees SF4 as
+  before.
+
 # SF5. What a family grant allows
 
 Less than a site's own grant, where the two differ:
@@ -115,7 +148,7 @@ Less than a site's own grant, where the two differ:
 | Who the person is (`state`, §SW16) | Yes | Yes |
 | A room pass (§SW16) | Yes, for this origin | Yes, `nswp:origin` is always the exact origin that asked |
 | A note and a reaction | Yes | Yes |
-| An application's declared kinds (§SW9) | As approved | **No.** An application that declares kinds still gets its own Allow, at its own origin, with its own list |
+| An application's declared kinds (§SW9) | As approved | **No.** An application that declares kinds still gets its own Allow, at its own origin, with its own list. An application may ask for its family as well; the family still gets only SF5's (SF5a) |
 | Reserved kinds (§SW9) | Only at the named address | Only at the named address, through that address's own grant |
 | How long | 30 days known, 7 unknown | 30 days for a known family (`bitblocks.network`, SF9.3), otherwise 7 |
 
@@ -130,6 +163,34 @@ Less than a site's own grant, where the two differ:
   sealed in the one store (SF2). It signs nothing a site's own grant could
   not.
 
+
+# SF5a. An application that asks for its family as well
+
+Added 2026-11-25, at the owner's word through the BitPortal session: the
+portal is an application (it declares kinds), and "these logins should
+carry".
+
+- **The ask.** An application's client (`createBitLoginClient`) may pass
+  `family: "https://*.bitblocks.network"`. It is sent to the embedded signer
+  as its own `want`, before the application's set, and taken only as SF4a
+  takes a world's: its own family, by the browser's address, and one
+  BitLogin knows. The client's state says `familyTaken`; a signer too old
+  to answer counts as "not offered".
+- **The screen.** The application's own Allow screen, as today, with the
+  family line beside it, and two presses, neither the default:
+  **[ Stay signed in at every bitblocks.network site ]**
+  **[ Just this one ]** (the application's plain Allow).
+- **One press, two grants.** "Stay signed in…" hands over one sealed
+  hand-off carrying the application's set and the family. The signer keeps
+  two records: the application's own (its kinds, its address only, as long
+  as its own grant is kept, and the family it was allowed with), and the
+  family's, with no set at all: a note, a reaction and a pass, as above. A
+  family's record can never hold a set (`saveSignerGrant` refuses one).
+- **A sign-out at the application ends the family too,** as a sign-out at
+  any site of it does.
+- **Unchanged:** never with the lock on; not within thirty days of
+  "Just this one" for that family; never for a family BitLogin doesn't
+  know.
 # SF6. Seeing it, and taking it back
 
 - **The sites list (§SW18)** shows the family as one row, "Every site at
@@ -193,6 +254,11 @@ Less than a site's own grant, where the two differ:
    list of families, changed only by a release.)
 2. **Offer it at the first site of a family, or only from the second?**
    **Decided 2026-11-19: from the second, as two buttons** (SF4).
+   **Reversed 2026-11-25, for a world that asks,** by the owner's words
+   through the BitPortal session: "These logins should carry. especialy
+   when on the same domain." A world of a known family may ask for it at
+   its first sign-in, and is offered it there (SF4a). A world that doesn't
+   ask is still offered it from the second.
 3. **Is `bitblocks.network` a known family,** remembered thirty days
    instead of seven? **Decided 2026-11-19: yes.** BitLogin keeps a short
    list of known families beside `KNOWN_APPS`, starting with

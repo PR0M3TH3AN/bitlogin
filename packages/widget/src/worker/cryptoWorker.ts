@@ -54,9 +54,9 @@ import { saveCachedSession, loadCachedSession, clearCachedSession, cachedSession
 import { describe as describeKept, forget as forgetKept, keep as keepKept, loadKept, saveKept } from "./keptAccounts.js";
 import { LOCK_LIMITS, openLockWithDevice, openLockWithPin, readLock, removeLock, removeLockDevice, setLockDevice, setLockPin, type OpenResult } from "./lock.js";
 import { openAppHandoff, sealHandoff, SIGNER_ONLY_ACTIONS, type HandoffApp, type SealedHandoff } from "./handoff.js";
-import { inFamily, readFamily } from "../embedded/family.js";
+import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
 import { isLocalAddress, isSignInAddress, mayDecryptFrom, mayEncryptTo, MESSAGE_KINDS, prepareForApp, readPeersFor } from "../embedded/permissions.js";
-import { createSignGate, HELD_MOST, signClass } from "../embedded/policy.js";
+import { createSignGate, HELD_MOST, passAllowed, prepareForGuest, signClass } from "../embedded/policy.js";
 import { openSave, SAVE_LIMITS, saveAddress, sealSave } from "../embedded/saves.js";
 import { SCORE_LIMITS, scoreForWorld } from "../embedded/scores.js";
 import { ACHIEVEMENT_LIMITS, achievementForWorld } from "../embedded/achievements.js";
@@ -75,7 +75,13 @@ import { cleanServer, DRIVE_LIMITS } from "../drive/tree.js";
 import { keepEcashTrial, loadEcash, peekEcash, rollEcash, setEcashMints, type EcashRoll } from "./ecashStore.js";
 import { ecashSeed } from "./ecashSeed.js";
 import { drawLane, forwardLane, repinKeyset, reserveOutputs, seedBlinded, seedLane, seedUnblind, trialOutput, workerLock } from "./ecashLanes.js";
-import { deleteSignerGrant, grantedAt, grantSite, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import { deleteSignerGrant, grantedAt, grantSite, grantsToKeep, keepSecFor, loadSignerGrant, saveSignerGrant } from "./signerGrant.js";
+import { forgetGuest, loadGuest, makeGuest } from "./guestRecord.js";
+import { phonePairing, startHeadsetPairing, type HeadsetPairing, type PhonePairing } from "./pairing.js";
+import { PAIRING_PAUSED, pairingPaused, type PairOffer } from "../embedded/pair.js";
+
+/** How long a guest's signer stays unlocked in one page before it takes the guest up again: a day. */
+const GUEST_SESSION_SEC = 24 * 3600;
 import {
   checkDue,
   checkLearned,
@@ -189,6 +195,12 @@ interface SessionState {
    *  allowed every site under one domain. Null for a grant kept for its site alone. `site` is still the exact
    *  site it serves: a room pass names that, never the family. */
   family: string | null;
+  /** The family an application's own grant was allowed with in the same press (SF5a): a sign-out here ends it too. */
+  memberOf: string | null;
+  /** For a signer-only session: the family whose guest account this is (docs/guest-accounts.md), or null. */
+  guest: string | null;
+  /** For a signer-only session: the device a phone paired, by its random id (docs/pair-a-headset.md), or null. */
+  device: string | null;
   /** For a signer-only session serving a world: what the user let it do beyond a note and a reaction, by name. */
   more: readonly string[];
 }
@@ -213,12 +225,22 @@ const session: SessionState = {
   grantAt: null,
   relays: [],
   family: null,
+  memberOf: null,
+  guest: null,
+  device: null,
   more: []
 };
 
 /** The throwaway key a hand-off is to be sealed to, between handoffBegin and
  *  handoffAccept. One at a time, used once. */
 let pendingHandoff: Uint8Array | null = null;
+/** A headset waiting to be signed in from a phone (docs/pair-a-headset.md): one at a time. */
+let headsetPairing: HeadsetPairing | null = null;
+/** On the phone: the pairing under way, by the offers it found, and the throwaway key that speaks for it. */
+/** The phone's side: the offers found for the code it was given, and the number it sent each to show. */
+/** Way 1: the offer BitLogin's own /headset/ page makes, for the world's signer. */
+let pageOffer: HeadsetPairing | null = null;
+let phonePaired: { phone: PhonePairing; offers: Map<string, PairOffer>; numbers: Map<string, number> } | null = null;
 
 
 let vaultRelayUrls: string[] = [...BUILTIN_VAULT_RELAYS];
@@ -383,6 +405,9 @@ function clearSession(): void {
   session.grantAt = null;
   session.relays = [];
   session.family = null;
+  session.memberOf = null;
+  session.guest = null;
+  session.device = null;
   session.more = [];
   if (session.pendingRecovery) {
     session.pendingRecovery.recoveryPrivateKey.fill(0);
@@ -889,34 +914,49 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       if (!session.remember) return { kept: false };
       // An application's grant is for the site its hand-off was sealed for, and no other.
       if ((session.app && session.app.site !== p.site) || (session.site && session.site !== p.site)) throw new Error("This hand-off was for another site.");
-      // Allowed for every site of a family: kept once, under the family, and this site's own grant (an older
-      // choice) is forgotten, so what the user chose last is what applies.
-      if (session.family) {
-        if (!inFamily(p.site, session.family)) throw new Error("This hand-off was for another site.");
-        await deleteSignerGrant(store, p.site);
+      // Allowed for every site of a family: kept once, under the family. A world's own grant (an older choice) is
+      // forgotten, so what the user chose last is what applies. An application allowed with its family keeps two
+      // (docs/site-family.md SF5a): its own set at its own address, and the family's, which holds no set.
+      const family = session.family ?? session.memberOf;
+      if (family && !inFamily(p.site, family)) throw new Error("This hand-off was for another site.");
+      if (session.family) await deleteSignerGrant(store, p.site);
+      const grants = grantsToKeep({ site: p.site, app: session.app, family, more: cleanMore(session.more) });
+      let kept = true;
+      for (const g of grants) {
+        kept =
+          (await saveSignerGrant(
+            store,
+            {
+              site: g.site,
+              everydayPrivateKey,
+              // The application's own grant for as long as the signer worked out for it; the family's by its own name.
+              until: session.app && family && g.site === family ? Math.floor(now) + keepSecFor(family) : p.until,
+              ...(p.name ? { name: p.name } : {}),
+              ...(session.profile && !session.app ? { profile: session.profile } : {}),
+              at: session.grantAt ?? Math.floor(now),
+              ...(session.relays.length ? { relays: session.relays } : {}),
+              signed: [],
+              ...(g.more ? { more: g.more } : {}),
+              ...(g.memberOf ? { memberOf: g.memberOf } : {}),
+              ...(session.device ? { device: session.device } : {}),
+              ...(g.permissions ? { permissions: g.permissions, signedSensitive: [] } : {})
+            },
+            now
+          )) && kept;
       }
-      return {
-        kept: await saveSignerGrant(
-          store,
-          {
-            site: session.family ?? p.site,
-            everydayPrivateKey,
-            until: p.until,
-            ...(p.name ? { name: p.name } : {}),
-            ...(session.profile ? { profile: session.profile } : {}),
-            at: session.grantAt ?? Math.floor(now),
-            ...(session.relays.length ? { relays: session.relays } : {}),
-            signed: [],
-            ...(!session.app && !session.family && session.more.length ? { more: cleanMore(session.more) } : {}),
-            ...(session.app ? { permissions: session.app.permissions, signedSensitive: [] } : {})
-          },
-          now
-        )
-      };
+      return { kept };
     }
 
     // The site's page was loaded again: what was kept for that site, if it is still in date, becomes a
     // signer-only session. It touches nothing a full session uses.
+    // Whether a guest is kept here for a family: its public key, and nothing else of it. For BitLogin's own panel,
+    // which says so and offers to secure it (docs/guest-accounts.md G3, G8).
+    case "guestStatus": {
+      const family = (payload as { family?: unknown }).family;
+      const guest = typeof family === "string" && readFamily(family) ? await loadGuest(store, family) : null;
+      return guest ? { pubkey: getPublicKeyHex(guest.key) } : {};
+    }
+
     case "signerRestore": {
       const p = payload as SignerSitePayload;
       // The site's own grant first. Where it has none, the family's, for a site in that family: the embedded
@@ -924,7 +964,25 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const ownGrant = await loadSignerGrant(store, p.site, Date.now() / 1000);
       const family = !ownGrant && p.family !== undefined && readFamily(p.family) && inFamily(p.site, p.family) ? p.family : null;
       const grant = ownGrant ?? (family ? await loadSignerGrant(store, family, Date.now() / 1000) : null);
-      if (!grant || (family && grant.site !== family)) return { restored: false };
+      // Nobody signed in here for the site or its family: its guest account, for a family BitLogin knows
+      // (docs/guest-accounts.md). Taken up where one is kept; made only where the site asked for one. An account wins.
+      if (!grant || (family && grant.site !== family)) {
+        const guestFamily = p.family !== undefined && readFamily(p.family) && inFamily(p.site, p.family) && knownFamily(p.family) ? p.family : null;
+        const guest = guestFamily ? (p.guest === true ? await makeGuest(store, guestFamily).catch(() => null) : await loadGuest(store, guestFamily)) : null;
+        if (!guest) return { restored: false };
+        clearSession();
+        session.signer = new NostrSigner(guest.key);
+        session.everydayPrivateKey = guest.key;
+        session.signerOnly = true;
+        session.app = null;
+        session.site = p.site;
+        session.guest = guestFamily;
+        session.remember = false;
+        session.profile = null;
+        session.relays = [];
+        session.more = [];
+        return { restored: true, everydayPublicKey: session.signer.getPublicKey(), until: Math.floor(Date.now() / 1000) + GUEST_SESSION_SEC, signed: [], guest: true };
+      }
       clearSession();
       session.signer = new NostrSigner(grant.everydayPrivateKey);
       session.everydayPrivateKey = grant.everydayPrivateKey;
@@ -933,6 +991,8 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       // The site it serves is the one asking, whichever grant it was kept under.
       session.site = family ? p.site : grant.site;
       session.family = family;
+      session.memberOf = !family && grant.memberOf ? grant.memberOf : null;
+      session.device = grant.device ?? null;
       session.profile = grant.profile ?? null;
       session.remember = true;
       session.grantAt = grantedAt(grant);
@@ -978,7 +1038,9 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
     case "signerForget": {
       const site = (payload as SignerSitePayload).site;
       await deleteSignerGrant(store, site);
-      if (session.family && inFamily(site, session.family)) await deleteSignerGrant(store, session.family);
+      // Its family too, where it was signed in by it, or allowed with it in the same press (SF5a).
+      const family = session.family ?? session.memberOf;
+      if (family && inFamily(site, family)) await deleteSignerGrant(store, family);
       await store.delete(HELD_RECEIPTS + site).catch(() => {});
       // Its counts go with it: nothing is left here that says the site was ever used.
       for (const what of ["save", "follow", "seal", "unwrap", "reach", "score", "achieve"]) {
@@ -1014,6 +1076,141 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       }
     }
 
+    // ---- A headset signed in from a phone (docs/pair-a-headset.md). The headset's side, in its signer frame: a
+    // one-time key made here, an offer naming the code by hash, and the phone's notes heard. What arrives is the same
+    // sealed hand-off an Allow sends, opened once and taken up as one.
+    case "pairBegin": {
+      if (PAIRING_PAUSED) pairingPaused();
+      const p = payload as { site?: unknown; device?: unknown };
+      const site = grantSite(p.site);
+      if (!site) throw new Error("That is not a site.");
+      headsetPairing?.cancel();
+      headsetPairing = await startHeadsetPairing({ relayUrls: vaultRelayUrls, site, device: typeof p.device === "string" ? p.device.slice(0, 48) : "a device" });
+      return { code: headsetPairing.code, expires: headsetPairing.expires };
+    }
+    case "pairPoll": {
+      if (!headsetPairing) return { status: "ended" };
+      const state = headsetPairing.state();
+      if (state.status !== "paired" || !state.opened) return { status: state.status, ...(state.number !== undefined ? { number: state.number } : {}) };
+      headsetPairing = null;
+      const opened = state.opened;
+      clearSession();
+      session.signer = new NostrSigner(opened.key);
+      session.everydayPrivateKey = opened.key;
+      session.signerOnly = true;
+      session.app = null;
+      session.site = opened.site;
+      session.profile = opened.profile;
+      session.remember = opened.remember;
+      session.grantAt = opened.at;
+      session.relays = opened.relays;
+      session.family = opened.family;
+      session.more = [];
+      session.device = opened.device ?? null;
+      return {
+        status: "paired",
+        everydayPublicKey: session.signer.getPublicKey(),
+        ...(opened.site ? { site: opened.site } : {}),
+        ...(opened.profile ? { profile: opened.profile } : {}),
+        ...(opened.remember ? { remember: true } : {}),
+        ...(opened.family ? { family: opened.family } : {})
+      };
+    }
+    case "pairCancel": {
+      headsetPairing?.cancel();
+      headsetPairing = null;
+      return {};
+    }
+
+    // Way 1 (docs/pair-a-headset.md): BitLogin's own /headset/ page, top-level in the headset's 2D browser, where the
+    // world can't draw. It offers the code for the world's signer, named by that signer's one-time hand-off key, and
+    // keeps what the phone sends sealed, as it came: only that signer can open it. No session is needed or touched.
+    // Not on the list a handed-over session may ask: no signer frame offers a code.
+    case "headsetBegin": {
+      const p = payload as { site?: unknown; device?: unknown; to?: unknown };
+      const site = grantSite(p.site);
+      if (!site) throw new Error("That is not a site.");
+      if (typeof p.to !== "string" || !/^[0-9a-f]{64}$/u.test(p.to)) throw new Error("That is not a signer's key.");
+      pageOffer?.cancel();
+      pageOffer = await startHeadsetPairing({ relayUrls: vaultRelayUrls, site, device: typeof p.device === "string" ? p.device.slice(0, 48) : "a device", to: p.to });
+      return { code: pageOffer.code, expires: pageOffer.expires };
+    }
+    case "headsetPoll": {
+      if (!pageOffer) return { status: "ended" };
+      const state = pageOffer.state();
+      if (state.status === "paired") pageOffer = null;
+      return { status: state.status, ...(state.number !== undefined ? { number: state.number } : {}), ...(state.sealed ? { sealed: state.sealed } : {}) };
+    }
+    case "headsetCancel": {
+      pageOffer?.cancel();
+      pageOffer = null;
+      return {};
+    }
+
+    // The phone's side, at BitLogin's own /pair, signed in: find the offer by its code, the number to match, and the
+    // answer: the hand-off an Allow would send that site, sealed to the headset's one-time key, with a device id.
+    case "pairFind": {
+      phonePaired = { phone: phonePairing({ relayUrls: vaultRelayUrls }), offers: new Map(), numbers: new Map() };
+      const offers = await phonePaired.phone.find(String((payload as { code?: unknown }).code ?? ""));
+      for (const offer of offers) phonePaired.offers.set(offer.id, offer);
+      return { offers };
+    }
+    case "pairFound":
+    case "pairEnd": {
+      const offer = phonePaired?.offers.get(String((payload as { offer?: unknown }).offer ?? ""));
+      if (!phonePaired || !offer) throw new Error("That headset isn't being paired here.");
+      if (action === "pairEnd") {
+        await phonePaired.phone.end(offer);
+        phonePaired = null;
+        return {};
+      }
+      // One number to an offer: asked again, the one sent is said again, so it can't be tried until one matches.
+      const sent = phonePaired.numbers.get(offer.id);
+      if (sent !== undefined) return { number: sent };
+      const number = await phonePaired.phone.found(offer);
+      phonePaired.numbers.set(offer.id, number);
+      return { number };
+    }
+    case "pairAnswer": {
+      const { everydayPrivateKey } = requireUnlocked();
+      if (session.signerOnly) throw new Error("A headset is signed in from BitLogin's own page only.");
+      const p = payload as { offer?: unknown; number?: unknown; family?: unknown };
+      const offer = phonePaired?.offers.get(String(p.offer ?? ""));
+      if (!phonePaired || !offer) throw new Error("That headset isn't being paired here.");
+      // Only an offer from BitLogin's own headset page, naming the world's signer (Way 1). One drawn in a world, of the
+      // paused kind, is answered by no phone: a hostile world could show the code of its own headset's pairing.
+      if (PAIRING_PAUSED && !offer.to) pairingPaused();
+      // Only once the person tapped the number the headset shows (docs/pair-a-headset.md P4a). Another, and it ends.
+      const sent = phonePaired.numbers.get(offer.id);
+      if (sent === undefined || p.number !== sent) {
+        const { phone } = phonePaired;
+        phonePaired = null;
+        await phone.end(offer).catch(() => {});
+        throw new Error("Not the number the headset shows.");
+      }
+      // A family only where it is the headset site's own, and one BitLogin knows, as the window offers it.
+      if (p.family !== undefined && (typeof p.family !== "string" || !readFamily(p.family) || !inFamily(offer.site, p.family) || !knownFamily(p.family))) throw new Error("Not that site's family.");
+      const device = bytesToHex(randomBytes(16));
+      const sender = generatePrivateKey();
+      try {
+        const sealed = sealHandoff(everydayPrivateKey, offer.to ?? offer.key, sender, undefined, {
+          site: offer.site,
+          ...(session.profile ? { profile: session.profile } : {}),
+          remember: true,
+          ...(typeof p.family === "string" ? { family: p.family } : {}),
+          ...(lockKey ? { visitOnly: true } : {}),
+          at: Date.now() / 1000,
+          relays: session.relays,
+          device
+        });
+        await phonePaired.phone.answer(offer, sealed);
+      } finally {
+        wipe(sender);
+      }
+      phonePaired = null;
+      return { device };
+    }
+
     case "handoffAccept": {
       if (!pendingHandoff) throw new Error("No hand-off was begun here.");
       const mine = pendingHandoff;
@@ -1034,7 +1231,11 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       session.remember = opened.remember;
       session.grantAt = opened.at;
       session.relays = opened.relays;
-      session.family = opened.family;
+      // An application allowed with its family (SF5a) serves as itself, under its own grant: the family is what it
+      // was allowed with, kept beside it and ended with it, never what its signatures are counted or checked under.
+      session.family = opened.app ? null : opened.family;
+      session.memberOf = opened.app ? opened.family : null;
+      session.device = opened.device ?? null;
       session.more = opened.more;
       return {
         everydayPublicKey: session.signer.getPublicKey(),
@@ -1088,7 +1289,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const p = payload as TakeBackPayload;
       const me = signer.getPublicKey();
       const now = Date.now() / 1000;
-      const what = p.all === true ? ({ all: true } as const) : { site: String(p.site ?? "") };
+      const what = p.all === true ? ({ all: true } as const) : typeof p.device === "string" ? { device: p.device } : { site: String(p.site ?? "") };
       const finder = readPool([...new Set([...discoveryRelayUrls, ...vaultRelayUrls])].slice(0, 8));
       let mine: string[];
       try {
@@ -1157,7 +1358,7 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
       const newest = newestTakeBackEvent(records.outcomes.flatMap((o) => o.events), me, now);
       const record = newest ? openTakenBack(signer, newest.content) : null;
       // Whatever else is true of this round, a record that ends the grant ends it.
-      if (record && isTakenBack(record, site, at)) {
+      if (record && isTakenBack(record, site, at, grant.device)) {
         await deleteSignerGrant(store, site);
         clearSession();
         return { state: "ended" };
@@ -1189,17 +1390,18 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
     }
 
     // A room pass (NSWP kind 27300) for the site this session serves, and for no other. The site, the time, how
-    // long it lasts and the profile are all this worker's own: what is asked for is a session public key. Not
-    // for an application: an application is held to the set the user read, and a pass is not in one.
+    // long it lasts and the profile are all this worker's own: what is asked for is a session public key. For an
+    // application only where the set the user read already signs the pass's kind (passAllowed); for a guest, said.
     case "roomPass": {
       const { signer } = requireUnlocked();
-      if (!session.signerOnly || session.app || !session.site) throw new Error("refused");
+      if (!session.signerOnly || !passAllowed(session.app ? session.app.permissions : null) || !session.site) throw new Error("refused");
       const pass = buildRoomPass({
         session: (payload as RoomPassPayload).session,
         site: session.site,
         identity: signer.getPublicKey(),
         nowSeconds: Date.now() / 1000,
-        profile: session.profile
+        profile: session.profile,
+        guest: !!session.guest
       });
       if (!pass) throw new Error("refused");
       return signer.signEvent(pass);
@@ -1544,9 +1746,21 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
 
     case "register": {
       const p = payload as RegisterPayload;
+      // Securing a guest (docs/guest-accounts.md G6): made from the guest's own phrase, so its key is the guest's.
+      const fromGuest = p.fromGuest !== undefined && !p.importKey && readFamily(p.fromGuest) && knownFamily(p.fromGuest) ? p.fromGuest : null;
+      if (p.fromGuest !== undefined && !fromGuest) throw new Error("That is not a guest account kept here.");
+      const guest = fromGuest ? await loadGuest(store, fromGuest) : null;
+      if (fromGuest && !guest) throw new Error("No guest account is kept here to secure.");
       const result = p.importKey
         ? await importAccount({ nsecOrHex: p.importKey, loginName: p.loginName, password: p.password, vaultRelayUrls })
-        : await registerAccount({ loginName: p.loginName, password: p.password, vaultRelayUrls });
+        : await registerAccount({ loginName: p.loginName, password: p.password, vaultRelayUrls, ...(guest ? { recoveryPhrase: guest.phrase } : {}) });
+      if (fromGuest) {
+        // The family is signed in as the account now, by the family's grant, as SF4's is: the guest is forgotten,
+        // and every world of the family takes the account up, the same key, no longer a guest.
+        const now = Date.now() / 1000;
+        await saveSignerGrant(store, { site: fromGuest, everydayPrivateKey: result.everydayPrivateKey, until: Math.floor(now) + keepSecFor(fromGuest), at: Math.floor(now), signed: [] }, now);
+        await forgetGuest(store, fromGuest);
+      }
       clearSession();
       session.signer = new NostrSigner(result.everydayPrivateKey);
       session.everydayPrivateKey = result.everydayPrivateKey;
@@ -1725,6 +1939,12 @@ async function handle(action: string, payload: unknown, id = ""): Promise<unknow
         // the rest of that site's rules stay with the page.
         if (session.app) {
           const allowed = prepareForApp(session.app.permissions, p, session.app.site, Date.now() / 1000);
+          if (!allowed) throw new Error("refused");
+          return signer.signEvent(allowed);
+        }
+        // A guest account: a note, a reaction and its bag, and nothing else (docs/guest-accounts.md G4).
+        if (session.guest) {
+          const allowed = session.site ? prepareForGuest(p, session.site, Date.now() / 1000) : null;
           if (!allowed) throw new Error("refused");
           return signer.signEvent(allowed);
         }
@@ -2380,8 +2600,8 @@ const KNOWN_ACTIONS = new Set<string>([
   "changePassword", "publishProfileAndRelayLists", "getPublicKey", "signEvent",
   "nip44Encrypt", "nip44Decrypt", "nip04Encrypt", "nip04Decrypt", "exportIdentity",
   "buildRecoveryExport", "repairReplicas", "checkReplicaHealth", "getSessionStatus", "restoreSession", "logout",
-  "handoffBegin", "handoffExport", "handoffAccept",
-  "signerKeep", "signerRestore", "signerTouch", "signerForget", "signerHold", "signerHeld",
+  "handoffBegin", "handoffExport", "handoffAccept", "pairBegin", "pairPoll", "pairCancel", "headsetBegin", "headsetPoll", "headsetCancel", "pairFind", "pairFound", "pairEnd", "pairAnswer",
+  "signerKeep", "signerRestore", "guestStatus", "signerTouch", "signerForget", "signerHold", "signerHeld",
   "appEncrypt", "appDecrypt", "appDecryptEvent", "loadProfile", "roomPass", "worldSave", "worldFind", "worldOpen", "worldFollow", "worldScore", "worldAchieve", "worldSeal", "worldUnwrap", "worldReach",
   "takeBack", "signerCheck", "accountsList", "accountsSwitch", "accountsAdd", "accountsRemove",
   "lockStatus", "lockEnable", "lockSetDevice", "lockRemoveDevice", "lockDisable", "lockNow", "lockOpen",

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<meta name="robots" content="noindex" />
+<title>BitLogin — sign in a headset</title>
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="../assets/site.css" />
+<link rel="stylesheet" href="../assets/connect.css" />
+</head>
+<body class="connect">
+
+<nav class="nav">
+  <a class="brand" href="../index.html"><img class="lockup" src="../assets/lockup.svg" alt="BitLogin" /></a>
+  <div class="links"><a href="../sites/">Sites you allowed</a></div>
+</nav>
+
+<main class="connect-main">
+  <section class="connect-card">
+    <h1 id="title">Sign in a headset</h1>
+
+    <div id="step-out" hidden>
+      <p>Sign in to BitLogin on this phone first, then come back to this page.</p>
+      <div class="cta-row"><a class="btn" href="../account.html">Sign in</a></div>
+    </div>
+
+    <div id="step-holding" hidden>
+      <p><strong>Is the code on a page whose address bar says bitlogin.network, on a headset you are holding?</strong></p>
+      <p class="connect-small">A world can draw anything inside it, a code too. Only BitLogin's own page, outside the world, shows a code you can trust.</p>
+      <div class="cta-row">
+        <button id="holding-yes" class="btn secondary" type="button">Yes</button>
+        <button id="holding-no" class="btn secondary" type="button">No</button>
+      </div>
+    </div>
+
+    <form id="step-code" hidden>
+      <p>Type the code your headset shows.</p>
+      <p><input id="code" class="connect-input" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" maxlength="12" placeholder="K7QF-3MPX" aria-label="The code your headset shows" /></p>
+      <div class="cta-row"><button id="find" class="btn" type="submit">Find the headset</button></div>
+    </form>
+
+    <div id="step-number" hidden>
+      <p><strong>Which number does your headset show?</strong></p>
+      <p class="connect-small">It shows it beside the code.</p>
+      <div id="numbers" class="cta-row"></div>
+    </div>
+
+    <div id="step-ask" hidden>
+      <p><strong>Sign in this headset?</strong></p>
+      <p id="ask-device" class="connect-site"></p>
+      <p id="ask-site"></p>
+      <p id="ask-code" class="connect-small"></p>
+      <p id="ask-lasts" class="connect-small"></p>
+      <div class="cta-row">
+        <button id="ask-family" class="btn" type="button" hidden></button>
+        <button id="ask-site-only" class="btn" type="button"></button>
+        <button id="ask-no" class="btn secondary" type="button">Not this one</button>
+      </div>
+      <p class="connect-small">Only sign in a headset you are holding.</p>
+    </div>
+
+    <p id="said" class="connect-status" role="status" hidden></p>
+    <div id="again" class="cta-row" hidden><a class="btn secondary" href="./">Start again</a></div>
+  </section>
+
+  <section class="connect-card" style="margin-top:1rem">
+    <h1>How this works</h1>
+    <ul>
+      <li>Nothing is typed in the headset. Your phone sends the headset a key that can only sign, sealed so only that headset can open it, as pressing Allow does for any site.</li>
+      <li>The code lasts five minutes and works once.</li>
+      <li>You can sign the headset out from <a href="../sites/">Sites you allowed</a> on this phone.</li>
+    </ul>
+  </section>
+</main>
+
+<script type="module" src="../assets/pair.js"></script>
+</body>
+</html>

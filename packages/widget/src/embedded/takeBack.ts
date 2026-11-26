@@ -49,9 +49,15 @@ export interface TakenBack {
   allBefore: number;
   /** Sites taken back, and when. */
   sites: { site: string; before: number }[];
+  /**
+   * Devices taken back, and when (docs/pair-a-headset.md P5): a headset signed in from a phone is named by the
+   * random `device` id its hand-off carried, so it can be signed out alone. Absent in a record that names none.
+   */
+  devices?: { device: string; before: number }[];
 }
 
 export const NOTHING_TAKEN_BACK: TakenBack = { allBefore: 0, sites: [] };
+const DEVICE = /^[0-9a-f]{32}$/u;
 
 const time = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 
@@ -69,10 +75,17 @@ export function readTakenBack(input: unknown): TakenBack | null {
     if (!site || site !== e.site || !before) continue;
     newest.set(site, Math.max(newest.get(site) ?? 0, before));
   }
-  return { allBefore: time(r.all_before), sites: [...newest].map(([site, before]) => ({ site, before })) };
+  const devices = new Map<string, number>();
+  for (const entry of Array.isArray(r.devices) ? r.devices.slice(0, TAKE_BACK_LIMITS.sites * 2) : []) {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    const before = time(e.before);
+    if (typeof e.device !== "string" || !DEVICE.test(e.device) || !before) continue;
+    devices.set(e.device, Math.max(devices.get(e.device) ?? 0, before));
+  }
+  return { allBefore: time(r.all_before), sites: [...newest].map(([site, before]) => ({ site, before })), ...(devices.size ? { devices: [...devices].map(([device, before]) => ({ device, before })) } : {}) };
 }
 
-export const writeTakenBack = (record: TakenBack): string => JSON.stringify({ v: 1, all_before: record.allBefore, sites: record.sites });
+export const writeTakenBack = (record: TakenBack): string => JSON.stringify({ v: 1, all_before: record.allBefore, sites: record.sites, ...(record.devices?.length ? { devices: record.devices } : {}) });
 
 /**
  * Two records as one: nothing either says is taken back is ever given back
@@ -89,13 +102,21 @@ export function mergeTakenBack(a: TakenBack, b: TakenBack, nowSeconds: number): 
     .filter((entry) => entry.before > allBefore && entry.before + TAKE_BACK_LIMITS.entrySec > nowSeconds)
     .sort((x, y) => y.before - x.before)
     .slice(0, TAKE_BACK_LIMITS.sites);
-  return { allBefore, sites };
+  const byDevice = new Map<string, number>();
+  for (const { device, before } of [...(a.devices ?? []), ...(b.devices ?? [])]) byDevice.set(device, Math.max(byDevice.get(device) ?? 0, before));
+  const devices = [...byDevice]
+    .map(([device, before]) => ({ device, before }))
+    .filter((entry) => entry.before > allBefore && entry.before + TAKE_BACK_LIMITS.entrySec > nowSeconds)
+    .sort((x, y) => y.before - x.before)
+    .slice(0, TAKE_BACK_LIMITS.sites);
+  return { allBefore, sites, ...(devices.length ? { devices } : {}) };
 }
 
 /** Take one site back, a family, or everything, as of now. */
-export function takeBack(record: TakenBack, what: { site: string } | { all: true }, nowSeconds: number): TakenBack {
+export function takeBack(record: TakenBack, what: { site: string } | { all: true } | { device: string }, nowSeconds: number): TakenBack {
   const now = Math.floor(nowSeconds);
   if ("all" in what) return mergeTakenBack(record, { allBefore: now, sites: [] }, now);
+  if ("device" in what) return DEVICE.test(what.device) ? mergeTakenBack(record, { allBefore: 0, sites: [], devices: [{ device: what.device, before: now }] }, now) : record;
   const site = listedSite(what.site);
   if (!site) return record;
   return mergeTakenBack(record, { allBefore: 0, sites: [{ site, before: now }] }, now);
@@ -107,8 +128,10 @@ export function takeBack(record: TakenBack, what: { site: string } | { all: true
  * thing, when it is a family the site is in, or, for a family's grant, when
  * it is a site of that family.
  */
-export function isTakenBack(record: TakenBack, site: string, grantedAt: number): boolean {
+export function isTakenBack(record: TakenBack, site: string, grantedAt: number, device?: string): boolean {
   if (record.allBefore >= grantedAt) return true;
+  // A device signed out alone, where the grant names that device.
+  if (device && (record.devices ?? []).some((entry) => entry.device === device && entry.before >= grantedAt)) return true;
   const family = readFamily(site);
   return record.sites.some(
     (entry) => entry.before >= grantedAt && (entry.site === site || (family ? inFamily(entry.site, family) : !!readFamily(entry.site) && inFamily(site, entry.site)))

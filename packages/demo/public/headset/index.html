@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<meta name="robots" content="noindex" />
+<title>BitLogin — sign in from your phone</title>
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="../assets/site.css" />
+<link rel="stylesheet" href="../assets/connect.css" />
+</head>
+<body class="connect">
+
+<main class="connect-main">
+  <section class="connect-card">
+    <p id="check" class="connect-warning headset-check"><strong>Check that the address bar says bitlogin.network.</strong> If it says anything else, close this page: it isn't BitLogin's.</p>
+    <h1 id="title">Sign in from your phone</h1>
+    <p id="site-line" hidden>Signing in <span id="site" class="connect-site"></span></p>
+
+    <div id="step-code" hidden>
+      <p>On your phone, scan this, or open <strong>bitlogin.network/pair</strong> and type the code.</p>
+      <div id="qr" class="headset-qr" aria-hidden="true"></div>
+      <p class="headset-code" id="code" aria-label="The code"></p>
+      <p id="number-line" class="headset-number" hidden>Your phone asks: <strong id="number"></strong></p>
+      <p class="connect-small" id="lasts"></p>
+    </div>
+
+    <p id="said" class="connect-status" role="status" hidden></p>
+    <div id="again" class="cta-row" hidden><button id="again-button" class="btn secondary" type="button">Show a new code</button></div>
+  </section>
+</main>
+
+<script type="module" src="../assets/headset.js"></script>
+</body>
+</html>

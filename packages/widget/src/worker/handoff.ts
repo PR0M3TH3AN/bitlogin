@@ -25,7 +25,7 @@ import { getPublicKeyHex } from "@bitlogin/core/crypto";
 import { mayHold, readPermissions, type AppPermissions } from "../embedded/permissions.js";
 import { readProfile, type Profile } from "../embedded/profile.js";
 import { cleanRelays } from "../embedded/takeBack.js";
-import { inFamily, readFamily } from "../embedded/family.js";
+import { inFamily, knownFamily, readFamily } from "../embedded/family.js";
 import { grantSite } from "./signerGrant.js";
 import { cleanMore, type WorldMore } from "../embedded/follows.js";
 
@@ -55,6 +55,11 @@ export const SIGNER_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   "logout",
   "handoffBegin",
   "handoffAccept",
+  // A headset signed in from a phone (docs/pair-a-headset.md): begun, heard and cancelled in its signer frame, which
+  // may be a guest's. What arrives is opened as a hand-off is.
+  "pairBegin",
+  "pairPoll",
+  "pairCancel",
   // The receipts BitLogin's page handed this site's signer, kept beside its grant (docs/paying.md; owner, 2026-11-21).
   "signerHold",
   "signerHeld",
@@ -107,13 +112,16 @@ function fromHex(hex: string): Uint8Array {
 }
 
 /** Seal the everyday key to the receiving worker's throwaway key. */
+/** A device id: 16 random bytes, in hex. */
+const DEVICE = /^[0-9a-f]{32}$/u;
+
 export function sealHandoff(
   everydayPrivateKey: Uint8Array,
   recipientPublicKey: string,
   senderPrivateKey: Uint8Array,
   app?: { site: unknown; permissions: unknown },
   /** The site the hand-off is for, as the window was told by the signer, and the person's own profile. */
-  also: { site?: unknown; profile?: unknown; /** The user ticked "remember" in the window. */ remember?: unknown; /** The lock is on: nothing is kept for any site. */ visitOnly?: boolean; /** When Allow was pressed, in seconds, by the sealing worker's clock. */ at?: number; /** The user's own write relays (NIP-65). */ relays?: unknown; /** The user allowed every site of this family (docs/site-family.md). */ family?: unknown; /** What the user let this world do beyond a note and a reaction, by name. */ more?: unknown } = {}
+  also: { site?: unknown; profile?: unknown; /** The user ticked "remember" in the window. */ remember?: unknown; /** The lock is on: nothing is kept for any site. */ visitOnly?: boolean; /** When Allow was pressed, in seconds, by the sealing worker's clock. */ at?: number; /** The user's own write relays (NIP-65). */ relays?: unknown; /** The user allowed every site of this family (docs/site-family.md). */ family?: unknown; /** What the user let this world do beyond a note and a reaction, by name. */ more?: unknown; /** A device signed in from a phone (docs/pair-a-headset.md): a random id, so it can be signed out alone. */ device?: unknown } = {}
 ): SealedHandoff {
   if (!HEX64.test(recipientPublicKey)) throw new Error("The hand-off has no usable recipient key.");
   if (everydayPrivateKey.length !== 32) throw new Error("No identity is unlocked in this session.");
@@ -133,10 +141,11 @@ export function sealHandoff(
   // Remembered across page loads (§SW11) only where the user left "remember" ticked in the window, and never
   // while the lock is on. How long is decided where it is kept, from the site's address (signerGrant.ts).
   const remember = !!forSite && also.visitOnly !== true && also.remember === true;
-  // A family is for a site that declared nothing, remembered, and in that family. Anything else is refused whole,
+  // A family is for a site, remembered, and in that family; for an application too where the family is one BitLogin
+  // knows (docs/site-family.md SF5a), carried beside its own set, which stays its own. Anything else is refused whole,
   // never sealed as the narrower "this site only": the user chose the family, and would not get what they chose.
   const family = also.family === undefined ? "" : readFamily(also.family);
-  if (also.family !== undefined && (!family || sealedApp || !remember || !inFamily(forSite, family))) throw new Error("That is not a family this site may be allowed as.");
+  if (also.family !== undefined && (!family || (sealedApp && !knownFamily(family)) || !remember || !inFamily(forSite, family))) throw new Error("That is not a family this site may be allowed as.");
   // More than a note and a reaction is for one world, by its own address: never for an application (held to its
   // set), and never for a family (sites the user has not seen). Refused whole, never sealed as less.
   const more = cleanMore(also.more);
@@ -144,7 +153,7 @@ export function sealHandoff(
   // A signer wipes the key it was given when it is destroyed. It is given a copy: the caller's is the caller's to wipe.
   const sender = new NostrSigner(senderPrivateKey.slice());
   try {
-    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}), ...(forSite ? { site: forSite } : {}), ...(profile ? { profile } : {}), ...(remember ? { remember: true } : {}), ...(typeof also.at === "number" && Number.isFinite(also.at) ? { at: Math.floor(also.at) } : {}), ...(cleanRelays(also.relays).length ? { relays: cleanRelays(also.relays) } : {}), ...(family ? { family } : {}), ...(more.length ? { more } : {}) });
+    const plaintext = JSON.stringify({ v: 1, purpose: HANDOFF_PURPOSE, key: toHex(everydayPrivateKey), ...(sealedApp ? { app: sealedApp } : {}), ...(forSite ? { site: forSite } : {}), ...(profile ? { profile } : {}), ...(remember ? { remember: true } : {}), ...(typeof also.at === "number" && Number.isFinite(also.at) ? { at: Math.floor(also.at) } : {}), ...(cleanRelays(also.relays).length ? { relays: cleanRelays(also.relays) } : {}), ...(family ? { family } : {}), ...(more.length ? { more } : {}), ...(typeof also.device === "string" && DEVICE.test(also.device) ? { device: also.device } : {}) });
     return { senderPublicKey: sender.getPublicKey(), payload: sender.nip44Encrypt(recipientPublicKey, plaintext) };
   } finally {
     sender.destroy();
@@ -169,7 +178,7 @@ export function openHandoff(sealed: SealedHandoff, recipientPrivateKey: Uint8Arr
 export function openAppHandoff(
   sealed: SealedHandoff,
   recipientPrivateKey: Uint8Array
-): { key: Uint8Array; app: HandoffApp | null; /** The site it was sealed for, or null where it names none. */ site: string | null; profile: Profile | null; /** Whether it may be kept across page loads. */ remember: boolean; /** When it was allowed, in seconds, or null where it does not say. */ at: number | null; /** The user's own write relays, cleaned. */ relays: string[]; /** The family of sites it is kept for, or null for this site alone. */ family: string | null; /** What this world was let do beyond a note and a reaction. */ more: WorldMore[] } {
+): { key: Uint8Array; app: HandoffApp | null; /** The site it was sealed for, or null where it names none. */ site: string | null; profile: Profile | null; /** Whether it may be kept across page loads. */ remember: boolean; /** When it was allowed, in seconds, or null where it does not say. */ at: number | null; /** The user's own write relays, cleaned. */ relays: string[]; /** The family of sites it is kept for, or null for this site alone. */ family: string | null; /** What this world was let do beyond a note and a reaction. */ more: WorldMore[]; /** The device it signs in, where a phone paired one. */ device?: string } {
   if (!sealed || !HEX64.test(sealed.senderPublicKey) || typeof sealed.payload !== "string") {
     throw new Error("That is not a signer hand-off.");
   }
@@ -182,7 +191,7 @@ export function openAppHandoff(
   } finally {
     recipient.destroy();
   }
-  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown; site?: unknown; profile?: unknown; remember?: unknown; at?: unknown; relays?: unknown; family?: unknown; more?: unknown };
+  let parsed: { v?: unknown; purpose?: unknown; key?: unknown; app?: unknown; site?: unknown; profile?: unknown; remember?: unknown; at?: unknown; relays?: unknown; family?: unknown; more?: unknown; device?: unknown };
   try {
     parsed = JSON.parse(plaintext) as typeof parsed;
   } catch {
@@ -211,7 +220,7 @@ export function openAppHandoff(
   const relays = cleanRelays(parsed.relays);
   // A family that does not read as one, is not remembered, is for an application, or does not hold the site: refused whole.
   const family = parsed.family === undefined ? null : readFamily(parsed.family);
-  if (family === "" || (family && (parsed.app !== undefined || !remember || !inFamily(named, family)))) {
+  if (family === "" || (family && ((parsed.app !== undefined && !knownFamily(family)) || !remember || !inFamily(named, family)))) {
     key.fill(0);
     throw new Error("The hand-off names a family it cannot be kept for.");
   }
@@ -221,7 +230,8 @@ export function openAppHandoff(
     key.fill(0);
     throw new Error("The hand-off carries something this site may not be let do.");
   }
-  if (parsed.app === undefined) return { key, app: null, site: named, profile, remember, at, relays, family, more };
+  const device = typeof parsed.device === "string" && DEVICE.test(parsed.device) ? { device: parsed.device } : {};
+  if (parsed.app === undefined) return { key, app: null, site: named, profile, remember, at, relays, family, more, ...device };
   const a = parsed.app as { site?: unknown; permissions?: unknown } | null;
   const site = a && typeof a === "object" ? grantSite(a.site) : "";
   const permissions = a && typeof a === "object" ? readPermissions(a.permissions) : null;
@@ -229,5 +239,5 @@ export function openAppHandoff(
     key.fill(0);
     throw new Error("The hand-off carried a permission set that cannot be read.");
   }
-  return { key, app: { site, permissions }, site, profile, remember, at, relays, family: null, more: [] };
+  return { key, app: { site, permissions }, site, profile, remember, at, relays, family, more: [], ...device };
 }
